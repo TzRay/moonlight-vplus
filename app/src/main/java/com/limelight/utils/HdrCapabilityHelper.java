@@ -73,6 +73,17 @@ public class HdrCapabilityHelper {
      */
     @SuppressLint("NewApi")
     public static BrightnessInfo getBrightnessInfo(Context context) {
+        return getBrightnessInfo(context, false);
+    }
+
+    /**
+     * 获取屏幕亮度范围，允许在盒子场景下优先读取外接显示器能力
+     *
+     * @param context 应用上下文
+     * @param preferExternalDisplay 为 true 时优先选择非默认显示器（若存在）
+     */
+    @SuppressLint("NewApi")
+    public static BrightnessInfo getBrightnessInfo(Context context, boolean preferExternalDisplay) {
         BrightnessInfo info = new BrightnessInfo();
         info.maxLuminance = BrightnessInfo.DEFAULT_MAX;
         info.minLuminance = BrightnessInfo.DEFAULT_MIN;
@@ -89,7 +100,7 @@ public class HdrCapabilityHelper {
             return info;
         }
 
-        Display display = getDefaultDisplay(context);
+        Display display = getPreferredDisplay(context, preferExternalDisplay);
         if (display == null) {
             return info;
         }
@@ -309,6 +320,24 @@ public class HdrCapabilityHelper {
     }
 
     /**
+     * 获取 int[] 格式的亮度范围，允许优先读取外接显示器能力
+     */
+    public static int[] getBrightnessRangeAsInts(Context context, boolean preferExternalDisplay) {
+        BrightnessInfo info = getBrightnessInfo(context, preferExternalDisplay);
+        int min = Math.max(1, (int) Math.floor(info.minLuminance));
+
+        // 优先使用 HDR/SDR ratio 计算的峰值亮度（类似鸿蒙 sdrNits * maxHeadroom）
+        float effectiveMax = info.maxLuminance;
+        if (info.isComputedFromRatio && info.computedPeakBrightness > effectiveMax) {
+            effectiveMax = info.computedPeakBrightness;
+        }
+
+        int max = Math.max(min + 1, (int) Math.ceil(effectiveMax));
+        int avg = Math.max(min, (int) Math.ceil(info.maxAvgLuminance));
+        return new int[]{min, max, avg};
+    }
+
+    /**
      * 获取系统亮度信息（0-255 范围的系统亮度等级）
      */
     public static int getSystemBrightness(Context context) {
@@ -351,5 +380,31 @@ public class HdrCapabilityHelper {
             LimeLog.warning("Failed to get default display: " + e.getMessage());
         }
         return null;
+    }
+
+    /**
+     * 获取用于 HDR 能力检测的目标显示器
+     */
+    @SuppressLint("NewApi")
+    private static Display getPreferredDisplay(Context context, boolean preferExternalDisplay) {
+        if (preferExternalDisplay && Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1) {
+            try {
+                DisplayManager dm = (DisplayManager) context.getSystemService(Context.DISPLAY_SERVICE);
+                if (dm != null) {
+                    Display[] displays = dm.getDisplays();
+                    for (Display display : displays) {
+                        if (display != null && display.getDisplayId() != Display.DEFAULT_DISPLAY) {
+                            LimeLog.info("Using external display for HDR capability probe: " + display.getName()
+                                    + " (ID: " + display.getDisplayId() + ")");
+                            return display;
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                LimeLog.warning("Failed to query external display for HDR capability probe: " + e.getMessage());
+            }
+        }
+
+        return getDefaultDisplay(context);
     }
 }

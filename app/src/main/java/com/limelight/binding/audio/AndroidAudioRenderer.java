@@ -236,7 +236,6 @@ public class AndroidAudioRenderer implements AudioRenderer {
                         track.play();
                         LimeLog.info("Audio track configuration(index-mask): " + bufferSize +
                                 " lowLatency=" + lowLatency + " spatializer=" + enableSpatializer);
-                        showAudioPathToast("7.1.4 index fallback active");
                         break;
                     } catch (Exception fallbackException) {
                         fallbackException.printStackTrace();

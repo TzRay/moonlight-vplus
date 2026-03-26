@@ -54,10 +54,10 @@ public class NvConnection {
 
     public NvConnection(Context appContext, ComputerDetails.AddressTuple host, int httpsPort, String uniqueId, String pairName, StreamConfiguration config, LimelightCryptoProvider cryptoProvider, X509Certificate serverCert)
     {
-        this(appContext, host, httpsPort, uniqueId, pairName, config, cryptoProvider, serverCert, null);
+        this(appContext, host, httpsPort, uniqueId, pairName, config, cryptoProvider, serverCert, null, false);
     }
     
-    public NvConnection(Context appContext, ComputerDetails.AddressTuple host, int httpsPort, String uniqueId, String pairName, StreamConfiguration config, LimelightCryptoProvider cryptoProvider, X509Certificate serverCert, String displayName)
+    public NvConnection(Context appContext, ComputerDetails.AddressTuple host, int httpsPort, String uniqueId, String pairName, StreamConfiguration config, LimelightCryptoProvider cryptoProvider, X509Certificate serverCert, String displayName, boolean preferExternalDisplay)
     {
         this.appContext = appContext;
         this.host = host;
@@ -77,7 +77,7 @@ public class NvConnection {
         this.context.riKeyId = generateRiKeyId();
         
         // 获取设备亮度范围（min, max, maxAverage）- 使用统一的 HdrCapabilityHelper
-        int[] brightnessRange = com.limelight.utils.HdrCapabilityHelper.getBrightnessRangeAsInts(appContext);
+        int[] brightnessRange = com.limelight.utils.HdrCapabilityHelper.getBrightnessRangeAsInts(appContext, preferExternalDisplay);
         this.context.minBrightness = brightnessRange[0];
         this.context.maxBrightness = brightnessRange[1];
         this.context.maxAverageBrightness = brightnessRange[2];
