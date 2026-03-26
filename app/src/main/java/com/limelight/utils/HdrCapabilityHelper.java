@@ -20,7 +20,6 @@ import com.limelight.preferences.PreferenceConfiguration;
 public class HdrCapabilityHelper {
 
     public static final String HDR_BRIGHTNESS_SOURCE_AUTO = "auto";
-    public static final String HDR_BRIGHTNESS_SOURCE_EXTERNAL = "external";
     public static final String HDR_BRIGHTNESS_SOURCE_MANUAL = "manual";
 
     /**
@@ -375,21 +374,6 @@ public class HdrCapabilityHelper {
             return brightnessRange;
         }
 
-        if (HDR_BRIGHTNESS_SOURCE_EXTERNAL.equals(source)) {
-            Display externalDisplay = getExternalDisplay(context);
-            if (externalDisplay != null) {
-                int[] brightnessRange = toBrightnessRangeInts(getBrightnessInfoForDisplay(externalDisplay));
-                LimeLog.info("HDR brightness source=external display, values="
-                        + brightnessRange[0] + "/" + brightnessRange[1] + "/" + brightnessRange[2]);
-                return brightnessRange;
-            }
-
-            int[] brightnessRange = getManualBrightnessRange(prefConfig);
-            LimeLog.info("HDR brightness source=external display fallback to manual, values="
-                    + brightnessRange[0] + "/" + brightnessRange[1] + "/" + brightnessRange[2]);
-            return brightnessRange;
-        }
-
         int[] brightnessRange = getBrightnessRangeAsInts(context, prefConfig.useExternalDisplay);
         LimeLog.info("HDR brightness source=auto, values="
                 + brightnessRange[0] + "/" + brightnessRange[1] + "/" + brightnessRange[2]);
@@ -397,7 +381,7 @@ public class HdrCapabilityHelper {
     }
 
     private static int[] getManualBrightnessRange(PreferenceConfiguration prefConfig) {
-        int min = Math.max(0, prefConfig.hdrManualMinBrightness);
+        int min = Math.max(0, (int) Math.floor(prefConfig.hdrManualMinBrightness));
         int max = Math.max(min, prefConfig.hdrManualMaxBrightness);
         int avg = Math.max(min, prefConfig.hdrManualMaxAverageBrightness);
         return new int[]{min, max, avg};

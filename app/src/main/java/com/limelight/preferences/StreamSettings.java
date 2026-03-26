@@ -725,7 +725,8 @@ public class StreamSettings extends AppCompatActivity {
             }
 
             PreferenceConfiguration prefConfig = PreferenceConfiguration.readPreferences(requireContext());
-            minPref.setText(String.valueOf(prefConfig.hdrManualMinBrightness));
+            sourcePref.setValue(prefConfig.hdrBrightnessSource);
+            minPref.setText(formatHdrManualMinBrightness(prefConfig.hdrManualMinBrightness));
             maxPref.setText(String.valueOf(prefConfig.hdrManualMaxBrightness));
             avgPref.setText(String.valueOf(prefConfig.hdrManualMaxAverageBrightness));
 
@@ -744,41 +745,73 @@ public class StreamSettings extends AppCompatActivity {
         }
 
         private void configureHdrManualBrightnessPreference(EditTextPreference preference, String preferenceKey) {
-            preference.setOnBindEditTextListener(editText ->
-                    editText.setInputType(InputType.TYPE_CLASS_NUMBER));
+            preference.setOnBindEditTextListener(editText -> {
+                if (PreferenceConfiguration.HDR_MANUAL_MIN_BRIGHTNESS_PREF_STRING.equals(preferenceKey)) {
+                    editText.setInputType(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_DECIMAL);
+                } else {
+                    editText.setInputType(InputType.TYPE_CLASS_NUMBER);
+                }
+            });
 
             preference.setOnPreferenceChangeListener((pref, newValue) -> {
-                Integer parsedValue = parseHdrBrightnessValue(newValue);
-                if (parsedValue == null) {
+                Float parsedMinValue = null;
+                Integer parsedIntValue = null;
+                if (PreferenceConfiguration.HDR_MANUAL_MIN_BRIGHTNESS_PREF_STRING.equals(preferenceKey)) {
+                    parsedMinValue = parseHdrBrightnessFloatValue(newValue);
+                    if (parsedMinValue == null) {
+                        Toast.makeText(requireContext(), R.string.toast_invalid_hdr_brightness_value, Toast.LENGTH_SHORT).show();
+                        return false;
+                    }
+                } else {
+                    parsedIntValue = parseHdrBrightnessIntValue(newValue);
+                    if (parsedIntValue == null) {
+                        Toast.makeText(requireContext(), R.string.toast_invalid_hdr_brightness_value, Toast.LENGTH_SHORT).show();
+                        return false;
+                    }
+                }
+
+                if ((parsedMinValue != null && parsedMinValue < 0f) || (parsedIntValue != null && parsedIntValue < 0)) {
                     Toast.makeText(requireContext(), R.string.toast_invalid_hdr_brightness_value, Toast.LENGTH_SHORT).show();
                     return false;
                 }
 
                 PreferenceConfiguration currentConfig = PreferenceConfiguration.readPreferences(requireContext());
-                int min = PreferenceConfiguration.HDR_MANUAL_MIN_BRIGHTNESS_PREF_STRING.equals(preferenceKey) ?
-                        parsedValue : currentConfig.hdrManualMinBrightness;
+                float min = PreferenceConfiguration.HDR_MANUAL_MIN_BRIGHTNESS_PREF_STRING.equals(preferenceKey) ?
+                        parsedMinValue : currentConfig.hdrManualMinBrightness;
                 int max = PreferenceConfiguration.HDR_MANUAL_MAX_BRIGHTNESS_PREF_STRING.equals(preferenceKey) ?
-                        parsedValue : currentConfig.hdrManualMaxBrightness;
+                        parsedIntValue : currentConfig.hdrManualMaxBrightness;
                 int avg = PreferenceConfiguration.HDR_MANUAL_MAX_AVG_BRIGHTNESS_PREF_STRING.equals(preferenceKey) ?
-                        parsedValue : currentConfig.hdrManualMaxAverageBrightness;
+                        parsedIntValue : currentConfig.hdrManualMaxAverageBrightness;
 
                 if (max < min || avg < min) {
                     Toast.makeText(requireContext(), R.string.toast_invalid_hdr_brightness_value, Toast.LENGTH_SHORT).show();
                     return false;
                 }
 
-                pref.setSummary(getString(R.string.summary_hdr_manual_value, parsedValue));
+                if (PreferenceConfiguration.HDR_MANUAL_MIN_BRIGHTNESS_PREF_STRING.equals(preferenceKey)) {
+                    pref.setSummary(getString(R.string.summary_hdr_manual_min_value, formatHdrManualMinBrightness(parsedMinValue)));
+                } else {
+                    pref.setSummary(getString(R.string.summary_hdr_manual_value, parsedIntValue));
+                }
                 return true;
             });
 
-            Integer currentValue = parseHdrBrightnessValue(preference.getText());
-            if (currentValue == null) {
-                currentValue = 0;
+            if (PreferenceConfiguration.HDR_MANUAL_MIN_BRIGHTNESS_PREF_STRING.equals(preferenceKey)) {
+                Float currentValue = parseHdrBrightnessFloatValue(preference.getText());
+                if (currentValue == null) {
+                    currentValue = 0f;
+                }
+                preference.setSummary(getString(R.string.summary_hdr_manual_min_value, formatHdrManualMinBrightness(currentValue)));
+            } else {
+                Integer currentValue = parseHdrBrightnessIntValue(preference.getText());
+                if (currentValue == null) {
+                    currentValue = 0;
+                }
+                preference.setSummary(getString(R.string.summary_hdr_manual_value, currentValue));
             }
-            preference.setSummary(getString(R.string.summary_hdr_manual_value, currentValue));
         }
 
-        private Integer parseHdrBrightnessValue(Object value) {
+        private Integer parseHdrBrightnessIntValue(Object value) {
             try {
                 return Integer.parseInt(String.valueOf(value).trim());
             } catch (Exception e) {
@@ -786,9 +819,24 @@ public class StreamSettings extends AppCompatActivity {
             }
         }
 
+        private Float parseHdrBrightnessFloatValue(Object value) {
+            try {
+                return Float.parseFloat(String.valueOf(value).trim());
+            } catch (Exception e) {
+                return null;
+            }
+        }
+
+        private String formatHdrManualMinBrightness(float value) {
+            if (Math.abs(value - Math.round(value)) < 0.0001f) {
+                return String.valueOf(Math.round(value));
+            }
+
+            return String.valueOf(value);
+        }
+
         private void updateHdrBrightnessPreferenceVisibility(String source) {
-            boolean showManualValues = HdrCapabilityHelper.HDR_BRIGHTNESS_SOURCE_MANUAL.equals(source)
-                    || HdrCapabilityHelper.HDR_BRIGHTNESS_SOURCE_EXTERNAL.equals(source);
+            boolean showManualValues = HdrCapabilityHelper.HDR_BRIGHTNESS_SOURCE_MANUAL.equals(source);
 
             Preference minPref = findPreference(PreferenceConfiguration.HDR_MANUAL_MIN_BRIGHTNESS_PREF_STRING);
             Preference maxPref = findPreference(PreferenceConfiguration.HDR_MANUAL_MAX_BRIGHTNESS_PREF_STRING);
@@ -806,15 +854,6 @@ public class StreamSettings extends AppCompatActivity {
         }
 
         private String getHdrBrightnessSourceSummary(String source) {
-            if (HdrCapabilityHelper.HDR_BRIGHTNESS_SOURCE_EXTERNAL.equals(source)) {
-                Display externalDisplay = HdrCapabilityHelper.getExternalDisplay(requireContext());
-                if (externalDisplay != null) {
-                    return getString(R.string.summary_hdr_brightness_source_external_detected, externalDisplay.getName());
-                }
-
-                return getString(R.string.summary_hdr_brightness_source_external_missing);
-            }
-
             if (HdrCapabilityHelper.HDR_BRIGHTNESS_SOURCE_MANUAL.equals(source)) {
                 return getString(R.string.summary_hdr_manual_hidden);
             }

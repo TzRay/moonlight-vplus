@@ -371,7 +371,7 @@ public class AppSettingsManager {
         settings.screenOffsetY = 0;
         settings.useExternalDisplay = false;
         settings.hdrBrightnessSource = "auto";
-        settings.hdrManualMinBrightness = 0;
+        settings.hdrManualMinBrightness = 0f;
         settings.hdrManualMaxBrightness = 500;
         settings.hdrManualMaxAverageBrightness = 200;
         settings.enablePerfOverlay = false;
@@ -400,7 +400,10 @@ public class AppSettingsManager {
         settings.enableHdr = settingsJson.optBoolean("enableHdr", false);
         settings.enableHdrHighBrightness = settingsJson.optBoolean("enableHdrHighBrightness", false);
         settings.hdrBrightnessSource = settingsJson.optString("hdrBrightnessSource", "auto");
-        settings.hdrManualMinBrightness = settingsJson.optInt("hdrManualMinBrightness", 0);
+        if (!"manual".equals(settings.hdrBrightnessSource)) {
+            settings.hdrBrightnessSource = "auto";
+        }
+        settings.hdrManualMinBrightness = (float) settingsJson.optDouble("hdrManualMinBrightness", 0d);
         settings.hdrManualMaxBrightness = settingsJson.optInt("hdrManualMaxBrightness", 500);
         settings.hdrManualMaxAverageBrightness = settingsJson.optInt("hdrManualMaxAverageBrightness", 200);
         settings.enableMic = settingsJson.optBoolean("enableMic", false);
@@ -509,10 +512,10 @@ public class AppSettingsManager {
             prefConfig.enableHdr = intent.getBooleanExtra(INTENT_LAST_SETTINGS_ENABLE_HDR, prefConfig.enableHdr);
             prefConfig.enableHdrHighBrightness = intent.getBooleanExtra(INTENT_LAST_SETTINGS_ENABLE_HDR_HIGH_BRIGHTNESS, prefConfig.enableHdrHighBrightness);
             prefConfig.hdrBrightnessSource = intent.getStringExtra(INTENT_LAST_SETTINGS_HDR_BRIGHTNESS_SOURCE);
-            if (prefConfig.hdrBrightnessSource == null) {
+            if (!"manual".equals(prefConfig.hdrBrightnessSource)) {
                 prefConfig.hdrBrightnessSource = "auto";
             }
-            prefConfig.hdrManualMinBrightness = intent.getIntExtra(INTENT_LAST_SETTINGS_HDR_MANUAL_MIN_BRIGHTNESS, prefConfig.hdrManualMinBrightness);
+            prefConfig.hdrManualMinBrightness = intent.getFloatExtra(INTENT_LAST_SETTINGS_HDR_MANUAL_MIN_BRIGHTNESS, prefConfig.hdrManualMinBrightness);
             prefConfig.hdrManualMaxBrightness = intent.getIntExtra(INTENT_LAST_SETTINGS_HDR_MANUAL_MAX_BRIGHTNESS, prefConfig.hdrManualMaxBrightness);
             prefConfig.hdrManualMaxAverageBrightness = intent.getIntExtra(INTENT_LAST_SETTINGS_HDR_MANUAL_MAX_AVG_BRIGHTNESS, prefConfig.hdrManualMaxAverageBrightness);
             prefConfig.enableMic = intent.getBooleanExtra(INTENT_LAST_SETTINGS_ENABLE_MIC, prefConfig.enableMic);

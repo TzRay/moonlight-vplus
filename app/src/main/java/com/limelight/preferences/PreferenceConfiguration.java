@@ -199,7 +199,7 @@ public class PreferenceConfiguration {
     private static final boolean DEFAULT_ENABLE_HDR_HIGH_BRIGHTNESS = false;
     private static final int DEFAULT_HDR_MODE = 1; // 默认 HDR10/PQ 模式 (0=禁用自动HDR切换, 1=HDR10, 2=HLG)
     private static final String DEFAULT_HDR_BRIGHTNESS_SOURCE = "auto";
-    private static final int DEFAULT_HDR_MANUAL_MIN_BRIGHTNESS = 0;
+    private static final float DEFAULT_HDR_MANUAL_MIN_BRIGHTNESS = 0f;
     private static final int DEFAULT_HDR_MANUAL_MAX_BRIGHTNESS = 500;
     private static final int DEFAULT_HDR_MANUAL_MAX_AVG_BRIGHTNESS = 200;
     private static final boolean DEFAULT_ENABLE_PIP = false;
@@ -364,7 +364,7 @@ public class PreferenceConfiguration {
     public boolean enableHdrHighBrightness;
     public int hdrMode; // 0=HDR disabled, 1=HDR10/PQ, 2=HLG
     public String hdrBrightnessSource;
-    public int hdrManualMinBrightness;
+    public float hdrManualMinBrightness;
     public int hdrManualMaxBrightness;
     public int hdrManualMaxAverageBrightness;
     public boolean enablePip;
@@ -760,6 +760,19 @@ public class PreferenceConfiguration {
         }
     }
 
+    private static float getFloatPreference(SharedPreferences prefs, String key, float defaultValue) {
+        try {
+            return prefs.getFloat(key, defaultValue);
+        } catch (ClassCastException e) {
+            try {
+                String value = prefs.getString(key, String.valueOf(defaultValue));
+                return Float.parseFloat(value);
+            } catch (Exception ignored) {
+                return defaultValue;
+            }
+        }
+    }
+
     public static PreferenceConfiguration readPreferences(Context context) {
         SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(context);
         PreferenceConfiguration config = new PreferenceConfiguration();
@@ -898,7 +911,10 @@ public class PreferenceConfiguration {
             config.hdrMode = DEFAULT_HDR_MODE;
         }
         config.hdrBrightnessSource = prefs.getString(HDR_BRIGHTNESS_SOURCE_PREF_STRING, DEFAULT_HDR_BRIGHTNESS_SOURCE);
-        config.hdrManualMinBrightness = getIntPreference(prefs, HDR_MANUAL_MIN_BRIGHTNESS_PREF_STRING, DEFAULT_HDR_MANUAL_MIN_BRIGHTNESS);
+        if (!"manual".equals(config.hdrBrightnessSource)) {
+            config.hdrBrightnessSource = DEFAULT_HDR_BRIGHTNESS_SOURCE;
+        }
+        config.hdrManualMinBrightness = getFloatPreference(prefs, HDR_MANUAL_MIN_BRIGHTNESS_PREF_STRING, DEFAULT_HDR_MANUAL_MIN_BRIGHTNESS);
         config.hdrManualMaxBrightness = getIntPreference(prefs, HDR_MANUAL_MAX_BRIGHTNESS_PREF_STRING, DEFAULT_HDR_MANUAL_MAX_BRIGHTNESS);
         config.hdrManualMaxAverageBrightness = getIntPreference(prefs, HDR_MANUAL_MAX_AVG_BRIGHTNESS_PREF_STRING, DEFAULT_HDR_MANUAL_MAX_AVG_BRIGHTNESS);
         config.enablePip = prefs.getBoolean(ENABLE_PIP_PREF_STRING, DEFAULT_ENABLE_PIP);
@@ -1155,7 +1171,7 @@ public class PreferenceConfiguration {
                     .putBoolean(ENABLE_HDR_HIGH_BRIGHTNESS_PREF_STRING, enableHdrHighBrightness)
                     .putString(HDR_BRIGHTNESS_SOURCE_PREF_STRING,
                             hdrBrightnessSource != null ? hdrBrightnessSource : DEFAULT_HDR_BRIGHTNESS_SOURCE)
-                    .putInt(HDR_MANUAL_MIN_BRIGHTNESS_PREF_STRING, hdrManualMinBrightness)
+                    .putString(HDR_MANUAL_MIN_BRIGHTNESS_PREF_STRING, String.valueOf(hdrManualMinBrightness))
                     .putInt(HDR_MANUAL_MAX_BRIGHTNESS_PREF_STRING, hdrManualMaxBrightness)
                     .putInt(HDR_MANUAL_MAX_AVG_BRIGHTNESS_PREF_STRING, hdrManualMaxAverageBrightness)
                     .putBoolean(ENABLE_PERF_OVERLAY_STRING, enablePerfOverlay)

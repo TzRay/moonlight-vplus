@@ -152,12 +152,10 @@
     </string-array>
     <string-array name="hdr_brightness_source_entries">
         <item>@string/hdr_brightness_source_auto</item>
-        <item>@string/hdr_brightness_source_external</item>
         <item>@string/hdr_brightness_source_manual</item>
     </string-array>
     <string-array name="hdr_brightness_source_values" translatable="false">
         <item>auto</item>
-        <item>external</item>
         <item>manual</item>
     </string-array>
 
