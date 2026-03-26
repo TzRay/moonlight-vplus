@@ -9,6 +9,9 @@ import android.media.AudioTrack;
 import android.media.Spatializer;
 import android.media.audiofx.AudioEffect;
 import android.os.Build;
+import android.os.Handler;
+import android.os.Looper;
+import android.widget.Toast;
 
 import com.limelight.LimeLog;
 import com.limelight.nvstream.av.audio.AudioRenderer;
@@ -34,6 +37,10 @@ public class AndroidAudioRenderer implements AudioRenderer {
     private MoonBridge.AudioConfiguration savedAudioConfig;
     private int savedSampleRate;
     private int savedSamplesPerFrame;
+    private int sourceChannelCount = 2;
+    private int outputChannelCount = 2;
+    private short[] downmixBuffer;
+    private boolean hasShownAudioPathToast = false;
 
     public AndroidAudioRenderer(Context context, boolean enableAudioFx, boolean enableSpatializer) {
         this.context = context;
@@ -103,6 +110,8 @@ public class AndroidAudioRenderer implements AudioRenderer {
         int channelConfig;
         int channelIndexMask = 0;
         int bytesPerFrame;
+        sourceChannelCount = audioConfiguration.channelCount;
+        outputChannelCount = audioConfiguration.channelCount;
 
         switch (audioConfiguration.channelCount)
         {
@@ -245,6 +254,17 @@ public class AndroidAudioRenderer implements AudioRenderer {
         }
 
         if (track == null) {
+            // Last resort: for 12-channel input on older Android versions, fall back to 7.1 output
+            // and downmix by dropping the top channels. This keeps playback working instead of hard-failing.
+            if (audioConfiguration.channelCount == 12) {
+                LimeLog.warning("7.1.4 initialization failed on this device. Falling back to 7.1 output.");
+                if (tryInitialize71Fallback(sampleRate, samplesPerFrame)) {
+                    outputChannelCount = 8;
+                    showAudioPathToast("Device rejected 7.1.4 output, using 7.1 fallback");
+                    return 0;
+                }
+            }
+
             // Couldn't create any audio track for playback
             return -2;
         }
@@ -288,8 +308,57 @@ public class AndroidAudioRenderer implements AudioRenderer {
         this.savedAudioConfig = audioConfiguration;
         this.savedSampleRate = sampleRate;
         this.savedSamplesPerFrame = samplesPerFrame;
+        this.hasShownAudioPathToast = false;
 
         return initializeAudioTrackInternal(audioConfiguration, sampleRate, samplesPerFrame);
+    }
+
+    private boolean tryInitialize71Fallback(int sampleRate, int samplesPerFrame) {
+        final int channelConfig71 = 0x000018fc; // AudioFormat.CHANNEL_OUT_7POINT1_SURROUND
+        final int bytesPerFrame = 8 * samplesPerFrame * 2;
+
+        for (int i = 0; i < 4; i++) {
+            boolean lowLatency = (i <= 1);
+
+            int bufferSize;
+            if (i == 0 || i == 2) {
+                bufferSize = bytesPerFrame * 2;
+            } else {
+                int minBufferSize = AudioTrack.getMinBufferSize(sampleRate,
+                        channelConfig71,
+                        AudioFormat.ENCODING_PCM_16BIT);
+                if (minBufferSize <= 0) {
+                    minBufferSize = bytesPerFrame * 2;
+                }
+                bufferSize = Math.max(minBufferSize, bytesPerFrame * 2);
+                bufferSize = (((bufferSize + (bytesPerFrame - 1)) / bytesPerFrame) * bytesPerFrame);
+            }
+
+            if (AudioTrack.getNativeOutputSampleRate(AudioManager.STREAM_MUSIC) != sampleRate && lowLatency) {
+                continue;
+            }
+
+            if ((enableAudioFx || enableSpatializer) && lowLatency) {
+                continue;
+            }
+
+            try {
+                track = createAudioTrack(channelConfig71, 0, sampleRate, bufferSize, lowLatency);
+                track.play();
+                LimeLog.info("Audio track fallback(7.1): " + bufferSize + " lowLatency=" + lowLatency);
+                return true;
+            } catch (Exception e) {
+                e.printStackTrace();
+                try {
+                    if (track != null) {
+                        track.release();
+                        track = null;
+                    }
+                } catch (Exception ignored) {}
+            }
+        }
+
+        return false;
     }
 
     // --- 暂停处理 ---
@@ -383,14 +452,55 @@ public class AndroidAudioRenderer implements AudioRenderer {
         if (track == null) return; // 防止未初始化导致的空指针
 
         if (MoonBridge.getPendingAudioDuration() < 40) {
+            short[] outputData = audioData;
+            if (sourceChannelCount == 12 && outputChannelCount == 8) {
+                outputData = downmix714To71(audioData);
+            }
+
             // This will block until the write is completed. That can cause a backlog
             // of pending audio data, so we do the above check to be able to bound
             // latency at 40 ms in that situation.
-            track.write(audioData, 0, audioData.length);
+            track.write(outputData, 0, outputData.length);
         }
         else {
             LimeLog.info("Too much pending audio data: " + MoonBridge.getPendingAudioDuration() +" ms");
         }
+    }
+
+    private short[] downmix714To71(short[] input) {
+        int frames = input.length / 12;
+        int requiredLength = frames * 8;
+        if (downmixBuffer == null || downmixBuffer.length < requiredLength) {
+            downmixBuffer = new short[requiredLength];
+        }
+
+        // Keep the first 8 channels and drop the top 4 channels.
+        // Input per frame: [L, R, C, LFE, SL, SR, BL, BR, TFL, TFR, TBL, TBR]
+        int inIndex = 0;
+        int outIndex = 0;
+        for (int i = 0; i < frames; i++) {
+            downmixBuffer[outIndex++] = input[inIndex++]; // L
+            downmixBuffer[outIndex++] = input[inIndex++]; // R
+            downmixBuffer[outIndex++] = input[inIndex++]; // C
+            downmixBuffer[outIndex++] = input[inIndex++]; // LFE
+            downmixBuffer[outIndex++] = input[inIndex++]; // SL
+            downmixBuffer[outIndex++] = input[inIndex++]; // SR
+            downmixBuffer[outIndex++] = input[inIndex++]; // BL
+            downmixBuffer[outIndex++] = input[inIndex++]; // BR
+            inIndex += 4; // Drop TFL/TFR/TBL/TBR
+        }
+
+        return downmixBuffer;
+    }
+
+    private void showAudioPathToast(String message) {
+        if (hasShownAudioPathToast) {
+            return;
+        }
+        hasShownAudioPathToast = true;
+
+        Handler handler = new Handler(Looper.getMainLooper());
+        handler.post(() -> Toast.makeText(context, message, Toast.LENGTH_LONG).show());
     }
 
     @Override
