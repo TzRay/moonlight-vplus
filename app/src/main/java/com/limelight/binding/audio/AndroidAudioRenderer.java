@@ -41,7 +41,11 @@ public class AndroidAudioRenderer implements AudioRenderer {
         this.enableSpatializer = enableSpatializer;
     }
 
-    private AudioTrack createAudioTrack(int channelConfig, int sampleRate, int bufferSize, boolean lowLatency) {
+    private AudioTrack createAudioTrack(int channelConfig,
+                                        int channelIndexMask,
+                                        int sampleRate,
+                                        int bufferSize,
+                                        boolean lowLatency) {
         AudioAttributes.Builder attributesBuilder = new AudioAttributes.Builder()
                 .setUsage(AudioAttributes.USAGE_GAME);
         
@@ -50,11 +54,19 @@ public class AndroidAudioRenderer implements AudioRenderer {
             attributesBuilder.setSpatializationBehavior(AudioAttributes.SPATIALIZATION_BEHAVIOR_AUTO);
         }
         
-        AudioFormat format = new AudioFormat.Builder()
+        AudioFormat.Builder formatBuilder = new AudioFormat.Builder()
                 .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                .setSampleRate(sampleRate)
-                .setChannelMask(channelConfig)
-                .build();
+                .setSampleRate(sampleRate);
+
+        if (channelConfig != 0) {
+            formatBuilder.setChannelMask(channelConfig);
+        }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && channelIndexMask != 0) {
+            formatBuilder.setChannelIndexMask(channelIndexMask);
+        }
+
+        AudioFormat format = formatBuilder.build();
 
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
             // Use FLAG_LOW_LATENCY on L through N
@@ -89,6 +101,7 @@ public class AndroidAudioRenderer implements AudioRenderer {
 
     private int initializeAudioTrackInternal(MoonBridge.AudioConfiguration audioConfiguration, int sampleRate, int samplesPerFrame) {
         int channelConfig;
+        int channelIndexMask = 0;
         int bytesPerFrame;
 
         switch (audioConfiguration.channelCount)
@@ -112,13 +125,18 @@ public class AndroidAudioRenderer implements AudioRenderer {
                 // 7.1.4 surround: 7.1 channels + 4 top channels (TFL, TFR, TBL, TBR)
                 // Requires Android 12+ (API 31) for top channel constants
                 channelConfig = 0x0003d8fc;
+                // Experimental fallback for pre-Android 12 devices:
+                // request 12 channels via index mask when explicit top-channel mask is rejected.
+                channelIndexMask = 0x00000fff;
                 break;
             default:
                 LimeLog.severe("Decoder returned unhandled channel count");
                 return -1;
         }
 
-        LimeLog.info("Audio channel config: "+String.format("0x%X", channelConfig));
+        LimeLog.info("Audio channel config: " + String.format("0x%X", channelConfig) +
+                " channelIndexMask=" + String.format("0x%X", channelIndexMask) +
+                " sdk=" + Build.VERSION.SDK_INT);
 
         bytesPerFrame = audioConfiguration.channelCount * samplesPerFrame * 2;
 
@@ -161,10 +179,15 @@ public class AndroidAudioRenderer implements AudioRenderer {
                 case 1:
                 case 3:
                     // Try the larger buffer size
-                    bufferSize = Math.max(AudioTrack.getMinBufferSize(sampleRate,
+                    int minBufferSize = AudioTrack.getMinBufferSize(sampleRate,
                             channelConfig,
-                            AudioFormat.ENCODING_PCM_16BIT),
-                            bytesPerFrame * 2);
+                            AudioFormat.ENCODING_PCM_16BIT);
+
+                    if (minBufferSize <= 0) {
+                        minBufferSize = bytesPerFrame * 2;
+                    }
+
+                    bufferSize = Math.max(minBufferSize, bytesPerFrame * 2);
 
                     // Round to next frame
                     bufferSize = (((bufferSize + (bytesPerFrame - 1)) / bytesPerFrame) * bytesPerFrame);
@@ -186,13 +209,30 @@ public class AndroidAudioRenderer implements AudioRenderer {
             }
 
             try {
-                track = createAudioTrack(channelConfig, sampleRate, bufferSize, lowLatency);
+                track = createAudioTrack(channelConfig, 0, sampleRate, bufferSize, lowLatency);
                 track.play();
 
                 // Successfully created working AudioTrack. We're done here.
                 LimeLog.info("Audio track configuration: "+bufferSize+" lowLatency="+lowLatency+" spatializer="+enableSpatializer);
                 break;
             } catch (Exception e) {
+                // Try channel-index based fallback for 7.1.4 on older Android releases.
+                if (audioConfiguration.channelCount == 12 &&
+                        Build.VERSION.SDK_INT >= Build.VERSION_CODES.M &&
+                        Build.VERSION.SDK_INT < Build.VERSION_CODES.S &&
+                        channelIndexMask != 0) {
+                    LimeLog.warning("7.1.4 channel mask create failed, trying index-mask fallback");
+                    try {
+                        track = createAudioTrack(0, channelIndexMask, sampleRate, bufferSize, lowLatency);
+                        track.play();
+                        LimeLog.info("Audio track configuration(index-mask): " + bufferSize +
+                                " lowLatency=" + lowLatency + " spatializer=" + enableSpatializer);
+                        break;
+                    } catch (Exception fallbackException) {
+                        fallbackException.printStackTrace();
+                    }
+                }
+
                 // Try to release the AudioTrack if we got far enough
                 e.printStackTrace();
                 try {
