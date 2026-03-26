@@ -9,6 +9,9 @@ import android.media.AudioTrack;
 import android.media.Spatializer;
 import android.media.audiofx.AudioEffect;
 import android.os.Build;
+import android.os.Handler;
+import android.os.Looper;
+import android.widget.Toast;
 
 import com.limelight.LimeLog;
 import com.limelight.nvstream.av.audio.AudioRenderer;
@@ -34,6 +37,10 @@ public class AndroidAudioRenderer implements AudioRenderer {
     private MoonBridge.AudioConfiguration savedAudioConfig;
     private int savedSampleRate;
     private int savedSamplesPerFrame;
+    private int sourceChannelCount = 2;
+    private int outputChannelCount = 2;
+    private short[] downmixBuffer;
+    private boolean hasShownAudioPathToast = false;
 
     public AndroidAudioRenderer(Context context, boolean enableAudioFx, boolean enableSpatializer) {
         this.context = context;
@@ -41,7 +48,11 @@ public class AndroidAudioRenderer implements AudioRenderer {
         this.enableSpatializer = enableSpatializer;
     }
 
-    private AudioTrack createAudioTrack(int channelConfig, int sampleRate, int bufferSize, boolean lowLatency) {
+    private AudioTrack createAudioTrack(int channelConfig,
+                                        int channelIndexMask,
+                                        int sampleRate,
+                                        int bufferSize,
+                                        boolean lowLatency) {
         AudioAttributes.Builder attributesBuilder = new AudioAttributes.Builder()
                 .setUsage(AudioAttributes.USAGE_GAME);
         
@@ -50,11 +61,19 @@ public class AndroidAudioRenderer implements AudioRenderer {
             attributesBuilder.setSpatializationBehavior(AudioAttributes.SPATIALIZATION_BEHAVIOR_AUTO);
         }
         
-        AudioFormat format = new AudioFormat.Builder()
+        AudioFormat.Builder formatBuilder = new AudioFormat.Builder()
                 .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                .setSampleRate(sampleRate)
-                .setChannelMask(channelConfig)
-                .build();
+                .setSampleRate(sampleRate);
+
+        if (channelConfig != 0) {
+            formatBuilder.setChannelMask(channelConfig);
+        }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && channelIndexMask != 0) {
+            formatBuilder.setChannelIndexMask(channelIndexMask);
+        }
+
+        AudioFormat format = formatBuilder.build();
 
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
             // Use FLAG_LOW_LATENCY on L through N
@@ -89,7 +108,10 @@ public class AndroidAudioRenderer implements AudioRenderer {
 
     private int initializeAudioTrackInternal(MoonBridge.AudioConfiguration audioConfiguration, int sampleRate, int samplesPerFrame) {
         int channelConfig;
+        int channelIndexMask = 0;
         int bytesPerFrame;
+        sourceChannelCount = audioConfiguration.channelCount;
+        outputChannelCount = audioConfiguration.channelCount;
 
         switch (audioConfiguration.channelCount)
         {
@@ -112,13 +134,18 @@ public class AndroidAudioRenderer implements AudioRenderer {
                 // 7.1.4 surround: 7.1 channels + 4 top channels (TFL, TFR, TBL, TBR)
                 // Requires Android 12+ (API 31) for top channel constants
                 channelConfig = 0x0003d8fc;
+                // Experimental fallback for pre-Android 12 devices:
+                // request 12 channels via index mask when explicit top-channel mask is rejected.
+                channelIndexMask = 0x00000fff;
                 break;
             default:
                 LimeLog.severe("Decoder returned unhandled channel count");
                 return -1;
         }
 
-        LimeLog.info("Audio channel config: "+String.format("0x%X", channelConfig));
+        LimeLog.info("Audio channel config: " + String.format("0x%X", channelConfig) +
+                " channelIndexMask=" + String.format("0x%X", channelIndexMask) +
+                " sdk=" + Build.VERSION.SDK_INT);
 
         bytesPerFrame = audioConfiguration.channelCount * samplesPerFrame * 2;
 
@@ -161,10 +188,15 @@ public class AndroidAudioRenderer implements AudioRenderer {
                 case 1:
                 case 3:
                     // Try the larger buffer size
-                    bufferSize = Math.max(AudioTrack.getMinBufferSize(sampleRate,
+                    int minBufferSize = AudioTrack.getMinBufferSize(sampleRate,
                             channelConfig,
-                            AudioFormat.ENCODING_PCM_16BIT),
-                            bytesPerFrame * 2);
+                            AudioFormat.ENCODING_PCM_16BIT);
+
+                    if (minBufferSize <= 0) {
+                        minBufferSize = bytesPerFrame * 2;
+                    }
+
+                    bufferSize = Math.max(minBufferSize, bytesPerFrame * 2);
 
                     // Round to next frame
                     bufferSize = (((bufferSize + (bytesPerFrame - 1)) / bytesPerFrame) * bytesPerFrame);
@@ -186,13 +218,31 @@ public class AndroidAudioRenderer implements AudioRenderer {
             }
 
             try {
-                track = createAudioTrack(channelConfig, sampleRate, bufferSize, lowLatency);
+                track = createAudioTrack(channelConfig, 0, sampleRate, bufferSize, lowLatency);
                 track.play();
 
                 // Successfully created working AudioTrack. We're done here.
                 LimeLog.info("Audio track configuration: "+bufferSize+" lowLatency="+lowLatency+" spatializer="+enableSpatializer);
                 break;
             } catch (Exception e) {
+                // Try channel-index based fallback for 7.1.4 on older Android releases.
+                if (audioConfiguration.channelCount == 12 &&
+                        Build.VERSION.SDK_INT >= Build.VERSION_CODES.M &&
+                        Build.VERSION.SDK_INT < Build.VERSION_CODES.S &&
+                        channelIndexMask != 0) {
+                    LimeLog.warning("7.1.4 channel mask create failed, trying index-mask fallback");
+                    try {
+                        track = createAudioTrack(0, channelIndexMask, sampleRate, bufferSize, lowLatency);
+                        track.play();
+                        LimeLog.info("Audio track configuration(index-mask): " + bufferSize +
+                                " lowLatency=" + lowLatency + " spatializer=" + enableSpatializer);
+                        showAudioPathToast("7.1.4 index fallback active");
+                        break;
+                    } catch (Exception fallbackException) {
+                        fallbackException.printStackTrace();
+                    }
+                }
+
                 // Try to release the AudioTrack if we got far enough
                 e.printStackTrace();
                 try {
@@ -205,6 +255,17 @@ public class AndroidAudioRenderer implements AudioRenderer {
         }
 
         if (track == null) {
+            // Last resort: for 12-channel input on older Android versions, fall back to 7.1 output
+            // and downmix by dropping the top channels. This keeps playback working instead of hard-failing.
+            if (audioConfiguration.channelCount == 12) {
+                LimeLog.warning("7.1.4 initialization failed on this device. Falling back to 7.1 output.");
+                if (tryInitialize71Fallback(sampleRate, samplesPerFrame)) {
+                    outputChannelCount = 8;
+                    showAudioPathToast("Device rejected 7.1.4 output, using 7.1 fallback");
+                    return 0;
+                }
+            }
+
             // Couldn't create any audio track for playback
             return -2;
         }
@@ -248,8 +309,57 @@ public class AndroidAudioRenderer implements AudioRenderer {
         this.savedAudioConfig = audioConfiguration;
         this.savedSampleRate = sampleRate;
         this.savedSamplesPerFrame = samplesPerFrame;
+        this.hasShownAudioPathToast = false;
 
         return initializeAudioTrackInternal(audioConfiguration, sampleRate, samplesPerFrame);
+    }
+
+    private boolean tryInitialize71Fallback(int sampleRate, int samplesPerFrame) {
+        final int channelConfig71 = 0x000018fc; // AudioFormat.CHANNEL_OUT_7POINT1_SURROUND
+        final int bytesPerFrame = 8 * samplesPerFrame * 2;
+
+        for (int i = 0; i < 4; i++) {
+            boolean lowLatency = (i <= 1);
+
+            int bufferSize;
+            if (i == 0 || i == 2) {
+                bufferSize = bytesPerFrame * 2;
+            } else {
+                int minBufferSize = AudioTrack.getMinBufferSize(sampleRate,
+                        channelConfig71,
+                        AudioFormat.ENCODING_PCM_16BIT);
+                if (minBufferSize <= 0) {
+                    minBufferSize = bytesPerFrame * 2;
+                }
+                bufferSize = Math.max(minBufferSize, bytesPerFrame * 2);
+                bufferSize = (((bufferSize + (bytesPerFrame - 1)) / bytesPerFrame) * bytesPerFrame);
+            }
+
+            if (AudioTrack.getNativeOutputSampleRate(AudioManager.STREAM_MUSIC) != sampleRate && lowLatency) {
+                continue;
+            }
+
+            if ((enableAudioFx || enableSpatializer) && lowLatency) {
+                continue;
+            }
+
+            try {
+                track = createAudioTrack(channelConfig71, 0, sampleRate, bufferSize, lowLatency);
+                track.play();
+                LimeLog.info("Audio track fallback(7.1): " + bufferSize + " lowLatency=" + lowLatency);
+                return true;
+            } catch (Exception e) {
+                e.printStackTrace();
+                try {
+                    if (track != null) {
+                        track.release();
+                        track = null;
+                    }
+                } catch (Exception ignored) {}
+            }
+        }
+
+        return false;
     }
 
     // --- 暂停处理 ---
@@ -343,14 +453,55 @@ public class AndroidAudioRenderer implements AudioRenderer {
         if (track == null) return; // 防止未初始化导致的空指针
 
         if (MoonBridge.getPendingAudioDuration() < 40) {
+            short[] outputData = audioData;
+            if (sourceChannelCount == 12 && outputChannelCount == 8) {
+                outputData = downmix714To71(audioData);
+            }
+
             // This will block until the write is completed. That can cause a backlog
             // of pending audio data, so we do the above check to be able to bound
             // latency at 40 ms in that situation.
-            track.write(audioData, 0, audioData.length);
+            track.write(outputData, 0, outputData.length);
         }
         else {
             LimeLog.info("Too much pending audio data: " + MoonBridge.getPendingAudioDuration() +" ms");
         }
+    }
+
+    private short[] downmix714To71(short[] input) {
+        int frames = input.length / 12;
+        int requiredLength = frames * 8;
+        if (downmixBuffer == null || downmixBuffer.length < requiredLength) {
+            downmixBuffer = new short[requiredLength];
+        }
+
+        // Keep the first 8 channels and drop the top 4 channels.
+        // Input per frame: [L, R, C, LFE, SL, SR, BL, BR, TFL, TFR, TBL, TBR]
+        int inIndex = 0;
+        int outIndex = 0;
+        for (int i = 0; i < frames; i++) {
+            downmixBuffer[outIndex++] = input[inIndex++]; // L
+            downmixBuffer[outIndex++] = input[inIndex++]; // R
+            downmixBuffer[outIndex++] = input[inIndex++]; // C
+            downmixBuffer[outIndex++] = input[inIndex++]; // LFE
+            downmixBuffer[outIndex++] = input[inIndex++]; // SL
+            downmixBuffer[outIndex++] = input[inIndex++]; // SR
+            downmixBuffer[outIndex++] = input[inIndex++]; // BL
+            downmixBuffer[outIndex++] = input[inIndex++]; // BR
+            inIndex += 4; // Drop TFL/TFR/TBL/TBR
+        }
+
+        return downmixBuffer;
+    }
+
+    private void showAudioPathToast(String message) {
+        if (hasShownAudioPathToast) {
+            return;
+        }
+        hasShownAudioPathToast = true;
+
+        Handler handler = new Handler(Looper.getMainLooper());
+        handler.post(() -> Toast.makeText(context, message, Toast.LENGTH_LONG).show());
     }
 
     @Override
