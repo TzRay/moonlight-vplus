@@ -33,6 +33,10 @@ public class AppSettingsManager {
     private static final String INTENT_LAST_SETTINGS_VIDEO_FORMAT = "LastSettingsVideoFormat";
     private static final String INTENT_LAST_SETTINGS_ENABLE_HDR = "LastSettingsEnableHdr";
     private static final String INTENT_LAST_SETTINGS_ENABLE_HDR_HIGH_BRIGHTNESS = "LastSettingsEnableHdrHighBrightness";
+    private static final String INTENT_LAST_SETTINGS_HDR_BRIGHTNESS_SOURCE = "LastSettingsHdrBrightnessSource";
+    private static final String INTENT_LAST_SETTINGS_HDR_MANUAL_MIN_BRIGHTNESS = "LastSettingsHdrManualMinBrightness";
+    private static final String INTENT_LAST_SETTINGS_HDR_MANUAL_MAX_BRIGHTNESS = "LastSettingsHdrManualMaxBrightness";
+    private static final String INTENT_LAST_SETTINGS_HDR_MANUAL_MAX_AVG_BRIGHTNESS = "LastSettingsHdrManualMaxAvgBrightness";
     private static final String INTENT_LAST_SETTINGS_ENABLE_MIC = "LastSettingsEnableMic";
     private static final String INTENT_LAST_SETTINGS_MIC_BITRATE = "LastSettingsMicBitrate";
     private static final String INTENT_LAST_SETTINGS_ENABLE_NATIVE_MOUSE = "LastSettingsEnableNativeMouse";
@@ -337,6 +341,10 @@ public class AppSettingsManager {
         settingsJson.put("videoFormat", getVideoFormatPreferenceString(settings.videoFormat));
         settingsJson.put("enableHdr", settings.enableHdr);
         settingsJson.put("enableHdrHighBrightness", settings.enableHdrHighBrightness);
+        settingsJson.put("hdrBrightnessSource", settings.hdrBrightnessSource);
+        settingsJson.put("hdrManualMinBrightness", settings.hdrManualMinBrightness);
+        settingsJson.put("hdrManualMaxBrightness", settings.hdrManualMaxBrightness);
+        settingsJson.put("hdrManualMaxAverageBrightness", settings.hdrManualMaxAverageBrightness);
         settingsJson.put("enableMic", settings.enableMic);
         settingsJson.put("micBitrate", settings.micBitrate);
         settingsJson.put("enableNativeMousePointer", settings.enableNativeMousePointer);
@@ -362,6 +370,10 @@ public class AppSettingsManager {
         settings.screenOffsetX = 0;
         settings.screenOffsetY = 0;
         settings.useExternalDisplay = false;
+        settings.hdrBrightnessSource = "auto";
+        settings.hdrManualMinBrightness = 0;
+        settings.hdrManualMaxBrightness = 500;
+        settings.hdrManualMaxAverageBrightness = 200;
         settings.enablePerfOverlay = false;
         settings.reverseResolution = false;
         settings.rotableScreen = false;
@@ -387,6 +399,10 @@ public class AppSettingsManager {
 
         settings.enableHdr = settingsJson.optBoolean("enableHdr", false);
         settings.enableHdrHighBrightness = settingsJson.optBoolean("enableHdrHighBrightness", false);
+        settings.hdrBrightnessSource = settingsJson.optString("hdrBrightnessSource", "auto");
+        settings.hdrManualMinBrightness = settingsJson.optInt("hdrManualMinBrightness", 0);
+        settings.hdrManualMaxBrightness = settingsJson.optInt("hdrManualMaxBrightness", 500);
+        settings.hdrManualMaxAverageBrightness = settingsJson.optInt("hdrManualMaxAverageBrightness", 200);
         settings.enableMic = settingsJson.optBoolean("enableMic", false);
         settings.micBitrate = settingsJson.optInt("micBitrate", 96);
         settings.enableNativeMousePointer = settingsJson.optBoolean("enableNativeMousePointer", false);
@@ -449,6 +465,10 @@ public class AppSettingsManager {
         intent.putExtra(INTENT_LAST_SETTINGS_VIDEO_FORMAT, lastSettings.videoFormat.toString());
         intent.putExtra(INTENT_LAST_SETTINGS_ENABLE_HDR, lastSettings.enableHdr);
         intent.putExtra(INTENT_LAST_SETTINGS_ENABLE_HDR_HIGH_BRIGHTNESS, lastSettings.enableHdrHighBrightness);
+        intent.putExtra(INTENT_LAST_SETTINGS_HDR_BRIGHTNESS_SOURCE, lastSettings.hdrBrightnessSource);
+        intent.putExtra(INTENT_LAST_SETTINGS_HDR_MANUAL_MIN_BRIGHTNESS, lastSettings.hdrManualMinBrightness);
+        intent.putExtra(INTENT_LAST_SETTINGS_HDR_MANUAL_MAX_BRIGHTNESS, lastSettings.hdrManualMaxBrightness);
+        intent.putExtra(INTENT_LAST_SETTINGS_HDR_MANUAL_MAX_AVG_BRIGHTNESS, lastSettings.hdrManualMaxAverageBrightness);
         intent.putExtra(INTENT_LAST_SETTINGS_ENABLE_MIC, lastSettings.enableMic);
         intent.putExtra(INTENT_LAST_SETTINGS_MIC_BITRATE, lastSettings.micBitrate);
         intent.putExtra(INTENT_LAST_SETTINGS_ENABLE_NATIVE_MOUSE, lastSettings.enableNativeMousePointer);
@@ -488,6 +508,13 @@ public class AppSettingsManager {
             prefConfig.resolutionScale = intent.getIntExtra(INTENT_LAST_SETTINGS_RESOLUTION_SCALE, prefConfig.resolutionScale);
             prefConfig.enableHdr = intent.getBooleanExtra(INTENT_LAST_SETTINGS_ENABLE_HDR, prefConfig.enableHdr);
             prefConfig.enableHdrHighBrightness = intent.getBooleanExtra(INTENT_LAST_SETTINGS_ENABLE_HDR_HIGH_BRIGHTNESS, prefConfig.enableHdrHighBrightness);
+            prefConfig.hdrBrightnessSource = intent.getStringExtra(INTENT_LAST_SETTINGS_HDR_BRIGHTNESS_SOURCE);
+            if (prefConfig.hdrBrightnessSource == null) {
+                prefConfig.hdrBrightnessSource = "auto";
+            }
+            prefConfig.hdrManualMinBrightness = intent.getIntExtra(INTENT_LAST_SETTINGS_HDR_MANUAL_MIN_BRIGHTNESS, prefConfig.hdrManualMinBrightness);
+            prefConfig.hdrManualMaxBrightness = intent.getIntExtra(INTENT_LAST_SETTINGS_HDR_MANUAL_MAX_BRIGHTNESS, prefConfig.hdrManualMaxBrightness);
+            prefConfig.hdrManualMaxAverageBrightness = intent.getIntExtra(INTENT_LAST_SETTINGS_HDR_MANUAL_MAX_AVG_BRIGHTNESS, prefConfig.hdrManualMaxAverageBrightness);
             prefConfig.enableMic = intent.getBooleanExtra(INTENT_LAST_SETTINGS_ENABLE_MIC, prefConfig.enableMic);
             prefConfig.micBitrate = intent.getIntExtra(INTENT_LAST_SETTINGS_MIC_BITRATE, prefConfig.micBitrate);
             prefConfig.enableNativeMousePointer = intent.getBooleanExtra(INTENT_LAST_SETTINGS_ENABLE_NATIVE_MOUSE, prefConfig.enableNativeMousePointer);

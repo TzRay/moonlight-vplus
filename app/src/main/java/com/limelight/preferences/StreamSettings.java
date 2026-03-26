@@ -20,6 +20,7 @@ import android.util.Range;
 import android.view.Display;
 import android.view.DisplayCutout;
 import android.view.LayoutInflater;
+import android.text.InputType;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowInsets;
@@ -54,6 +55,7 @@ import com.limelight.binding.input.advance_setting.sqlite.SuperConfigDatabaseHel
 import com.limelight.binding.video.MediaCodecHelper;
 import com.limelight.utils.AspectRatioConverter;
 import com.limelight.utils.Dialog;
+import com.limelight.utils.HdrCapabilityHelper;
 import com.limelight.utils.UiHelper;
 import com.limelight.utils.UpdateManager;
 
@@ -712,6 +714,114 @@ public class StreamSettings extends AppCompatActivity {
             return getActivity().getWindowManager().getDefaultDisplay();
         }
 
+        private void setupHdrBrightnessPreferences() {
+            ListPreference sourcePref = findPreference(PreferenceConfiguration.HDR_BRIGHTNESS_SOURCE_PREF_STRING);
+            EditTextPreference minPref = findPreference(PreferenceConfiguration.HDR_MANUAL_MIN_BRIGHTNESS_PREF_STRING);
+            EditTextPreference maxPref = findPreference(PreferenceConfiguration.HDR_MANUAL_MAX_BRIGHTNESS_PREF_STRING);
+            EditTextPreference avgPref = findPreference(PreferenceConfiguration.HDR_MANUAL_MAX_AVG_BRIGHTNESS_PREF_STRING);
+
+            if (sourcePref == null || minPref == null || maxPref == null || avgPref == null) {
+                return;
+            }
+
+            PreferenceConfiguration prefConfig = PreferenceConfiguration.readPreferences(requireContext());
+            minPref.setText(String.valueOf(prefConfig.hdrManualMinBrightness));
+            maxPref.setText(String.valueOf(prefConfig.hdrManualMaxBrightness));
+            avgPref.setText(String.valueOf(prefConfig.hdrManualMaxAverageBrightness));
+
+            configureHdrManualBrightnessPreference(minPref, PreferenceConfiguration.HDR_MANUAL_MIN_BRIGHTNESS_PREF_STRING);
+            configureHdrManualBrightnessPreference(maxPref, PreferenceConfiguration.HDR_MANUAL_MAX_BRIGHTNESS_PREF_STRING);
+            configureHdrManualBrightnessPreference(avgPref, PreferenceConfiguration.HDR_MANUAL_MAX_AVG_BRIGHTNESS_PREF_STRING);
+
+            sourcePref.setOnPreferenceChangeListener((preference, newValue) -> {
+                preference.setSummary(getHdrBrightnessSourceSummary(String.valueOf(newValue)));
+                updateHdrBrightnessPreferenceVisibility(String.valueOf(newValue));
+                return true;
+            });
+
+            sourcePref.setSummary(getHdrBrightnessSourceSummary(sourcePref.getValue()));
+            updateHdrBrightnessPreferenceVisibility(sourcePref.getValue());
+        }
+
+        private void configureHdrManualBrightnessPreference(EditTextPreference preference, String preferenceKey) {
+            preference.setOnBindEditTextListener(editText ->
+                    editText.setInputType(InputType.TYPE_CLASS_NUMBER));
+
+            preference.setOnPreferenceChangeListener((pref, newValue) -> {
+                Integer parsedValue = parseHdrBrightnessValue(newValue);
+                if (parsedValue == null) {
+                    Toast.makeText(requireContext(), R.string.toast_invalid_hdr_brightness_value, Toast.LENGTH_SHORT).show();
+                    return false;
+                }
+
+                PreferenceConfiguration currentConfig = PreferenceConfiguration.readPreferences(requireContext());
+                int min = PreferenceConfiguration.HDR_MANUAL_MIN_BRIGHTNESS_PREF_STRING.equals(preferenceKey) ?
+                        parsedValue : currentConfig.hdrManualMinBrightness;
+                int max = PreferenceConfiguration.HDR_MANUAL_MAX_BRIGHTNESS_PREF_STRING.equals(preferenceKey) ?
+                        parsedValue : currentConfig.hdrManualMaxBrightness;
+                int avg = PreferenceConfiguration.HDR_MANUAL_MAX_AVG_BRIGHTNESS_PREF_STRING.equals(preferenceKey) ?
+                        parsedValue : currentConfig.hdrManualMaxAverageBrightness;
+
+                if (max < min || avg < min) {
+                    Toast.makeText(requireContext(), R.string.toast_invalid_hdr_brightness_value, Toast.LENGTH_SHORT).show();
+                    return false;
+                }
+
+                pref.setSummary(getString(R.string.summary_hdr_manual_value, parsedValue));
+                return true;
+            });
+
+            Integer currentValue = parseHdrBrightnessValue(preference.getText());
+            if (currentValue == null) {
+                currentValue = 0;
+            }
+            preference.setSummary(getString(R.string.summary_hdr_manual_value, currentValue));
+        }
+
+        private Integer parseHdrBrightnessValue(Object value) {
+            try {
+                return Integer.parseInt(String.valueOf(value).trim());
+            } catch (Exception e) {
+                return null;
+            }
+        }
+
+        private void updateHdrBrightnessPreferenceVisibility(String source) {
+            boolean showManualValues = HdrCapabilityHelper.HDR_BRIGHTNESS_SOURCE_MANUAL.equals(source)
+                    || HdrCapabilityHelper.HDR_BRIGHTNESS_SOURCE_EXTERNAL.equals(source);
+
+            Preference minPref = findPreference(PreferenceConfiguration.HDR_MANUAL_MIN_BRIGHTNESS_PREF_STRING);
+            Preference maxPref = findPreference(PreferenceConfiguration.HDR_MANUAL_MAX_BRIGHTNESS_PREF_STRING);
+            Preference avgPref = findPreference(PreferenceConfiguration.HDR_MANUAL_MAX_AVG_BRIGHTNESS_PREF_STRING);
+
+            if (minPref != null) {
+                minPref.setVisible(showManualValues);
+            }
+            if (maxPref != null) {
+                maxPref.setVisible(showManualValues);
+            }
+            if (avgPref != null) {
+                avgPref.setVisible(showManualValues);
+            }
+        }
+
+        private String getHdrBrightnessSourceSummary(String source) {
+            if (HdrCapabilityHelper.HDR_BRIGHTNESS_SOURCE_EXTERNAL.equals(source)) {
+                Display externalDisplay = HdrCapabilityHelper.getExternalDisplay(requireContext());
+                if (externalDisplay != null) {
+                    return getString(R.string.summary_hdr_brightness_source_external_detected, externalDisplay.getName());
+                }
+
+                return getString(R.string.summary_hdr_brightness_source_external_missing);
+            }
+
+            if (HdrCapabilityHelper.HDR_BRIGHTNESS_SOURCE_MANUAL.equals(source)) {
+                return getString(R.string.summary_hdr_manual_hidden);
+            }
+
+            return getString(R.string.summary_hdr_brightness_source);
+        }
+
         private void setValue(String preferenceKey, String value) {
             ListPreference pref = (ListPreference) findPreference(preferenceKey);
 
@@ -1116,6 +1226,8 @@ public class StreamSettings extends AppCompatActivity {
                 });
             }
 
+            setupHdrBrightnessPreferences();
+
             // hide on-screen controls category on non touch screen devices
             if (!getActivity().getPackageManager().hasSystemFeature(PackageManager.FEATURE_TOUCHSCREEN)) {
                 PreferenceCategory category =
@@ -1414,6 +1526,22 @@ public class StreamSettings extends AppCompatActivity {
                 PreferenceCategory category =
                         (PreferenceCategory) findPreference("category_screen_position");
                 // 必须先移除依赖项，再移除被依赖的项，否则会崩溃
+                Preference hdrManualAvgPref = findPreference(PreferenceConfiguration.HDR_MANUAL_MAX_AVG_BRIGHTNESS_PREF_STRING);
+                if (hdrManualAvgPref != null) {
+                    category.removePreference(hdrManualAvgPref);
+                }
+                Preference hdrManualMaxPref = findPreference(PreferenceConfiguration.HDR_MANUAL_MAX_BRIGHTNESS_PREF_STRING);
+                if (hdrManualMaxPref != null) {
+                    category.removePreference(hdrManualMaxPref);
+                }
+                Preference hdrManualMinPref = findPreference(PreferenceConfiguration.HDR_MANUAL_MIN_BRIGHTNESS_PREF_STRING);
+                if (hdrManualMinPref != null) {
+                    category.removePreference(hdrManualMinPref);
+                }
+                Preference hdrBrightnessSourcePref = findPreference(PreferenceConfiguration.HDR_BRIGHTNESS_SOURCE_PREF_STRING);
+                if (hdrBrightnessSourcePref != null) {
+                    category.removePreference(hdrBrightnessSourcePref);
+                }
                 Preference hdrHighBrightnessPref = findPreference("checkbox_enable_hdr_high_brightness");
                 if (hdrHighBrightnessPref != null) {
                     category.removePreference(hdrHighBrightnessPref);
@@ -1456,10 +1584,26 @@ public class StreamSettings extends AppCompatActivity {
                 CheckBoxPreference hdrPref = (CheckBoxPreference) findPreference("checkbox_enable_hdr");
                 CheckBoxPreference hdrHighBrightnessPref = (CheckBoxPreference) findPreference("checkbox_enable_hdr_high_brightness");
                 ListPreference hdrModePref = (ListPreference) findPreference("list_hdr_mode");
+                Preference hdrBrightnessSourcePref = findPreference(PreferenceConfiguration.HDR_BRIGHTNESS_SOURCE_PREF_STRING);
+                Preference hdrManualMinPref = findPreference(PreferenceConfiguration.HDR_MANUAL_MIN_BRIGHTNESS_PREF_STRING);
+                Preference hdrManualMaxPref = findPreference(PreferenceConfiguration.HDR_MANUAL_MAX_BRIGHTNESS_PREF_STRING);
+                Preference hdrManualAvgPref = findPreference(PreferenceConfiguration.HDR_MANUAL_MAX_AVG_BRIGHTNESS_PREF_STRING);
 
                 if (!foundHdr10) {
                     LimeLog.info("Excluding HDR toggle based on display capabilities");
                     // 必须先移除依赖项，再移除被依赖的项，否则会崩溃
+                    if (hdrManualAvgPref != null) {
+                        category.removePreference(hdrManualAvgPref);
+                    }
+                    if (hdrManualMaxPref != null) {
+                        category.removePreference(hdrManualMaxPref);
+                    }
+                    if (hdrManualMinPref != null) {
+                        category.removePreference(hdrManualMinPref);
+                    }
+                    if (hdrBrightnessSourcePref != null) {
+                        category.removePreference(hdrBrightnessSourcePref);
+                    }
                     if (hdrModePref != null) {
                         category.removePreference(hdrModePref);
                     }
@@ -1485,6 +1629,18 @@ public class StreamSettings extends AppCompatActivity {
                     // 同时禁用 HDR 模式选项
                     if (hdrModePref != null) {
                         hdrModePref.setEnabled(false);
+                    }
+                    if (hdrBrightnessSourcePref != null) {
+                        hdrBrightnessSourcePref.setEnabled(false);
+                    }
+                    if (hdrManualMinPref != null) {
+                        hdrManualMinPref.setEnabled(false);
+                    }
+                    if (hdrManualMaxPref != null) {
+                        hdrManualMaxPref.setEnabled(false);
+                    }
+                    if (hdrManualAvgPref != null) {
+                        hdrManualAvgPref.setEnabled(false);
                     }
                 }
                 else {

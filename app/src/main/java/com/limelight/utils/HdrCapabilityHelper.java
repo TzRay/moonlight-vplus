@@ -11,12 +11,17 @@ import android.view.Window;
 import android.view.WindowManager;
 
 import com.limelight.LimeLog;
+import com.limelight.preferences.PreferenceConfiguration;
 
 /**
  * 统一的 HDR 与屏幕能力检测工具类
  * 用于向服务端报告亮度信息以及在诊断页面展示
  */
 public class HdrCapabilityHelper {
+
+    public static final String HDR_BRIGHTNESS_SOURCE_AUTO = "auto";
+    public static final String HDR_BRIGHTNESS_SOURCE_EXTERNAL = "external";
+    public static final String HDR_BRIGHTNESS_SOURCE_MANUAL = "manual";
 
     /**
      * 屏幕亮度信息（单位：nits）
@@ -73,6 +78,35 @@ public class HdrCapabilityHelper {
      */
     @SuppressLint("NewApi")
     public static BrightnessInfo getBrightnessInfo(Context context) {
+        return getBrightnessInfo(context, false);
+    }
+
+    /**
+     * 获取屏幕亮度范围，允许在盒子场景下优先读取外接显示器能力
+     *
+     * @param context 应用上下文
+     * @param preferExternalDisplay 为 true 时优先选择非默认显示器（若存在）
+     */
+    @SuppressLint("NewApi")
+    public static BrightnessInfo getBrightnessInfo(Context context, boolean preferExternalDisplay) {
+        if (context == null) {
+            return createDefaultBrightnessInfo();
+        }
+
+        Display display = getPreferredDisplay(context, preferExternalDisplay);
+        return getBrightnessInfoForDisplay(display);
+    }
+
+    @SuppressLint("NewApi")
+    public static BrightnessInfo getBrightnessInfoForExternalDisplay(Context context) {
+        if (context == null) {
+            return createDefaultBrightnessInfo();
+        }
+
+        return getBrightnessInfoForDisplay(getExternalDisplay(context));
+    }
+
+    private static BrightnessInfo createDefaultBrightnessInfo() {
         BrightnessInfo info = new BrightnessInfo();
         info.maxLuminance = BrightnessInfo.DEFAULT_MAX;
         info.minLuminance = BrightnessInfo.DEFAULT_MIN;
@@ -84,12 +118,12 @@ public class HdrCapabilityHelper {
         info.isHdrSdrRatioAvailable = false;
         info.computedPeakBrightness = -1f;
         info.isComputedFromRatio = false;
+        return info;
+    }
 
-        if (context == null) {
-            return info;
-        }
-
-        Display display = getDefaultDisplay(context);
+    @SuppressLint("NewApi")
+    private static BrightnessInfo getBrightnessInfoForDisplay(Display display) {
+        BrightnessInfo info = createDefaultBrightnessInfo();
         if (display == null) {
             return info;
         }
@@ -295,7 +329,7 @@ public class HdrCapabilityHelper {
      */
     public static int[] getBrightnessRangeAsInts(Context context) {
         BrightnessInfo info = getBrightnessInfo(context);
-        int min = Math.max(1, (int) Math.floor(info.minLuminance));
+        int min = Math.max(0, (int) Math.floor(info.minLuminance));
 
         // 优先使用 HDR/SDR ratio 计算的峰值亮度（类似鸿蒙 sdrNits * maxHeadroom）
         float effectiveMax = info.maxLuminance;
@@ -303,7 +337,80 @@ public class HdrCapabilityHelper {
             effectiveMax = info.computedPeakBrightness;
         }
 
-        int max = Math.max(min + 1, (int) Math.ceil(effectiveMax));
+        int max = Math.max(min, (int) Math.ceil(effectiveMax));
+        int avg = Math.max(min, (int) Math.ceil(info.maxAvgLuminance));
+        return new int[]{min, max, avg};
+    }
+
+    /**
+     * 获取 int[] 格式的亮度范围，允许优先读取外接显示器能力
+     */
+    public static int[] getBrightnessRangeAsInts(Context context, boolean preferExternalDisplay) {
+        BrightnessInfo info = getBrightnessInfo(context, preferExternalDisplay);
+        int min = Math.max(0, (int) Math.floor(info.minLuminance));
+
+        // 优先使用 HDR/SDR ratio 计算的峰值亮度（类似鸿蒙 sdrNits * maxHeadroom）
+        float effectiveMax = info.maxLuminance;
+        if (info.isComputedFromRatio && info.computedPeakBrightness > effectiveMax) {
+            effectiveMax = info.computedPeakBrightness;
+        }
+
+        int max = Math.max(min, (int) Math.ceil(effectiveMax));
+        int avg = Math.max(min, (int) Math.ceil(info.maxAvgLuminance));
+        return new int[]{min, max, avg};
+    }
+
+    public static int[] getBrightnessRangeAsInts(Context context, PreferenceConfiguration prefConfig) {
+        if (prefConfig == null) {
+            return getBrightnessRangeAsInts(context);
+        }
+
+        String source = prefConfig.hdrBrightnessSource != null
+                ? prefConfig.hdrBrightnessSource
+                : HDR_BRIGHTNESS_SOURCE_AUTO;
+        if (HDR_BRIGHTNESS_SOURCE_MANUAL.equals(source)) {
+            int[] brightnessRange = getManualBrightnessRange(prefConfig);
+            LimeLog.info("HDR brightness source=manual, values="
+                    + brightnessRange[0] + "/" + brightnessRange[1] + "/" + brightnessRange[2]);
+            return brightnessRange;
+        }
+
+        if (HDR_BRIGHTNESS_SOURCE_EXTERNAL.equals(source)) {
+            Display externalDisplay = getExternalDisplay(context);
+            if (externalDisplay != null) {
+                int[] brightnessRange = toBrightnessRangeInts(getBrightnessInfoForDisplay(externalDisplay));
+                LimeLog.info("HDR brightness source=external display, values="
+                        + brightnessRange[0] + "/" + brightnessRange[1] + "/" + brightnessRange[2]);
+                return brightnessRange;
+            }
+
+            int[] brightnessRange = getManualBrightnessRange(prefConfig);
+            LimeLog.info("HDR brightness source=external display fallback to manual, values="
+                    + brightnessRange[0] + "/" + brightnessRange[1] + "/" + brightnessRange[2]);
+            return brightnessRange;
+        }
+
+        int[] brightnessRange = getBrightnessRangeAsInts(context, prefConfig.useExternalDisplay);
+        LimeLog.info("HDR brightness source=auto, values="
+                + brightnessRange[0] + "/" + brightnessRange[1] + "/" + brightnessRange[2]);
+        return brightnessRange;
+    }
+
+    private static int[] getManualBrightnessRange(PreferenceConfiguration prefConfig) {
+        int min = Math.max(0, prefConfig.hdrManualMinBrightness);
+        int max = Math.max(min, prefConfig.hdrManualMaxBrightness);
+        int avg = Math.max(min, prefConfig.hdrManualMaxAverageBrightness);
+        return new int[]{min, max, avg};
+    }
+
+    private static int[] toBrightnessRangeInts(BrightnessInfo info) {
+        int min = Math.max(0, (int) Math.floor(info.minLuminance));
+        float effectiveMax = info.maxLuminance;
+        if (info.isComputedFromRatio && info.computedPeakBrightness > effectiveMax) {
+            effectiveMax = info.computedPeakBrightness;
+        }
+
+        int max = Math.max(min, (int) Math.ceil(effectiveMax));
         int avg = Math.max(min, (int) Math.ceil(info.maxAvgLuminance));
         return new int[]{min, max, avg};
     }
@@ -351,5 +458,45 @@ public class HdrCapabilityHelper {
             LimeLog.warning("Failed to get default display: " + e.getMessage());
         }
         return null;
+    }
+
+    @SuppressLint("NewApi")
+    public static Display getExternalDisplay(Context context) {
+        if (context == null || Build.VERSION.SDK_INT < Build.VERSION_CODES.JELLY_BEAN_MR1) {
+            return null;
+        }
+
+        try {
+            DisplayManager dm = (DisplayManager) context.getSystemService(Context.DISPLAY_SERVICE);
+            if (dm != null) {
+                Display[] displays = dm.getDisplays();
+                for (Display display : displays) {
+                    if (display != null && display.getDisplayId() != Display.DEFAULT_DISPLAY) {
+                        return display;
+                    }
+                }
+            }
+        } catch (Exception e) {
+            LimeLog.warning("Failed to query external display: " + e.getMessage());
+        }
+
+        return null;
+    }
+
+    /**
+     * 获取用于 HDR 能力检测的目标显示器
+     */
+    @SuppressLint("NewApi")
+    private static Display getPreferredDisplay(Context context, boolean preferExternalDisplay) {
+        if (preferExternalDisplay) {
+            Display externalDisplay = getExternalDisplay(context);
+            if (externalDisplay != null) {
+                LimeLog.info("Using external display for HDR capability probe: " + externalDisplay.getName()
+                        + " (ID: " + externalDisplay.getDisplayId() + ")");
+                return externalDisplay;
+            }
+        }
+
+        return getDefaultDisplay(context);
     }
 }

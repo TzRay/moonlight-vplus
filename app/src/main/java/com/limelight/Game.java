@@ -681,7 +681,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         conn = new NvConnection(getApplicationContext(),
                 new ComputerDetails.AddressTuple(host, port),
                 httpsPort, uniqueId, pairName, config,
-                PlatformBinding.getCryptoProvider(this), serverCert, displayName);
+                PlatformBinding.getCryptoProvider(this), serverCert, displayName, prefConfig);
         controllerHandler = new ControllerHandler(this, conn, this, prefConfig);
         keyboardTranslator = new KeyboardTranslator();
 
@@ -1211,7 +1211,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         conn = new NvConnection(getApplicationContext(),
                 new ComputerDetails.AddressTuple(host, port),
                 httpsPort, uniqueId, pairName, config,
-                PlatformBinding.getCryptoProvider(this), serverCert, displayName);
+                PlatformBinding.getCryptoProvider(this), serverCert, displayName, prefConfig);
         controllerHandler = new ControllerHandler(this, conn, this, prefConfig);
 
         // 重新创建 ControllerHandler
