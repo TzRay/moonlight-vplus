@@ -773,6 +773,30 @@ public class PreferenceConfiguration {
         }
     }
 
+    private static void migratePreferenceToString(SharedPreferences prefs, String key, String defaultValue) {
+        try {
+            prefs.getString(key, defaultValue);
+        } catch (ClassCastException e) {
+            String migratedValue = defaultValue;
+
+            try {
+                migratedValue = String.valueOf(prefs.getInt(key, Integer.parseInt(defaultValue)));
+            } catch (Exception ignored) {
+                try {
+                    migratedValue = String.valueOf(prefs.getFloat(key, Float.parseFloat(defaultValue)));
+                } catch (Exception ignoredAgain) {
+                    try {
+                        migratedValue = String.valueOf(prefs.getLong(key, Long.parseLong(defaultValue)));
+                    } catch (Exception ignoredYetAgain) {
+                        migratedValue = defaultValue;
+                    }
+                }
+            }
+
+            prefs.edit().putString(key, migratedValue).apply();
+        }
+    }
+
     public static PreferenceConfiguration readPreferences(Context context) {
         SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(context);
         PreferenceConfiguration config = new PreferenceConfiguration();
@@ -786,6 +810,13 @@ public class PreferenceConfiguration {
                         .apply();
             }
         }
+
+        // EditTextPreference/ListPreference restore values via getString(). Older code paths stored
+        // some HDR values as numeric types, which causes settings to crash on reopen.
+        migratePreferenceToString(prefs, HDR_MODE_PREF_STRING, String.valueOf(DEFAULT_HDR_MODE));
+        migratePreferenceToString(prefs, HDR_MANUAL_MIN_BRIGHTNESS_PREF_STRING, String.valueOf(DEFAULT_HDR_MANUAL_MIN_BRIGHTNESS));
+        migratePreferenceToString(prefs, HDR_MANUAL_MAX_BRIGHTNESS_PREF_STRING, String.valueOf(DEFAULT_HDR_MANUAL_MAX_BRIGHTNESS));
+        migratePreferenceToString(prefs, HDR_MANUAL_MAX_AVG_BRIGHTNESS_PREF_STRING, String.valueOf(DEFAULT_HDR_MANUAL_MAX_AVG_BRIGHTNESS));
 
         String resStr = prefs.getString(RESOLUTION_PREF_STRING, PreferenceConfiguration.DEFAULT_RESOLUTION);
 
@@ -1169,11 +1200,12 @@ public class PreferenceConfiguration {
                     .putString(VIDEO_FORMAT_PREF_STRING, getVideoFormatPreferenceString(videoFormat))
                     .putBoolean(ENABLE_HDR_PREF_STRING, enableHdr)
                     .putBoolean(ENABLE_HDR_HIGH_BRIGHTNESS_PREF_STRING, enableHdrHighBrightness)
+                    .putString(HDR_MODE_PREF_STRING, String.valueOf(hdrMode))
                     .putString(HDR_BRIGHTNESS_SOURCE_PREF_STRING,
                             hdrBrightnessSource != null ? hdrBrightnessSource : DEFAULT_HDR_BRIGHTNESS_SOURCE)
                     .putString(HDR_MANUAL_MIN_BRIGHTNESS_PREF_STRING, String.valueOf(hdrManualMinBrightness))
-                    .putInt(HDR_MANUAL_MAX_BRIGHTNESS_PREF_STRING, hdrManualMaxBrightness)
-                    .putInt(HDR_MANUAL_MAX_AVG_BRIGHTNESS_PREF_STRING, hdrManualMaxAverageBrightness)
+                    .putString(HDR_MANUAL_MAX_BRIGHTNESS_PREF_STRING, String.valueOf(hdrManualMaxBrightness))
+                    .putString(HDR_MANUAL_MAX_AVG_BRIGHTNESS_PREF_STRING, String.valueOf(hdrManualMaxAverageBrightness))
                     .putBoolean(ENABLE_PERF_OVERLAY_STRING, enablePerfOverlay)
                     .putBoolean(PERF_OVERLAY_LOCKED_STRING, perfOverlayLocked)
                     .putBoolean(REVERSE_RESOLUTION_PREF_STRING, reverseResolution)
