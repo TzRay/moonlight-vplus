@@ -327,36 +327,14 @@ public class HdrCapabilityHelper {
      * @return [minBrightness, maxBrightness, maxAverageBrightness] 单位 nits，整型
      */
     public static int[] getBrightnessRangeAsInts(Context context) {
-        BrightnessInfo info = getBrightnessInfo(context);
-        int min = Math.max(0, (int) Math.floor(info.minLuminance));
-
-        // 优先使用 HDR/SDR ratio 计算的峰值亮度（类似鸿蒙 sdrNits * maxHeadroom）
-        float effectiveMax = info.maxLuminance;
-        if (info.isComputedFromRatio && info.computedPeakBrightness > effectiveMax) {
-            effectiveMax = info.computedPeakBrightness;
-        }
-
-        int max = Math.max(min, (int) Math.ceil(effectiveMax));
-        int avg = Math.max(min, (int) Math.ceil(info.maxAvgLuminance));
-        return new int[]{min, max, avg};
+        return toBrightnessRangeInts(getBrightnessInfo(context));
     }
 
     /**
      * 获取 int[] 格式的亮度范围，允许优先读取外接显示器能力
      */
     public static int[] getBrightnessRangeAsInts(Context context, boolean preferExternalDisplay) {
-        BrightnessInfo info = getBrightnessInfo(context, preferExternalDisplay);
-        int min = Math.max(0, (int) Math.floor(info.minLuminance));
-
-        // 优先使用 HDR/SDR ratio 计算的峰值亮度（类似鸿蒙 sdrNits * maxHeadroom）
-        float effectiveMax = info.maxLuminance;
-        if (info.isComputedFromRatio && info.computedPeakBrightness > effectiveMax) {
-            effectiveMax = info.computedPeakBrightness;
-        }
-
-        int max = Math.max(min, (int) Math.ceil(effectiveMax));
-        int avg = Math.max(min, (int) Math.ceil(info.maxAvgLuminance));
-        return new int[]{min, max, avg};
+        return toBrightnessRangeInts(getBrightnessInfo(context, preferExternalDisplay));
     }
 
     public static int[] getBrightnessRangeAsInts(Context context, PreferenceConfiguration prefConfig) {
@@ -381,20 +359,20 @@ public class HdrCapabilityHelper {
     }
 
     private static int[] getManualBrightnessRange(PreferenceConfiguration prefConfig) {
-        int min = Math.max(0, (int) Math.floor(prefConfig.hdrManualMinBrightness));
-        int max = Math.max(min, prefConfig.hdrManualMaxBrightness);
+        int min = Math.max(1, (int) Math.floor(prefConfig.hdrManualMinBrightness));
+        int max = Math.max(min + 1, prefConfig.hdrManualMaxBrightness);
         int avg = Math.max(min, prefConfig.hdrManualMaxAverageBrightness);
         return new int[]{min, max, avg};
     }
 
     private static int[] toBrightnessRangeInts(BrightnessInfo info) {
-        int min = Math.max(0, (int) Math.floor(info.minLuminance));
+        int min = Math.max(1, (int) Math.floor(info.minLuminance));
         float effectiveMax = info.maxLuminance;
         if (info.isComputedFromRatio && info.computedPeakBrightness > effectiveMax) {
             effectiveMax = info.computedPeakBrightness;
         }
 
-        int max = Math.max(min, (int) Math.ceil(effectiveMax));
+        int max = Math.max(min + 1, (int) Math.ceil(effectiveMax));
         int avg = Math.max(min, (int) Math.ceil(info.maxAvgLuminance));
         return new int[]{min, max, avg};
     }

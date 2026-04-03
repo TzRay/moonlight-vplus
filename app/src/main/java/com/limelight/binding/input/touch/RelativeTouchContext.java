@@ -40,7 +40,7 @@ public class RelativeTouchContext implements TouchContext {
 
     private final NvConnection conn;
     private final int actionIndex;
-    private final View targetView;
+    private View targetView;
     private final PreferenceConfiguration prefConfig;
     private final Handler handler;
 
@@ -108,7 +108,10 @@ public class RelativeTouchContext implements TouchContext {
                 () -> conn.sendMouseButtonUp(MouseButtonPacket.BUTTON_X1),
                 () -> conn.sendMouseButtonUp(MouseButtonPacket.BUTTON_X2)
         };
+    }
 
+    public void setTargetView(View view) {
+        this.targetView = view;
     }
 
     /**
@@ -358,11 +361,17 @@ public class RelativeTouchContext implements TouchContext {
                         localCursorRenderer.updateCursorPosition(deltaX, deltaY);
                         // 2. 获取绝对坐标并发送给服务器 (保持同步)
                         float[] absPos = localCursorRenderer.getCursorAbsolutePosition();
+                        int rendererWidth = Math.max(localCursorRenderer.getViewWidth(), 1);
+                        int rendererHeight = Math.max(localCursorRenderer.getViewHeight(), 1);
+                        int targetWidth = Math.max(targetView.getWidth(), rendererWidth);
+                        int targetHeight = Math.max(targetView.getHeight(), rendererHeight);
+                        float mappedX = absPos[0] * targetWidth / rendererWidth;
+                        float mappedY = absPos[1] * targetHeight / rendererHeight;
                         conn.sendMousePosition(
-                                (short) absPos[0],
-                                (short) absPos[1],
-                                (short) targetView.getWidth(),
-                                (short) targetView.getHeight());
+                                (short) mappedX,
+                                (short) mappedY,
+                                (short) targetWidth,
+                                (short) targetHeight);
                     } else if (prefConfig.absoluteMouseMode) {
                         // 3. 旧版绝对模式
                         conn.sendMouseMoveAsMousePosition(

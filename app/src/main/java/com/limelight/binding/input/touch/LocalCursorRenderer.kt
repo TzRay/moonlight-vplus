@@ -69,6 +69,10 @@ class LocalCursorRenderer(
         cursorView = null
     }
 
+    fun getViewWidth(): Int = viewWidth
+
+    fun getViewHeight(): Int = viewHeight
+
     // Getter methods required by context
     fun getCursorAbsolutePosition(): FloatArray {
         return floatArrayOf(cursorX, cursorY)
