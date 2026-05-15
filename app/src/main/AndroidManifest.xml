@@ -69,6 +69,7 @@
         tools:ignore="ProtectedPermissions" />
 
     <application
+        android:name=".LimelightApplication"
         android:allowBackup="true"
         android:fullBackupContent="@xml/backup_rules"
         android:dataExtractionRules="@xml/backup_rules_s"
@@ -76,7 +77,8 @@
         android:isGame="true"
         android:banner="@drawable/atv_banner"
         android:appCategory="game"
-        android:icon="@drawable/saba"
+        android:icon="@mipmap/ic_launcher_saba"
+        android:roundIcon="@mipmap/ic_launcher_saba"
         android:installLocation="auto"
         android:gwpAsanMode="always"
         android:localeConfig="@xml/locales_config"
@@ -100,6 +102,19 @@
             <meta-data
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/update_file_paths" />
+        </provider>
+
+        <!-- FileProvider for Sunshine clipboard image sync. Inbound PNGs are written to
+             cache/clipboard and exposed read-only via this authority so other apps can
+             paste them via ClipData.newUri. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.clipboard_fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/clipboard_file_paths" />
         </provider>
 
         <!-- Samsung multi-window support -->
@@ -128,6 +143,11 @@
             android:name=".PcView"
             android:exported="true"
             android:resizeableActivity="true"
+            android:banner="@drawable/atv_banner"
+            android:icon="@mipmap/ic_launcher_saba"
+            android:roundIcon="@mipmap/ic_launcher_saba"
+            android:label="@string/app_label"
+            android:theme="@style/Theme.App.Starting"
             android:enableOnBackInvokedCallback="true"
             android:configChanges="mcc|mnc|touchscreen|keyboard|keyboardHidden|navigation|screenLayout|fontScale|uiMode|orientation|screenSize|smallestScreenSize|layoutDirection">
 
@@ -159,6 +179,15 @@
             android:resizeableActivity="true"
             android:enableOnBackInvokedCallback="true"
             android:configChanges="mcc|mnc|touchscreen|keyboard|keyboardHidden|navigation|screenLayout|fontScale|uiMode|orientation|screenSize|smallestScreenSize|layoutDirection">
+            <meta-data android:name="WindowManagerPreference:FreeformWindowSize" android:value="system-default" />
+            <meta-data android:name="WindowManagerPreference:FreeformWindowOrientation" android:value="landscape" />
+        </activity>
+        <activity
+            android:name=".SunshineWebUiActivity"
+            android:resizeableActivity="true"
+            android:enableOnBackInvokedCallback="true"
+            android:configChanges="mcc|mnc|touchscreen|keyboard|keyboardHidden|navigation|screenLayout|fontScale|uiMode|orientation|screenSize|smallestScreenSize|layoutDirection"
+            android:label="@string/pcview_menu_open_webui">
             <meta-data android:name="WindowManagerPreference:FreeformWindowSize" android:value="system-default" />
             <meta-data android:name="WindowManagerPreference:FreeformWindowOrientation" android:value="landscape" />
         </activity>

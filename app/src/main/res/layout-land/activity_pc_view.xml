@@ -11,14 +11,19 @@
         android:layout_height="match_parent"
         android:scaleType="centerCrop" />
 
+    <Space
+        android:id="@+id/topSafeArea"
+        android:layout_width="match_parent"
+        android:layout_height="@dimen/activity_horizontal_margin"
+        android:layout_alignParentTop="true" />
+
     <RelativeLayout
         android:id="@+id/pcFragmentContainer"
         android:layout_width="fill_parent"
         android:layout_height="wrap_content"
         android:gravity="center"
-        android:layout_marginTop="@dimen/activity_horizontal_margin"
+        android:layout_below="@+id/topSafeArea"
         android:layout_alignParentBottom="true"
-        android:layout_alignParentTop="true"
         android:layout_toRightOf="@+id/settingsButton"
         android:layout_toEndOf="@+id/settingsButton"
         android:clickable="false"
@@ -73,10 +78,9 @@
         android:cropToPadding="false"
         android:scaleType="fitCenter"
         android:nextFocusForward="@id/aboutButton"
-        android:layout_marginTop="@dimen/activity_horizontal_margin"
+        android:layout_below="@+id/topSafeArea"
         android:layout_alignParentStart="true"
         android:layout_alignParentLeft="true"
-        android:layout_alignParentTop="true"
         android:src="@drawable/ic_settings"
         style="?android:attr/borderlessButtonStyle"/>
 
@@ -147,7 +151,7 @@
             android:id="@+id/scene1Btn"
             android:layout_width="32dp"
             android:layout_height="32dp"
-            android:contentDescription="场景1"
+            android:contentDescription="Scene 1"
             android:background="@drawable/btn_pressed_bg"
             android:src="@drawable/ic_triangle_left"
             android:tint="#80FFFFFF"
@@ -158,7 +162,7 @@
             android:id="@+id/scene2Btn"
             android:layout_width="32dp"
             android:layout_height="32dp"
-            android:contentDescription="场景2"
+            android:contentDescription="Scene 2"
             android:background="@drawable/btn_pressed_bg"
             android:src="@drawable/ic_triangle_left"
             android:tint="#80FFFFFF"
@@ -169,7 +173,7 @@
             android:id="@+id/scene3Btn"
             android:layout_width="32dp"
             android:layout_height="32dp"
-            android:contentDescription="场景3"
+            android:contentDescription="Scene 3"
             android:background="@drawable/btn_pressed_bg"
             android:src="@drawable/ic_triangle_left"
             android:tint="#80FFFFFF"
@@ -180,7 +184,7 @@
             android:id="@+id/scene4Btn"
             android:layout_width="32dp"
             android:layout_height="32dp"
-            android:contentDescription="场景4"
+            android:contentDescription="Scene 4"
             android:background="@drawable/btn_pressed_bg"
             android:src="@drawable/ic_triangle_left"
             android:tint="#80FFFFFF"
@@ -191,7 +195,7 @@
             android:id="@+id/scene5Btn"
             android:layout_width="32dp"
             android:layout_height="32dp"
-            android:contentDescription="场景5"
+            android:contentDescription="Scene 5"
             android:background="@drawable/btn_pressed_bg"
             android:src="@drawable/ic_triangle_left"
             android:tint="#80FFFFFF"

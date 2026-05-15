@@ -38,6 +38,16 @@
     <string name="pcview_menu_sleep_fail">Host sleep failed</string>
     <string name="pcview_menu_disable_ipv6">Disable IPv6</string>
     <string name="pcview_menu_enable_ipv6">Enable IPv6</string>
+    <string name="pcview_menu_open_webui">Open Web Management (Sunshine)</string>
+    <string name="pcview_open_webui_unavailable">No reachable address available for Web management</string>
+    <string name="pcview_open_webui_no_browser">No browser available to open Web management</string>
+    <string name="sunshine_webui_ssl_warning_title">Untrusted Certificate</string>
+    <string name="sunshine_webui_ssl_warning_msg">The host\'s certificate does not match the one Moonlight has on file. The page may have been tampered with. Continue anyway?\n\nURL: %1$s</string>
+    <string name="sunshine_webui_ssl_proceed">Continue</string>
+    <string name="sunshine_webui_auth_title">Sign in to %1$s (%2$s)</string>
+    <string name="sunshine_webui_auth_user_hint">Username</string>
+    <string name="sunshine_webui_auth_pass_hint">Password</string>
+    <string name="about_dialog_official_site">🌐 Official Website</string>
     <string name="pcview_ipv6_disabled">IPv6 disabled for this PC</string>
     <string name="pcview_ipv6_enabled">IPv6 enabled for this PC</string>
 
@@ -212,6 +222,7 @@
 
     <!-- Preferences -->
     <string name="category_basic_settings">Basic Settings</string>
+    <string name="category_advanced_features">Performance &amp; smoothness</string>
     <string name="title_resolution_list">Video resolution</string>
     <string name="summary_resolution_list">Increase to improve image clarity. Decrease for better performance on lower end devices and slower networks.</string>
     <string name="title_native_res_dialog">Native Resolution Warning</string>
@@ -221,6 +232,13 @@
     <string name="title_seekbar_bitrate">Video bitrate</string>
     <string name="summary_seekbar_bitrate">Increase for better image quality. Decrease to improve performance on slower connections.</string>
     <string name="suffix_seekbar_bitrate_mbps">Mbps</string>
+    <string name="title_adaptive_bitrate">Adaptive bitrate</string>
+    <string name="summary_adaptive_bitrate">Auto-adjust bitrate based on packet loss and latency. Falls back to a local controller when the host doesn\'t support server-side ABR.</string>
+    <string name="title_abr_mode">ABR mode</string>
+    <string name="summary_abr_mode">Quality prefers higher bitrate; Low-latency drops faster on packet loss.</string>
+    <string name="abr_mode_quality">Quality</string>
+    <string name="abr_mode_balanced">Balanced</string>
+    <string name="abr_mode_low_latency">Low latency</string>
     <string name="title_seekbar_scale">Host Resolution Scale</string>
     <string name="summary_seekbar_scale">The resolution requested to the host is equivalent to the client\'s base resolution * scale factor. This will change the game rendering material precision on the host side (super-resolution streaming). Reducing this ratio can also be used to reduce GPU pressure on the host side. ⚠Note: Check if the host supports the scaled resolution before applying this option.</string>
     <string name="title_checkbox_stretch_video">Stretch video to full-screen</string>
@@ -278,8 +296,8 @@
     <string name="summary_checkbox_usb_bind_all">Use Moonlight\'s USB driver for all supported gamepads, even if native Xbox controller support is present</string>
     <string name="title_checkbox_mouse_emulation">Mouse emulation via gamepad</string>
     <string name="summary_checkbox_mouse_emulation">Long pressing the Start button will switch the gamepad into mouse mode</string>
-    <string name="title_checkbox_enable_start_key_menu">Enable long-press Start key menu</string>
-    <string name="summary_checkbox_enable_start_key_menu">Long pressing the Start button will open the game menu</string>
+    <string name="title_checkbox_enable_start_key_menu">Long-press Start key actions</string>
+    <string name="summary_checkbox_enable_start_key_menu">When enabled: long-press Start opens the in-game menu (system gamepad), or toggles mouse emulation (USB-takeover gamepad). Disable to free Start for normal long-press use in games.</string>
     <string name="title_checkbox_flip_face_buttons">Flip face buttons</string>
     <string name="summary_checkbox_flip_face_buttons">Switches the face buttons A/B and X/Y for gamepads and the on-screen controls</string>
     <string name="title_checkbox_gamepad_touchpad_as_mouse">Always control mouse with touchpad</string>
@@ -321,11 +339,11 @@
     <string name="title_checkbox_enhanced_touch_on_which_side">Reverse enhanced touch zone</string>
     <string name="summary_checkbox_enhanced_touch_on_which_side">Reverse enhanced touch zone to the left (default: on the right side of screen)</string>
     <string name="title_enhanced_touch_zone_divider">Enhanced touch zone divider</string>
-    <string name="summary_enhanced_touch_zone_divider">Defines where to divide native-touch and enhanced-touch zones, less than 50% means divide from a point on the left, more than 50% means right</string>
-    <string name="dialog_title_enhanced_touch_zone_divider">Less than 50% means divide from a point on the left, more than 50% means right</string>
+    <string name="summary_enhanced_touch_zone_divider" formatted="false">Defines where to divide native-touch and enhanced-touch zones, less than 50% means divide from a point on the left, more than 50% means right</string>
+    <string name="dialog_title_enhanced_touch_zone_divider" formatted="false">Less than 50% means divide from a point on the left, more than 50% means right</string>
     <string name="suffix_enhanced_touch_zone_divider">%</string>
     <string name="title_pointer_velocity_factor">Pointer velocity factor</string>
-    <string name="summary_pointer_velocity_factor">Set pointer velocity factor for enhanced touch zone. Set 100% to disable</string>
+    <string name="summary_pointer_velocity_factor" formatted="false">Set pointer velocity factor for enhanced touch zone. Set 100% to disable</string>
     <string name="dialog_title_pointer_velocity_factor">Set pointer velocity factor for enhanced touch zone. Set 100% to disable</string>
     <string name="suffix_pointer_velocity_factor">%</string>
     <string name="title_fixed_x_velocity">Set fixed X (horizontal) velocity</string>
@@ -384,6 +402,7 @@
     <string name="float_ball_action_lock_screen">Lock Screen</string>
 
     <string name="category_ui_settings">UI Settings</string>
+    <string name="category_display_behavior">Display</string>
     <string name="title_checkbox_enable_pip">Enable Picture-in-Picture observer mode</string>
     <string name="summary_checkbox_enable_pip">Allows the stream to be viewed (but not controlled) while multitasking</string>
     <string name="title_checkbox_enable_background_audio">Background Audio Mode</string>
@@ -400,6 +419,10 @@
     <string name="summary_checkbox_enable_sops">Allow GFE to modify game settings for optimal streaming</string>
     <string name="title_checkbox_host_audio">Play audio on PC</string>
     <string name="summary_checkbox_host_audio">Play audio from the computer and this device</string>
+    <string name="title_checkbox_clipboard_sync_text">Sync clipboard text with PC</string>
+    <string name="summary_checkbox_clipboard_sync_text">Forward text copied on this device to the PC and vice versa. Warning: anything you copy (including passwords and 2FA codes) will leave this device.</string>
+    <string name="title_checkbox_clipboard_sync_image">Sync clipboard images with PC</string>
+    <string name="summary_checkbox_clipboard_sync_image">Forward images copied on this device to the PC. Large screenshots may use significant bandwidth.</string>
     <string name="title_screen_combination_mode">Screen combination mode (Sunshine Foundation)</string>
     <string name="summary_screen_combination_mode">Control how Sunshine manages your monitors when starting a stream, this configuration will override the host configuration.</string>
     <string name="screen_mode_host_default">Use Sunshine host configuration (default)</string>
@@ -455,17 +478,31 @@
     <string name="summary_reset_perf_overlay_position">Reset performance overlay to preset position</string>
     <string name="title_perf_overlay_display_items">Performance Overlay Display Items</string>
     <string name="summary_perf_overlay_display_items">Select information items to display in the performance overlay</string>
+    <string name="title_perf_overlay_bg_opacity">Performance Overlay Background Opacity</string>
+    <string name="summary_perf_overlay_bg_opacity">Adjust the background opacity of the performance overlay</string>
     <string name="title_enable_post_stream_toast">Show latency message after streaming</string>
     <string name="summary_enable_post_stream_toast">Display a latency information message after the stream ends</string>
     <string name="title_checkbox_lock_screen_after_disconnect">Lock screen when disconnecting and exiting the stream</string>
     <string name="summary_checkbox_lock_screen_after_disconnect">Automatically lock the device screen after disconnecting and exiting the stream (you need to manually turn on the on-screen keyboard, which is the host keyboard in the menu)</string>
     <string name="title_checkbox_swap_quit_and_disconnect">Toggle “Quit” Button Function</string>
     <string name="summary_checkbox_swap_quit_and_disconnect">When enabled, the “Quit” button will disconnect without closing the app</string>
-    <string name="mic_stats_continuity">Audio continuity: %.1f%% (Captured:%d Encoded:%d Sent:%d Dropped:%d)</string>
+    <string name="mic_stats_continuity">Audio continuity: %1$.1f%% (Captured:%2$d Encoded:%3$d Sent:%4$d Dropped:%5$d)</string>
 
     <string name="category_help">Help</string>
-    <string name="category_mic_settings">Microphone Settings</string>
-    <string name="category_audio_vibration_settings">Audio Vibration</string>
+    <string name="title_checkbox_enable_audio_passthrough">Enable audio passthrough</string>
+    <string name="summary_checkbox_enable_audio_passthrough">Forward PCM/AC3/E-AC3 audio bit-perfect to the AVR when supported. Disable to always decode locally.</string>
+    <string name="title_list_audio_codec">Passthrough codec</string>
+    <string name="summary_list_audio_codec">Codec sent to the host. Auto uses PCM for stereo and AC3 for surround. Unsupported 7.1+ output is downgraded step-by-step.</string>
+    <string name="audio_codec_auto">Auto</string>
+    <string name="audio_codec_opus">Opus (no passthrough)</string>
+    <string name="audio_codec_ac3">AC3</string>
+    <string name="audio_codec_eac3">E-AC3</string>
+    <string name="audio_codec_pcm">PCM (S16 LE)</string>
+    <string name="title_list_audio_passthrough_buffer">Passthrough buffer size</string>
+    <string name="summary_list_audio_passthrough_buffer">Larger buffers tolerate jitter at the cost of latency. Normal (~160 ms) suits most setups.</string>
+    <string name="audio_passthrough_buffer_low">Low (~96 ms)</string>
+    <string name="audio_passthrough_buffer_normal">Normal (~160 ms)</string>
+    <string name="audio_passthrough_buffer_high">High (~320 ms)</string>
     <string name="category_connection_settings">Connection Settings</string>
     <string name="title_setup_guide">Setup guide</string>
     <string name="summary_setup_guide">View instructions on how to set up your gaming PC for streaming</string>
@@ -536,7 +573,7 @@
     <string name="mic_permission_required">Microphone permission required</string>
     
     <!-- Screen position settings -->
-    <string name="category_screen_position_settings">Screen Settings</string>
+    <string name="category_screen_position_settings">Video Settings</string>
     <string name="title_screen_position">Screen Position</string>
     <string name="summary_screen_position">Choose the position of the screen when using non-fullscreen resolution</string>
     <string name="title_screen_offset_x">Horizontal Offset</string>
@@ -582,6 +619,28 @@
     <string name="summary_background_image_api">Enter a custom background image API, or a single image URL. Leave empty to view random images</string>
     <string name="dialog_title_background_image_api">Background Image API</string>
     <string name="dialog_message_background_image_api">Please enter the complete image API</string>
+
+    <!-- Background source (issue #263) -->
+    <string name="title_background_source">Background source</string>
+    <string name="summary_background_source">Choose where random backgrounds come from</string>
+    <string name="background_source_auto">Smart default (recommended)</string>
+    <string name="background_source_picsum">Photography (Lorem Picsum)</string>
+    <string name="background_source_pipw">Animé (Pipw)</string>
+    <string name="background_source_api">Custom API URL</string>
+    <string name="background_source_local">Local image</string>
+    <string name="background_source_none">No background</string>
+    <string name="background_source_dialog_title">Pick a background style</string>
+    <string name="background_source_dialog_message">Choose the style of random wallpapers shown on the home screen. You can change this anytime in Settings.</string>
+    <string name="background_source_dialog_later">Decide later</string>
+
+    <!-- Crash report prompt -->
+    <string name="crash_report_dialog_title">Moonlight closed unexpectedly last time</string>
+    <string name="crash_report_dialog_message">Send the diagnostic log to the developer to help fix it?\n\n%1$s</string>
+    <string name="crash_report_share">Share log</string>
+    <string name="crash_report_copy">Copy</string>
+    <string name="crash_report_copied">Crash log copied to clipboard</string>
+    <string name="crash_report_dismiss">Ignore</string>
+    <string name="crash_report_subject">Moonlight crash report</string>
     
     <!-- Local image picker -->
     <string name="title_local_image_picker">Select Local Image</string>
@@ -680,6 +739,9 @@
     <string name="gyro_sensitivity">Sensitivity</string>
     <string name="gyro_sensitivity_format">Sensitivity %.1fx</string>
     <string name="gyro_activation_always">Always On</string>
+    <string name="gyro_mouse_mode_label">Mouse Mode</string>
+    <string name="gyro_controller_access_failed">Failed to access controller</string>
+    <string name="gyro_no_controller_detected">No controller detected, gyro disabled</string>
 
     <!-- Accessibility service -->
     <string name="accessibility_service_label">Moonlight Keyboard Service</string>
@@ -692,7 +754,7 @@
     </string>
 
     <!-- Performance Overlay Info Dialogs -->
-    <string name="perf_moon_phase_info">Today\'s Moon Phase\n\n%s %s\nMoon Phase Cycle: %.1f%%\nCycle Day: Day %d\nDate: %s\n\n%s</string>
+    <string name="perf_moon_phase_info">Today\'s Moon Phase\n\n%1$s %2$s\nMoon Phase Cycle: %3$.1f%%\nCycle Day: Day %4$d\nDate: %5$s\n\n%6$s</string>
     
     <string name="perf_decoder_title">🎬 Decoder Information</string>
     <string name="perf_decoder_info">The decoder is responsible for decoding video streams into displayable images.\n\nCommon Decoders:\n• H.264 (AVC) - Best compatibility\n• H.265 (HEVC) - Higher compression\n• AV1 - Latest standard, most efficient\n\nHDR Support:\n• High Dynamic Range video\n• Richer color representation\n• Requires hardware support</string>
@@ -701,7 +763,7 @@
     <string name="perf_fps_info">Rx FPS: Received Frame Rate\n• Number of video frames received from host\n• Should be stable under ideal conditions\n\nRd FPS: Rendered Frame Rate\n• Number of frames actually rendered to screen\n• May be reduced due to device performance\n\nPerformance Indicators:\n• Close values indicate good performance\n• Low render FPS may affect smoothness</string>
     
     <string name="perf_packet_loss_title">📶 Packet Loss Information</string>
-    <string name="perf_packet_loss_info">Packet loss represents the percentage of data packets lost during network transmission.\n\nNormal Range:\n• 0-0.5%: Excellent network quality\n• 0.5-2%: Good network quality\n• 2-5%: Fair network quality\n• &gt;5%: Poor network quality\n\nInfluencing Factors:\n• Network stability\n• Router performance\n• Wireless signal strength</string>
+    <string name="perf_packet_loss_info" formatted="false">Packet loss represents the percentage of data packets lost during network transmission.\n\nNormal Range:\n• 0-0.5%: Excellent network quality\n• 0.5-2%: Good network quality\n• 2-5%: Fair network quality\n• &gt;5%: Poor network quality\n\nInfluencing Factors:\n• Network stability\n• Router performance\n• Wireless signal strength</string>
     
     <string name="perf_network_latency_title">🌐 Network Latency Information</string>
     <string name="perf_network_latency_info">Network latency represents the round-trip time for data packets from host to device.\n\nLatency Range:\n• &lt;20ms: Excellent\n• 20-50ms: Good\n• 50-100ms: Acceptable\n• &gt;100ms: Poor\n\nBandwidth:\n• Represents network transmission speed\n• Affects maximum video quality\n\n± Value:\n• Represents latency fluctuation range\n• Smaller values indicate more stability</string>
@@ -711,6 +773,10 @@
     
     <string name="perf_host_latency_title">🖥️ Host Latency Information</string>
     <string name="perf_host_latency_info">Host latency represents the time for the game host to process frames.\n\nLatency Range:\n• &lt;5ms: Strong host performance\n• 5-10ms: Good host performance\n• 10-20ms: Fair host performance\n• &gt;20ms: Weak host performance\n\nInfluencing Factors:\n• Host hardware performance\n• Game load\n• Background program usage\n\nVer.V+:\n• Indicates version information\n• Displayed when no host latency data available</string>
+
+    <!-- Performance Overlay Info Dialogs - 1% Low FPS -->
+    <string name="perf_one_percent_low_title">📉 1% Low Frame Rate</string>
+    <string name="perf_one_percent_low_info">1%Low FPS measures frame rate smoothness using the 99th percentile frame interval.\n\nHow it works:\n• Records intervals between rendered frames\n• Sorts to find the slowest 1%% of frame times\n• Converts to FPS: 1000 / P99 interval\n\nInterpretation:\n• Close to rendered FPS: Very smooth\n• 70-90%% of rendered FPS: Minor stuttering\n• Below 70%%: Noticeable stuttering\n\nUse this to detect micro-stuttering that average FPS cannot reveal.</string>
 
 
     <!-- Performance Overlay Info Dialogs - Battery Information -->
@@ -758,7 +824,7 @@
     <string name="image_saved_successfully">Image successfully saved to system directory (Picture/setu)</string>
     <string name="image_save_failed_with_error">Image save failed: %1$s</string>
     <string name="config_save_failed">Configuration save failed</string>
-    <string name="scene_config_applied">Applied scene %1$d configuration: %2$dx%3$d@%4$dFPS %5.2fMbps %6$s HDR %7$s</string>
+    <string name="scene_config_applied">Applied scene %1$d configuration: %2$dx%3$d@%4$dFPS %5$.2fMbps %6$s HDR %7$s</string>
     <string name="scene_not_configured">Scene %1$d not configured</string>
     <string name="config_apply_failed">Configuration apply failed</string>
     <string name="save_to_scene">Save to Scene %1$d</string>
@@ -775,6 +841,7 @@
     <string name="background_refreshed_with_remaining">Background refreshed! (%1$d left today)</string>
     <string name="refresh_failed_please_retry">Refresh failed, please retry</string>
     <string name="refresh_failed_with_error">Refresh failed: %1$s</string>
+    <string name="refresh_failed_network">Network unavailable, can’t fetch background right now</string>
 
     <string name="game_menu_toggle_remote_mouse">Show/Hide Remote Mouse</string>
     <string name="toast_remote_mouse_toast">Remote mouse displayed/hidden</string>
@@ -783,7 +850,7 @@
 
     <!-- Output Buffer Queue Limit -->
     <string name="title_seekbar_output_buffer_queue_limit">Output Buffer Queue Limit</string>
-    <string name="summary_seekbar_output_buffer_queue_limit">Controls the maximum number of decoded frames that can be queued before rendering. Lower values reduce latency but may cause frame drops. Higher values improve smoothness but increase latency. Default: 2</string>
+    <string name="summary_seekbar_output_buffer_queue_limit">Controls the maximum number of decoded frames that can be queued before rendering. Lower values reduce latency but may cause frame drops. Higher values improve smoothness but increase latency. ⚠️ Setting to 1 may cause crashes on some devices. Default: 2</string>
     <string name="suffix_seekbar_output_buffer_queue_limit">frames</string>
     <string name="unpaired_devices_shown">Unpaired devices shown</string>
     <string name="unpaired_devices_hidden">Unpaired devices hidden</string>
@@ -792,9 +859,12 @@
 
     <!-- Drawer Menu -->
     <string name="menu">Menu</string>
+    <string name="settings_search_hint">Search settings…</string>
+    <string name="settings_search_close">Close search</string>
+    <string name="settings_search_no_results">No matching settings</string>
     <string name="title_settings">Settings</string>
     <string name="game_menu_change_resolution">Change resolution</string>
-    <string name="notification_content_streaming">Streaming in progress: %s (%s)</string>
+    <string name="notification_content_streaming">Streaming in progress: %1$s (%2$s)</string>
 
     <!-- Audio Vibration Settings -->
     <string name="title_checkbox_audio_vibration">Enable audio-driven vibration</string>
@@ -1070,5 +1140,105 @@
     <string name="apptext_pg_wheel_pad_a0e87">Section Text Size (%)</string>
     <string name="apptext_pg_wheel_pad_6c613">Trigger Text Size (%)</string>
     <string name="apptext_pg_wheel_pad_ea2ce">Center Preview Text Size (%)</string>
+
+    <!-- Extracted hardcoded strings -->
+    <string name="toast_no_notification_permission">No notification permission, background streaming may be interrupted</string>
+    <string name="toast_press_again_to_open_menu">Press %s again to open stream menu</string>
+    <string name="toast_mic_button_hidden">Microphone button hidden</string>
+    <string name="toast_mic_button_shown">Microphone button shown</string>
+    <string name="toast_virtual_controller_hidden">Virtual controller hidden</string>
+    <string name="toast_virtual_controller_shown">Virtual controller shown</string>
+    <string name="toast_virtual_controller_not_enabled">Virtual controller not enabled</string>
+    <string name="toast_enable_notification_for_bg">Please enable notification permission in settings to keep streaming in background</string>
+    <string name="perf_decoder">Decoder</string>
+    <string name="perf_resolution">Resolution</string>
+    <string name="perf_fps">FPS</string>
+    <string name="perf_frame_loss">Frame Loss</string>
+    <string name="perf_network_rtt">Network RTT</string>
+    <string name="perf_host_latency">Host Latency</string>
+    <string name="perf_decode_time">Decode Time</string>
+    <string name="perf_bandwidth">Bandwidth</string>
+    <string name="perf_render_latency">Render Latency</string>
+    <string name="toast_disconnect_error">Error disconnecting: %s</string>
+    <string name="game_menu_disable_double_click_drag">Disable double-click drag</string>
+    <string name="game_menu_enable_double_click_drag">Enable double-click drag</string>
+    <string name="toast_double_click_drag_enabled">Double-click drag enabled</string>
+    <string name="toast_double_click_drag_disabled">Double-click drag disabled</string>
+    <string name="game_menu_on">On</string>
+    <string name="game_menu_off">Off</string>
+    <string name="toast_local_cursor_enabled">Local cursor rendering enabled</string>
+    <string name="toast_local_cursor_disabled">Local cursor rendering disabled</string>
+    <string name="toast_crown_not_enabled">Crown feature not enabled</string>
+    <string name="game_menu_toggle_touch">Toggle Touch</string>
+    <string name="toast_touch_enabled">Touch enabled</string>
+    <string name="toast_touch_disabled">Touch disabled</string>
+    <string name="toast_cannot_access_controller">Cannot access controller</string>
+    <string name="toast_vibration_test_sent">Local vibration test sent</string>
+    <string name="toast_vibration_test_failed">Vibration test failed: %s</string>
+    <string name="toast_adjusting_bitrate">Adjusting bitrate…</string>
+    <string name="game_menu_tab_bitrate">Bitrate</string>
+    <string name="game_menu_tab_gyro">Gyro</string>
+    <string name="game_menu_tab_shortcuts">Shortcuts</string>
+    <string name="game_menu_card_config_title">Visible Cards</string>
+    <string name="toast_enable_mic_redirect">Please enable microphone redirection in settings</string>
+    <string name="game_menu_disable_pan_zoom">Disable Pan/Zoom</string>
+    <string name="game_menu_enable_pan_zoom">Enable Pan/Zoom</string>
+    <string name="toast_pan_zoom_disabled">Pan/Zoom disabled</string>
+    <string name="toast_pan_zoom_enabled">Pan/Zoom enabled</string>
+    <string name="toast_super_command_error">Error sending super command: %s</string>
+    <string name="toast_install_permission_denied">Install permission denied, download cancelled</string>
+    <string name="toast_check_update_failed">Failed to check for updates, please try later</string>
+    <string name="toast_already_latest_version">Already on latest version v%s</string>
+    <string name="update_already_latest_title">Already Up to Date</string>
+    <string name="update_btn_got_it">Got it</string>
+    <string name="update_new_version_title">New Version Available</string>
+    <string name="update_btn_browser_download">Browser Download</string>
+    <string name="update_btn_direct_download">Direct Download</string>
+    <string name="toast_cannot_get_install_permission">Cannot obtain install permission</string>
+    <string name="update_btn_later">Later</string>
+    <string name="toast_update_skipped_version">Skipped v%s. Use “Check for Updates” to enable again.</string>
+    <string name="toast_update_sha256_mismatch">Update file integrity check failed (SHA256 mismatch). Aborted for safety.</string>
+    <string name="toast_check_update_in_progress">Already checking, please wait…</string>
+    <string name="toast_need_install_permission">Install permission needed for auto-update</string>
+    <string name="update_install_permission_title">Install Permission Required</string>
+    <string name="update_install_permission_msg">To auto-install updates, please grant install permission.\n\nTap OK to open settings. Download will start automatically after you return.</string>
+    <string name="toast_cannot_open_settings">Cannot open settings page</string>
+    <string name="toast_download_service_unavailable">System download service unavailable</string>
+    <string name="update_download_notification_title">Moonlight V+ Update</string>
+    <string name="toast_download_started">Download started, tap notification to install when complete</string>
+    <string name="toast_download_failed">Download failed: %s</string>
+    <string name="update_downloading_title">Downloading Update</string>
+    <string name="update_btn_background">Background Download</string>
+    <string name="toast_download_continue_bg">Download will continue in background</string>
+    <string name="update_progress_downloaded">Downloaded %s MB</string>
+    <string name="update_progress_waiting">Waiting for download…</string>
+    <string name="update_progress_paused">Download paused</string>
+    <string name="update_progress_installing">Download complete, preparing to install…</string>
+    <string name="update_progress_switching_source">Switching download source…</string>
+    <string name="toast_all_sources_failed">All download sources failed, please try later</string>
+    <string name="toast_download_failed_try_browser">Download failed, please try later or use browser</string>
+    <string name="toast_cannot_get_download_file">Cannot access download file, please install manually from downloads</string>
+    <string name="toast_install_launch_failed">Failed to launch installer, please install manually from downloads</string>
+    <string name="toast_external_display_disconnected">External display disconnected, switching to main screen</string>
+    <string name="toast_switched_to_external_display">Streaming switched to external display. If landscape is not shown correctly, try rotating on host.</string>
+
+    <!-- Quick button labels -->
+    <string name="quick_btn_mic">Mic</string>
+    <string name="quick_btn_sleep">Sleep</string>
+    <string name="quick_btn_quit">Quit</string>
+    <string name="quick_btn_keyboard">KB</string>
+    <string name="quick_btn_controller">Pad</string>
+    <string name="quick_btn_perf">Perf</string>
+    <string name="game_menu_customize_quick_buttons">Customize Quick Buttons</string>
+    <string name="quick_btn_max_reached">Maximum 6 quick buttons allowed</string>
+
+    <!-- Quick button editor -->
+    <string name="quick_button_editor_title">Quick Buttons</string>
+    <string name="quick_button_reset_default">Reset</string>
+
+    <!-- Layout accessibility & download -->
+    <string name="download_preparing">Preparing download…</string>
+    <string name="seekbar_decrease">Decrease</string>
+    <string name="seekbar_increase">Increase</string>
 
 </resources>
