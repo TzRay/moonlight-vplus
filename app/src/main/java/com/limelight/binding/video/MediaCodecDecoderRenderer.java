@@ -526,9 +526,9 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer {
         needsIdrOnResume = true;
     }
 
-    public void resumeProcessing() {
+    public boolean resumeProcessing() {
         if (!isProcessingPaused) {
-            return;
+            return true;
         }
 
         LimeLog.info("Resuming video processing");
@@ -551,13 +551,16 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer {
         int result = initializeDecoder(false);
         if (result != 0) {
             LimeLog.severe("Failed to resume video processing: decoder init returned " + result);
-            return;
+            cleanup();
+            stopping = true;
+            return false;
         }
 
         // 重新启动渲染线程等
         start();
 
         isProcessingPaused = false;
+        return true;
     }
 
     private MediaFormat createBaseMediaFormat(String mimeType) {
@@ -1199,6 +1202,10 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer {
                 prefs.framePacing == PreferenceConfiguration.FRAME_PACING_PRECISE_SYNC;
     }
 
+    private boolean shouldCoalesceDirectOutputFrames() {
+        return prefs.framePacing == PreferenceConfiguration.FRAME_PACING_MIN_LATENCY;
+    }
+
     private void renderDirectOutputBuffer(int bufferIndex) {
         try {
             if (prefs.framePacing == PreferenceConfiguration.FRAME_PACING_MAX_SMOOTHNESS ||
@@ -1213,7 +1220,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer {
         }
     }
 
-    private void queueLatestDirectOutputBuffer(int bufferIndex) {
+    private void queueDroppableDirectOutputBuffer(int bufferIndex) {
         synchronized (directOutputBufferMonitor) {
             if (pendingDirectOutputBufferIndex >= 0 && pendingDirectOutputBufferIndex != bufferIndex) {
                 try {
@@ -1313,8 +1320,10 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer {
 
                 if (isBufferedFramePacingMode()) {
                     deliverDecodedFrame(index);
+                } else if (shouldCoalesceDirectOutputFrames()) {
+                    queueDroppableDirectOutputBuffer(index);
                 } else {
-                    queueLatestDirectOutputBuffer(index);
+                    renderDirectOutputBuffer(index);
                 }
 
                 doCodecRecoveryIfRequired(CR_FLAG_RENDER_THREAD);

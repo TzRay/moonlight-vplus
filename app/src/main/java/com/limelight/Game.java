@@ -4543,7 +4543,11 @@ public class Game extends Activity implements SurfaceHolder.Callback,
 
             // 回到前台，恢复视频渲染器
             if (decoderRenderer != null) {
-                decoderRenderer.resumeProcessing();
+                if (!decoderRenderer.resumeProcessing()) {
+                    Toast.makeText(this, getResources().getText(R.string.video_decoder_init_failed), Toast.LENGTH_LONG).show();
+                    stopConnection();
+                    return;
+                }
             }
         }
 

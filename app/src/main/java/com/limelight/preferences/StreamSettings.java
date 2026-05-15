@@ -783,7 +783,7 @@ public class StreamSettings extends AppCompatActivity {
                 int avg = PreferenceConfiguration.HDR_MANUAL_MAX_AVG_BRIGHTNESS_PREF_STRING.equals(preferenceKey) ?
                         parsedIntValue : currentConfig.hdrManualMaxAverageBrightness;
 
-                if (max < min || avg < min) {
+                if (max < min || avg < min || avg > max) {
                     Toast.makeText(requireContext(), R.string.toast_invalid_hdr_brightness_value, Toast.LENGTH_SHORT).show();
                     return false;
                 }
@@ -1220,7 +1220,8 @@ public class StreamSettings extends AppCompatActivity {
         public void onCreatePreferences(Bundle savedInstanceState, String rootKey) {
             // 添加阴影主题
             getActivity().getTheme().applyStyle(R.style.PreferenceThemeWithShadow, true);
-            
+            PreferenceConfiguration.normalizeHdrPreferenceStorage(getActivity());
+
             setPreferencesFromResource(R.xml.preferences, rootKey);
             PreferenceScreen screen = getPreferenceScreen();
             

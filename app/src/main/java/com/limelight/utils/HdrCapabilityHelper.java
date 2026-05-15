@@ -361,7 +361,7 @@ public class HdrCapabilityHelper {
     private static int[] getManualBrightnessRange(PreferenceConfiguration prefConfig) {
         int min = Math.max(1, (int) Math.floor(prefConfig.hdrManualMinBrightness));
         int max = Math.max(min + 1, prefConfig.hdrManualMaxBrightness);
-        int avg = Math.max(min, prefConfig.hdrManualMaxAverageBrightness);
+        int avg = Math.min(max, Math.max(min, prefConfig.hdrManualMaxAverageBrightness));
         return new int[]{min, max, avg};
     }
 

@@ -797,6 +797,18 @@ public class PreferenceConfiguration {
         }
     }
 
+    public static void normalizeHdrPreferenceStorage(Context context) {
+        if (context == null) {
+            return;
+        }
+
+        SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(context);
+        migratePreferenceToString(prefs, HDR_MODE_PREF_STRING, String.valueOf(DEFAULT_HDR_MODE));
+        migratePreferenceToString(prefs, HDR_MANUAL_MIN_BRIGHTNESS_PREF_STRING, String.valueOf(DEFAULT_HDR_MANUAL_MIN_BRIGHTNESS));
+        migratePreferenceToString(prefs, HDR_MANUAL_MAX_BRIGHTNESS_PREF_STRING, String.valueOf(DEFAULT_HDR_MANUAL_MAX_BRIGHTNESS));
+        migratePreferenceToString(prefs, HDR_MANUAL_MAX_AVG_BRIGHTNESS_PREF_STRING, String.valueOf(DEFAULT_HDR_MANUAL_MAX_AVG_BRIGHTNESS));
+    }
+
     public static PreferenceConfiguration readPreferences(Context context) {
         SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(context);
         PreferenceConfiguration config = new PreferenceConfiguration();
