@@ -32,7 +32,7 @@ class ConnectionContext {
     var videoCapabilities: Int = 0
 
     // 设备亮度范围
-    var minBrightness: Int = 0
+    var minBrightness: Float = 0.001f
     var maxBrightness: Int = 0
     var maxAverageBrightness: Int = 0
 

@@ -75,10 +75,10 @@ open class NvConnection(
                     "max=${context.maxBrightness}, maxAvg=${context.maxAverageBrightness}"
             )
         } else {
-            val brightnessRange = com.limelight.utils.HdrCapabilityHelper.getBrightnessRangeAsInts(appContext)
-            context.minBrightness = brightnessRange[0]
-            context.maxBrightness = brightnessRange[1]
-            context.maxAverageBrightness = brightnessRange[2]
+            val brightnessRange = com.limelight.utils.HdrCapabilityHelper.getBrightnessRangeForLaunch(appContext)
+            context.minBrightness = brightnessRange[0].toFloat()
+            context.maxBrightness = brightnessRange[1].toInt()
+            context.maxAverageBrightness = brightnessRange[2].toInt()
             LimeLog.info(
                 "Using auto HDR brightness: min=${context.minBrightness}, " +
                     "max=${context.maxBrightness}, maxAvg=${context.maxAverageBrightness}"

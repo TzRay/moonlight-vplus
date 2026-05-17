@@ -186,18 +186,21 @@
             android:dependency="checkbox_enable_hdr"
             android:title="@string/title_hdr_manual_min_brightness"
             android:dialogTitle="@string/title_hdr_manual_min_brightness"
+            android:inputType="numberDecimal"
             app:useSimpleSummaryProvider="false" />
         <EditTextPreference
             android:key="edittext_hdr_manual_max_brightness"
             android:dependency="checkbox_enable_hdr"
             android:title="@string/title_hdr_manual_max_brightness"
             android:dialogTitle="@string/title_hdr_manual_max_brightness"
+            android:inputType="number"
             app:useSimpleSummaryProvider="false" />
         <EditTextPreference
             android:key="edittext_hdr_manual_max_avg_brightness"
             android:dependency="checkbox_enable_hdr"
             android:title="@string/title_hdr_manual_max_avg_brightness"
             android:dialogTitle="@string/title_hdr_manual_max_avg_brightness"
+            android:inputType="number"
             app:useSimpleSummaryProvider="false" />
         <CheckBoxPreference
             android:key="checkbox_full_range"

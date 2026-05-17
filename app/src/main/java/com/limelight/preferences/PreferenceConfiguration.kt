@@ -579,7 +579,7 @@ class PreferenceConfiguration {
         private const val DEFAULT_HDR_MODE = 1 // 默认 HDR10/PQ 模式 (0=禁用自动HDR切换, 1=HDR10, 2=HLG)
         const val HDR_BRIGHTNESS_SOURCE_AUTO = "auto"
         const val HDR_BRIGHTNESS_SOURCE_MANUAL = "manual"
-        private const val DEFAULT_HDR_MANUAL_MIN_BRIGHTNESS = 1
+        private const val DEFAULT_HDR_MANUAL_MIN_BRIGHTNESS = 0.001f
         private const val DEFAULT_HDR_MANUAL_MAX_BRIGHTNESS = 500
         private const val DEFAULT_HDR_MANUAL_MAX_AVG_BRIGHTNESS = 200
         private const val DEFAULT_ENABLE_PIP = false
@@ -620,6 +620,20 @@ class PreferenceConfiguration {
                 is Int -> value
                 is Long -> value.toInt()
                 is Float -> value.toInt()
+                else -> defaultValue
+            }
+        }
+
+        private fun getStringFloatPref(
+                prefs: android.content.SharedPreferences,
+                key: String,
+                defaultValue: Float
+        ): Float {
+            return when (val value = prefs.all[key]) {
+                is String -> value.toFloatOrNull() ?: defaultValue
+                is Int -> value.toFloat()
+                is Long -> value.toFloat()
+                is Float -> value
                 else -> defaultValue
             }
         }
@@ -1129,21 +1143,23 @@ class PreferenceConfiguration {
                     ?.takeIf { it == HDR_BRIGHTNESS_SOURCE_MANUAL || it == HDR_BRIGHTNESS_SOURCE_AUTO }
                     ?: HDR_BRIGHTNESS_SOURCE_AUTO
 
-            val manualMin = getStringIntPref(
+            val manualMin = getStringFloatPref(
                 prefs,
                 HDR_MANUAL_MIN_BRIGHTNESS_PREF_STRING,
                 DEFAULT_HDR_MANUAL_MIN_BRIGHTNESS
-            ).coerceAtLeast(1)
+            ).coerceIn(0.001f, 65535f)
+            val manualMaxLowerBound = Math.floor(manualMin.toDouble()).toInt() + 1
+            val manualAvgLowerBound = maxOf(1, Math.ceil(manualMin.toDouble()).toInt())
             val manualMax = getStringIntPref(
                 prefs,
                 HDR_MANUAL_MAX_BRIGHTNESS_PREF_STRING,
                 DEFAULT_HDR_MANUAL_MAX_BRIGHTNESS
-            ).coerceAtLeast(manualMin + 1)
+            ).coerceAtLeast(manualMaxLowerBound)
             val manualMaxAvg = getStringIntPref(
                 prefs,
                 HDR_MANUAL_MAX_AVG_BRIGHTNESS_PREF_STRING,
                 DEFAULT_HDR_MANUAL_MAX_AVG_BRIGHTNESS
-            ).coerceIn(manualMin, manualMax)
+            ).coerceIn(manualAvgLowerBound, manualMax)
             config.hdrManualMinBrightness = manualMin
             config.hdrManualMaxBrightness = manualMax
             config.hdrManualMaxAvgBrightness = manualMaxAvg

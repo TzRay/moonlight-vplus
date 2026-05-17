@@ -42,7 +42,7 @@ class StreamConfiguration private constructor() {
         private set
     var hdrBrightnessSource: String = HDR_BRIGHTNESS_SOURCE_AUTO
         private set
-    var hdrManualMinBrightness: Int = 1
+    var hdrManualMinBrightness: Float = 0.001f
         private set
     var hdrManualMaxBrightness: Int = 500
         private set
@@ -112,7 +112,7 @@ class StreamConfiguration private constructor() {
         fun setHdrMode(hdrMode: Int): Builder = apply { config.hdrMode = hdrMode }
         fun setHdrBrightness(
                 source: String,
-                minBrightness: Int,
+                minBrightness: Float,
                 maxBrightness: Int,
                 maxAverageBrightness: Int
         ): Builder = apply {

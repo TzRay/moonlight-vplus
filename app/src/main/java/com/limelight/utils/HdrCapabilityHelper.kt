@@ -209,6 +209,21 @@ object HdrCapabilityHelper {
         return intArrayOf(min, max, avg)
     }
 
+    fun getBrightnessRangeForLaunch(context: Context?): Array<Number> {
+        val info = getBrightnessInfo(context)
+        val min = info.minLuminance.coerceIn(0.001f, 65535f)
+
+        var effectiveMax = info.maxLuminance
+        if (info.isComputedFromRatio && info.computedPeakBrightness > effectiveMax) {
+            effectiveMax = info.computedPeakBrightness
+        }
+
+        val maxLowerBound = Math.floor(min.toDouble()).toInt() + 1
+        val max = maxOf(maxLowerBound, Math.ceil(effectiveMax.toDouble()).toInt())
+        val avg = maxOf(1, Math.ceil(info.maxAvgLuminance.toDouble()).toInt()).coerceAtMost(max)
+        return arrayOf(min, max, avg)
+    }
+
     fun getSystemBrightness(context: Context): Int {
         return try {
             Settings.System.getInt(context.contentResolver, Settings.System.SCREEN_BRIGHTNESS, -1)
