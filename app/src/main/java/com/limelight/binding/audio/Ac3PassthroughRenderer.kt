@@ -25,10 +25,10 @@ import com.limelight.nvstream.jni.MoonBridge
  *   - `AudioAttributes` set to USAGE_MEDIA + CONTENT_TYPE_MUSIC so the
  *     framework routes to the HDMI/SPDIF passthrough sink instead of the
  *     internal speaker mixer (USAGE_GAME breaks routing on many TVs),
- *   - channel mask hard-pinned to STEREO for raw passthrough — the actual
- *     channel layout lives inside the AC3 bitstream header, the AVR decodes
- *     and routes; sending CHANNEL_OUT_5POINT1 with ENCODING_AC3 is rejected
- *     by some firmwares,
+ *   - channel mask uses CHANNEL_OUT_5POINT1 for 6-channel passthrough when
+ *     the platform accepts it. Some Android TV firmwares require this for
+ *     E-AC3/DDP HDMI routing, while others only accept STEREO, so setup
+ *     falls back to STEREO if the 5.1 probe is rejected.
  *   - no offloaded playback (Kodi avoids it for raw PT; offload semantics
  *     for compressed bitstreams are inconsistent across vendors and can
  *     drop frames silently).
@@ -70,14 +70,16 @@ class Ac3PassthroughRenderer(
             }
         }
 
-        // Reject configs the encoder couldn't handle; the actual channel
-        // layout is carried in the AC3 bitstream header so the AudioTrack
-        // mask must always be STEREO for raw passthrough (Kodi convention).
+        // Reject configs the encoder couldn't handle.
         if (audioConfiguration.channelCount !in 1..6) {
             LimeLog.severe("Ac3PassthroughRenderer: unsupported channels=${audioConfiguration.channelCount}")
             return -1
         }
-        val channelMask = AudioFormat.CHANNEL_OUT_STEREO
+        val channelMasks = if (audioConfiguration.channelCount == 6) {
+            intArrayOf(AudioFormat.CHANNEL_OUT_5POINT1, AudioFormat.CHANNEL_OUT_STEREO)
+        } else {
+            intArrayOf(AudioFormat.CHANNEL_OUT_STEREO)
+        }
 
         // USAGE_MEDIA + CONTENT_TYPE_MUSIC matches what Kodi sends; this is
         // what causes the HDMI/SPDIF route on every Android TV firmware
@@ -87,25 +89,39 @@ class Ac3PassthroughRenderer(
             .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
             .build()
 
-        val format = AudioFormat.Builder()
-            .setEncoding(encoding)
-            .setSampleRate(sampleRate)
-            .setChannelMask(channelMask)
-            .build()
-
         // Real capability probe: getMinBufferSize returns < 0 / ERROR_BAD_VALUE
         // when the framework has no codec/route able to consume this encoding.
         // This is the exact check Kodi uses (VerifySinkConfiguration).
-        val minBuffer = try {
-            AudioTrack.getMinBufferSize(sampleRate, channelMask, encoding)
-        } catch (e: Throwable) {
-            LimeLog.warning("Ac3PassthroughRenderer: getMinBufferSize threw: ${e.message}")
-            -1
+        var channelMask = 0
+        var channelMaskName = ""
+        var minBuffer = -1
+        for (candidateMask in channelMasks) {
+            val candidateMinBuffer = try {
+                AudioTrack.getMinBufferSize(sampleRate, candidateMask, encoding)
+            } catch (e: Throwable) {
+                LimeLog.warning("Ac3PassthroughRenderer: getMinBufferSize threw for ${channelMaskToString(candidateMask)}: ${e.message}")
+                -1
+            }
+
+            if (candidateMinBuffer > 0) {
+                channelMask = candidateMask
+                channelMaskName = channelMaskToString(candidateMask)
+                minBuffer = candidateMinBuffer
+                break
+            }
+
+            LimeLog.warning("Ac3PassthroughRenderer: $codecName ${channelMaskToString(candidateMask)} mask not supported on this device/route (minBuffer=$candidateMinBuffer)")
         }
         if (minBuffer <= 0) {
             LimeLog.warning("Ac3PassthroughRenderer: $codecName not supported on this device/route (minBuffer=$minBuffer)")
             return -1
         }
+
+        val format = AudioFormat.Builder()
+            .setEncoding(encoding)
+            .setSampleRate(sampleRate)
+            .setChannelMask(channelMask)
+            .build()
 
         // Buffer sizing — game streaming is latency-critical, so we deviate
         // from Kodi's HTPC-oriented values:
@@ -156,7 +172,7 @@ class Ac3PassthroughRenderer(
             track!!.play()
 
             val bufferMs = if (frameBytes > 0) bufferSize.toLong() * 32 / frameBytes else 0
-            LimeLog.info("Ac3PassthroughRenderer: $codecName initialized @${sampleRate} Hz, ${audioConfiguration.channelCount}ch (mask=STEREO for raw PT), bitrate=$bitrate bps, buffer=${bufferSize}B (~${bufferMs} ms, min=$minBuffer, frame=$frameBytes)")
+            LimeLog.info("Ac3PassthroughRenderer: $codecName initialized @${sampleRate} Hz, ${audioConfiguration.channelCount}ch (mask=$channelMaskName), bitrate=$bitrate bps, buffer=${bufferSize}B (~${bufferMs} ms, min=$minBuffer, frame=$frameBytes)")
             return 0
         } catch (e: Exception) {
             LimeLog.severe("Ac3PassthroughRenderer: AudioTrack create failed: ${e.message}")
@@ -211,5 +227,13 @@ class Ac3PassthroughRenderer(
             track?.release()
         } catch (_: Exception) {}
         track = null
+    }
+
+    private fun channelMaskToString(channelMask: Int): String {
+        return when (channelMask) {
+            AudioFormat.CHANNEL_OUT_5POINT1 -> "5.1"
+            AudioFormat.CHANNEL_OUT_STEREO -> "STEREO"
+            else -> "0x${channelMask.toString(16)}"
+        }
     }
 }

@@ -16,7 +16,7 @@ import com.limelight.nvstream.jni.MoonBridge
  * Hands little-endian interleaved 16-bit PCM directly to the platform mixer
  * via [AudioFormat.ENCODING_PCM_16BIT]. No codec block delay, no AVR decoder,
  * lowest possible audio latency at the cost of bandwidth (~1.5 Mbps stereo,
- * ~4.6 Mbps 5.1).
+ * ~4.6 Mbps 5.1, ~9.2 Mbps 7.1.4).
  *
  * Server side guarantees 5 ms framing (240 samples / channel @ 48 kHz).
  */
@@ -41,11 +41,14 @@ class PcmPassthroughRenderer(
         val channelMask = when (audioConfiguration.channelCount) {
             2 -> AudioFormat.CHANNEL_OUT_STEREO
             6 -> AudioFormat.CHANNEL_OUT_5POINT1
+            8 -> CHANNEL_OUT_7POINT1_SURROUND
+            12 -> CHANNEL_OUT_7POINT1POINT4
             else -> {
                 LimeLog.severe("PcmPassthroughRenderer: unsupported channels=${audioConfiguration.channelCount}")
                 return -1
             }
         }
+        val channelMaskName = channelMaskToString(channelMask)
 
         val attributes = AudioAttributes.Builder()
             .setUsage(AudioAttributes.USAGE_GAME)
@@ -62,6 +65,10 @@ class PcmPassthroughRenderer(
             // Use minBufferSize as floor; user-configurable cap on top to
             // bound jitter buffer / latency.
             val minBuf = AudioTrack.getMinBufferSize(sampleRate, channelMask, AudioFormat.ENCODING_PCM_16BIT)
+            if (minBuf <= 0) {
+                LimeLog.warning("PcmPassthroughRenderer: PCM_S16 ${audioConfiguration.channelCount}ch ($channelMaskName) not supported on this device/route (minBuffer=$minBuf)")
+                return -1
+            }
             val bufferSize = maxOf(minBuf, bufferBytes)
 
             val builder = AudioTrack.Builder()
@@ -81,7 +88,8 @@ class PcmPassthroughRenderer(
 
             track = builder.build()
             track!!.play()
-            LimeLog.info("PcmPassthroughRenderer: PCM_S16 @${sampleRate} Hz, ${audioConfiguration.channelCount}ch, buffer=$bufferSize B")
+            val frameBytes = audioConfiguration.channelCount * samplesPerFrame * 2
+            LimeLog.info("PcmPassthroughRenderer: PCM_S16 @${sampleRate} Hz, ${audioConfiguration.channelCount}ch (mask=$channelMaskName), bitrate=$bitrate bps, buffer=$bufferSize B, frame=$frameBytes B")
             return 0
         } catch (e: Exception) {
             LimeLog.severe("PcmPassthroughRenderer: AudioTrack create failed: ${e.message}")
@@ -132,5 +140,21 @@ class PcmPassthroughRenderer(
             track?.release()
         } catch (_: Exception) {}
         track = null
+    }
+
+    private fun channelMaskToString(channelMask: Int): String {
+        return when (channelMask) {
+            AudioFormat.CHANNEL_OUT_STEREO -> "STEREO"
+            AudioFormat.CHANNEL_OUT_5POINT1 -> "5.1"
+            CHANNEL_OUT_7POINT1_SURROUND -> "7.1"
+            CHANNEL_OUT_7POINT1POINT4 -> "7.1.4"
+            else -> "0x${channelMask.toString(16)}"
+        }
+    }
+
+    private companion object {
+        // Literal values avoid runtime field access on older Android releases.
+        private const val CHANNEL_OUT_7POINT1_SURROUND = 0x000018fc
+        private const val CHANNEL_OUT_7POINT1POINT4 = 0x000b58fc
     }
 }

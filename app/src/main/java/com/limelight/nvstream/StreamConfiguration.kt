@@ -40,6 +40,14 @@ class StreamConfiguration private constructor() {
         private set
     var hdrMode: Int = 0
         private set
+    var hdrBrightnessSource: String = HDR_BRIGHTNESS_SOURCE_AUTO
+        private set
+    var hdrManualMinBrightness: Int = 1
+        private set
+    var hdrManualMaxBrightness: Int = 500
+        private set
+    var hdrManualMaxAvgBrightness: Int = 200
+        private set
     private var persistGamepadsAfterDisconnect: Boolean = false
     private var enableMic: Boolean = false
     private var useVdd: Boolean = false
@@ -102,6 +110,17 @@ class StreamConfiguration private constructor() {
          * @param hdrMode 0 = SDR (default), 1 = HDR10/PQ (SMPTE ST 2084), 2 = HLG (Hybrid Log-Gamma, ARIB STD-B67)
          */
         fun setHdrMode(hdrMode: Int): Builder = apply { config.hdrMode = hdrMode }
+        fun setHdrBrightness(
+                source: String,
+                minBrightness: Int,
+                maxBrightness: Int,
+                maxAverageBrightness: Int
+        ): Builder = apply {
+            config.hdrBrightnessSource = source
+            config.hdrManualMinBrightness = minBrightness
+            config.hdrManualMaxBrightness = maxBrightness
+            config.hdrManualMaxAvgBrightness = maxAverageBrightness
+        }
         fun setUseVdd(value: Boolean): Builder = apply { config.useVdd = value }
         fun setEnableMic(enable: Boolean): Builder = apply { config.enableMic = enable }
         fun setControlOnly(controlOnly: Boolean): Builder = apply { config.controlOnly = controlOnly }
@@ -118,5 +137,7 @@ class StreamConfiguration private constructor() {
         const val STREAM_CFG_LOCAL = 0
         const val STREAM_CFG_REMOTE = 1
         const val STREAM_CFG_AUTO = 2
+        const val HDR_BRIGHTNESS_SOURCE_AUTO = "auto"
+        const val HDR_BRIGHTNESS_SOURCE_MANUAL = "manual"
     }
 }

@@ -198,7 +198,7 @@
     <string name="summary_checkbox_enable_pip">允许多任务时观看串流画面，但是不能操作。</string>
     <string name="category_audio_settings">音频设置</string>
     <string name="title_audio_config_list"> 环绕声设置 </string>
-    <string name="summary_audio_config_list">为家庭影院系统启用5.1、7.1或7.1.4环绕声，7.1.4需要Android 12+。</string>
+    <string name="summary_audio_config_list">为家庭影院系统启用5.1、7.1或7.1.4环绕声，7.1.4需要兼容的 HDMI 音频链路。</string>
     <string name="title_checkbox_enable_audio_passthrough">启用音频直通</string>
     <string name="summary_checkbox_enable_audio_passthrough">将 PCM/AC3/E-AC3 音频以位完美方式转发到 AVR（当支持时）。禁用则始终在本地解码。</string>
     <string name="title_list_audio_codec">直通编解码器</string>
@@ -406,7 +406,7 @@
     <string name="audioconf_stereo">立体声</string>
     <string name="audioconf_51surround">5.1环绕声</string>
     <string name="audioconf_71surround">7.1环绕声</string>
-    <string name="audioconf_714surround">7.1.4 环绕声 (Atmos)</string>
+    <string name="audioconf_714surround">7.1.4 环绕声</string>
     <string name="videoformat_auto">自动（推荐）</string>
     <string name="videoformat_hevcalways">首选 HEVC</string>
     <string name="title_frame_pacing">视频帧速调节</string>

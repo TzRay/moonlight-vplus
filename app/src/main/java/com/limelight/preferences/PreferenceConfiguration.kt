@@ -108,6 +108,10 @@ class PreferenceConfiguration {
     var enableHdr = false
     var enableHdrHighBrightness = false
     var hdrMode = 0 // 0=HDR disabled, 1=HDR10/PQ, 2=HLG
+    var hdrBrightnessSource = HDR_BRIGHTNESS_SOURCE_AUTO
+    var hdrManualMinBrightness = DEFAULT_HDR_MANUAL_MIN_BRIGHTNESS
+    var hdrManualMaxBrightness = DEFAULT_HDR_MANUAL_MAX_BRIGHTNESS
+    var hdrManualMaxAvgBrightness = DEFAULT_HDR_MANUAL_MAX_AVG_BRIGHTNESS
     var enablePip = false
     var enablePerfOverlay = false
     var perfOverlayLocked = false
@@ -253,6 +257,10 @@ class PreferenceConfiguration {
                 .putString(VIDEO_FORMAT_PREF_STRING, getVideoFormatPreferenceString(videoFormat))
                 .putBoolean(ENABLE_HDR_PREF_STRING, enableHdr)
                 .putBoolean(ENABLE_HDR_HIGH_BRIGHTNESS_PREF_STRING, enableHdrHighBrightness)
+                .putString(HDR_BRIGHTNESS_SOURCE_PREF_STRING, hdrBrightnessSource)
+                .putString(HDR_MANUAL_MIN_BRIGHTNESS_PREF_STRING, hdrManualMinBrightness.toString())
+                .putString(HDR_MANUAL_MAX_BRIGHTNESS_PREF_STRING, hdrManualMaxBrightness.toString())
+                .putString(HDR_MANUAL_MAX_AVG_BRIGHTNESS_PREF_STRING, hdrManualMaxAvgBrightness.toString())
                 .putBoolean(ENABLE_PERF_OVERLAY_STRING, enablePerfOverlay)
                 .putBoolean(PERF_OVERLAY_LOCKED_STRING, perfOverlayLocked)
                 .putInt(PERF_OVERLAY_BG_OPACITY_STRING, perfOverlayBgOpacity)
@@ -302,6 +310,10 @@ class PreferenceConfiguration {
         copy.enableHdr = this.enableHdr
         copy.enableHdrHighBrightness = this.enableHdrHighBrightness
         copy.hdrMode = this.hdrMode
+        copy.hdrBrightnessSource = this.hdrBrightnessSource
+        copy.hdrManualMinBrightness = this.hdrManualMinBrightness
+        copy.hdrManualMaxBrightness = this.hdrManualMaxBrightness
+        copy.hdrManualMaxAvgBrightness = this.hdrManualMaxAvgBrightness
         copy.enablePerfOverlay = this.enablePerfOverlay
         copy.perfOverlayLocked = this.perfOverlayLocked
         copy.perfOverlayBgOpacity = this.perfOverlayBgOpacity
@@ -370,6 +382,10 @@ class PreferenceConfiguration {
         private const val ENABLE_HDR_PREF_STRING = "checkbox_enable_hdr"
         private const val ENABLE_HDR_HIGH_BRIGHTNESS_PREF_STRING = "checkbox_enable_hdr_high_brightness"
         private const val HDR_MODE_PREF_STRING = "list_hdr_mode" // 0=SDR, 1=HDR10, 2=HLG
+        private const val HDR_BRIGHTNESS_SOURCE_PREF_STRING = "list_hdr_brightness_source"
+        private const val HDR_MANUAL_MIN_BRIGHTNESS_PREF_STRING = "edittext_hdr_manual_min_brightness"
+        private const val HDR_MANUAL_MAX_BRIGHTNESS_PREF_STRING = "edittext_hdr_manual_max_brightness"
+        private const val HDR_MANUAL_MAX_AVG_BRIGHTNESS_PREF_STRING = "edittext_hdr_manual_max_avg_brightness"
         private const val ENABLE_PIP_PREF_STRING = "checkbox_enable_pip"
         private const val ENABLE_PERF_OVERLAY_STRING = "checkbox_enable_perf_overlay"
         private const val PERF_OVERLAY_LOCKED_STRING = "perf_overlay_locked"
@@ -518,7 +534,7 @@ class PreferenceConfiguration {
                 2 -> AudioFormat.CHANNEL_OUT_STEREO
                 6 -> AudioFormat.CHANNEL_OUT_5POINT1
                 8 -> 0x000018fc // AudioFormat.CHANNEL_OUT_7POINT1_SURROUND
-                12 -> 0x0003d8fc // 7.1.4 surround
+                12 -> 0x000b58fc // AudioFormat.CHANNEL_OUT_7POINT1POINT4
                 else -> return false
             }
             return isPcmOutputSupported(androidChannelMask)
@@ -561,6 +577,11 @@ class PreferenceConfiguration {
         private const val DEFAULT_ENABLE_HDR = false
         private const val DEFAULT_ENABLE_HDR_HIGH_BRIGHTNESS = false
         private const val DEFAULT_HDR_MODE = 1 // 默认 HDR10/PQ 模式 (0=禁用自动HDR切换, 1=HDR10, 2=HLG)
+        const val HDR_BRIGHTNESS_SOURCE_AUTO = "auto"
+        const val HDR_BRIGHTNESS_SOURCE_MANUAL = "manual"
+        private const val DEFAULT_HDR_MANUAL_MIN_BRIGHTNESS = 1
+        private const val DEFAULT_HDR_MANUAL_MAX_BRIGHTNESS = 500
+        private const val DEFAULT_HDR_MANUAL_MAX_AVG_BRIGHTNESS = 200
         private const val DEFAULT_ENABLE_PIP = false
         private const val DEFAULT_ENABLE_PERF_OVERLAY = false
         private const val DEFAULT_PERF_OVERLAY_LOCKED = false
@@ -588,6 +609,20 @@ class PreferenceConfiguration {
         private const val DEFAULT_LATENCY_TOAST = false
         private const val DEFAULT_ENABLE_STUN = false
         private const val DEFAULT_SCREEN_COMBINATION_MODE = "-1"
+
+        private fun getStringIntPref(
+                prefs: android.content.SharedPreferences,
+                key: String,
+                defaultValue: Int
+        ): Int {
+            return when (val value = prefs.all[key]) {
+                is String -> value.toIntOrNull() ?: defaultValue
+                is Int -> value
+                is Long -> value.toInt()
+                is Float -> value.toInt()
+                else -> defaultValue
+            }
+        }
         private const val DEFAULT_FRAME_PACING = "latency"
         private const val DEFAULT_ABSOLUTE_MOUSE_MODE = false
         private const val DEFAULT_ENABLE_NATIVE_MOUSE_POINTER = false
@@ -1016,7 +1051,6 @@ class PreferenceConfiguration {
                 "51" -> MoonBridge.AUDIO_CONFIGURATION_51_SURROUND
                 else -> MoonBridge.AUDIO_CONFIGURATION_STEREO
             }
-            config.audioConfiguration = coerceSupportedAudioConfiguration(config.audioConfiguration)
 
             // Audio codec preference.
             //
@@ -1025,10 +1059,13 @@ class PreferenceConfiguration {
             //             Several Android TV firmwares (notably Sony BRAVIA) accept AC3/E-AC3
             //             AudioTrack creation for stereo but silently render no sound.
             //   * 5.1  -> AC3: widest AVR / TV passthrough compatibility.
-            //   * 7.1+ -> clamp to 5.1 first: AC3/E-AC3 passthrough is capped at 5.1 in
-            //             our pipeline and the PCM renderer currently supports up to 5.1.
+            //   * 7.1+ -> AC3/E-AC3 clamp to 5.1 first; PCM_S16 can carry
+            //             LPCM 7.1 / 7.1.4 if the Android HDMI route accepts it.
             val audioCodec = prefs.getString(AUDIO_CODEC_PREF_STRING, DEFAULT_AUDIO_CODEC) ?: DEFAULT_AUDIO_CODEC
-            if (enableAudioPassthrough && audioCodec != "opus" && config.audioConfiguration.channelCount > 6) {
+            if (!enableAudioPassthrough || audioCodec == "opus") {
+                config.audioConfiguration = coerceSupportedAudioConfiguration(config.audioConfiguration)
+            } else if ((audioCodec == "ac3" || audioCodec == "eac3") &&
+                config.audioConfiguration.channelCount > 6) {
                 config.audioConfiguration = MoonBridge.AUDIO_CONFIGURATION_51_SURROUND
             }
             config.audioCodec = when (audioCodec) {
@@ -1087,6 +1124,29 @@ class PreferenceConfiguration {
             } catch (e: NumberFormatException) {
                 DEFAULT_HDR_MODE
             }
+            config.hdrBrightnessSource =
+                prefs.getString(HDR_BRIGHTNESS_SOURCE_PREF_STRING, HDR_BRIGHTNESS_SOURCE_AUTO)
+                    ?.takeIf { it == HDR_BRIGHTNESS_SOURCE_MANUAL || it == HDR_BRIGHTNESS_SOURCE_AUTO }
+                    ?: HDR_BRIGHTNESS_SOURCE_AUTO
+
+            val manualMin = getStringIntPref(
+                prefs,
+                HDR_MANUAL_MIN_BRIGHTNESS_PREF_STRING,
+                DEFAULT_HDR_MANUAL_MIN_BRIGHTNESS
+            ).coerceAtLeast(1)
+            val manualMax = getStringIntPref(
+                prefs,
+                HDR_MANUAL_MAX_BRIGHTNESS_PREF_STRING,
+                DEFAULT_HDR_MANUAL_MAX_BRIGHTNESS
+            ).coerceAtLeast(manualMin + 1)
+            val manualMaxAvg = getStringIntPref(
+                prefs,
+                HDR_MANUAL_MAX_AVG_BRIGHTNESS_PREF_STRING,
+                DEFAULT_HDR_MANUAL_MAX_AVG_BRIGHTNESS
+            ).coerceIn(manualMin, manualMax)
+            config.hdrManualMinBrightness = manualMin
+            config.hdrManualMaxBrightness = manualMax
+            config.hdrManualMaxAvgBrightness = manualMaxAvg
             config.enablePip = prefs.getBoolean(ENABLE_PIP_PREF_STRING, DEFAULT_ENABLE_PIP)
             config.enablePerfOverlay = prefs.getBoolean(ENABLE_PERF_OVERLAY_STRING, DEFAULT_ENABLE_PERF_OVERLAY)
             config.perfOverlayLocked = prefs.getBoolean(PERF_OVERLAY_LOCKED_STRING, DEFAULT_PERF_OVERLAY_LOCKED)

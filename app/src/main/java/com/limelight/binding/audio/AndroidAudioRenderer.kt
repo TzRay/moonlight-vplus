@@ -96,7 +96,7 @@ class AndroidAudioRenderer(
             4 -> channelConfig = AudioFormat.CHANNEL_OUT_QUAD
             6 -> channelConfig = AudioFormat.CHANNEL_OUT_5POINT1
             8 -> channelConfig = 0x000018fc // AudioFormat.CHANNEL_OUT_7POINT1_SURROUND
-            12 -> channelConfig = 0x0003d8fc // 7.1.4 surround
+            12 -> channelConfig = 0x000b58fc // AudioFormat.CHANNEL_OUT_7POINT1POINT4
             else -> {
                 LimeLog.severe("Decoder returned unhandled channel count")
                 return -1

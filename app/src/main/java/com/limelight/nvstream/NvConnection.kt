@@ -66,10 +66,24 @@ open class NvConnection(
         context.riKey = generateRiAesKey()
         context.riKeyId = generateRiKeyId()
 
-        val brightnessRange = com.limelight.utils.HdrCapabilityHelper.getBrightnessRangeAsInts(appContext)
-        context.minBrightness = brightnessRange[0]
-        context.maxBrightness = brightnessRange[1]
-        context.maxAverageBrightness = brightnessRange[2]
+        if (config.hdrBrightnessSource == StreamConfiguration.HDR_BRIGHTNESS_SOURCE_MANUAL) {
+            context.minBrightness = config.hdrManualMinBrightness
+            context.maxBrightness = config.hdrManualMaxBrightness
+            context.maxAverageBrightness = config.hdrManualMaxAvgBrightness
+            LimeLog.info(
+                "Using manual HDR brightness: min=${context.minBrightness}, " +
+                    "max=${context.maxBrightness}, maxAvg=${context.maxAverageBrightness}"
+            )
+        } else {
+            val brightnessRange = com.limelight.utils.HdrCapabilityHelper.getBrightnessRangeAsInts(appContext)
+            context.minBrightness = brightnessRange[0]
+            context.maxBrightness = brightnessRange[1]
+            context.maxAverageBrightness = brightnessRange[2]
+            LimeLog.info(
+                "Using auto HDR brightness: min=${context.minBrightness}, " +
+                    "max=${context.maxBrightness}, maxAvg=${context.maxAverageBrightness}"
+            )
+        }
     }
 
     fun stop() {

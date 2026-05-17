@@ -262,7 +262,7 @@
 
     <string name="category_audio_settings">Audio Settings</string>
     <string name="title_audio_config_list">Surround sound configurationItem</string>
-    <string name="summary_audio_config_list">Enable 5.1, 7.1, or 7.1.4 surround sound for home-theater systems. 7.1.4 requires Android 12+</string>
+    <string name="summary_audio_config_list">Enable 5.1, 7.1, or 7.1.4 surround sound for home-theater systems. 7.1.4 requires a compatible HDMI audio route.</string>
     <string name="title_checkbox_enable_audiofx">Enable system equalizer support</string>
     <string name="summary_checkbox_enable_audiofx">Allow audio effects to work during streaming, may increase audio latency</string>
     <string name="title_checkbox_enable_spatializer">Enable spatial audio (Android 13+)</string>
@@ -545,7 +545,7 @@
     <string name="audioconf_stereo">Stereo</string>
     <string name="audioconf_51surround">5.1 Surround Sound</string>
     <string name="audioconf_71surround">7.1 Surround Sound</string>
-    <string name="audioconf_714surround">7.1.4 Surround Sound (Atmos)</string>
+    <string name="audioconf_714surround">7.1.4 Surround Sound</string>
 
     <string name="videoformat_auto">Automatic (Recommended)</string>
     <string name="videoformat_av1always">Prefer AV1 (Experimental)</string>
