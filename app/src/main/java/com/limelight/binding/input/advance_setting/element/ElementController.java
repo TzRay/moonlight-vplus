@@ -2,7 +2,11 @@ package com.limelight.binding.input.advance_setting.element;
 
 import android.content.ContentValues;
 import android.content.Context;
+import android.content.SharedPreferences;
+import android.content.res.ColorStateList;
+import android.content.res.Resources;
 import android.content.DialogInterface;
+import android.graphics.drawable.ColorDrawable;
 import android.preference.PreferenceManager;
 import android.media.AudioAttributes;
 import android.os.Build;
@@ -12,14 +16,23 @@ import android.os.VibrationAttributes;
 import android.os.VibrationEffect;
 import android.os.Vibrator;
 import android.util.DisplayMetrics;
+import android.view.Gravity;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.ViewParent;
 import android.widget.CompoundButton;
+import android.widget.Button;
+import android.widget.EditText;
 import android.widget.FrameLayout;
+import android.widget.ImageButton;
+import android.widget.ImageView;
+import android.widget.LinearLayout;
+import android.widget.RadioButton;
 import android.app.AlertDialog;
 import android.widget.SeekBar;
 import android.widget.Switch;
+import android.widget.TextView;
 import android.widget.Toast;
 
 import com.limelight.Game;
@@ -30,6 +43,7 @@ import com.limelight.binding.input.advance_setting.ControllerManager;
 import com.limelight.binding.input.advance_setting.PageDeviceController;
 import com.limelight.binding.input.advance_setting.config.PageConfigController;
 import com.limelight.binding.input.advance_setting.superpage.NumberSeekbar;
+import com.limelight.utils.AppDialogStyler;
 import com.limelight.binding.input.advance_setting.superpage.SuperPageLayout;
 import com.limelight.binding.input.advance_setting.superpage.SuperPagesController;
 
@@ -66,6 +80,7 @@ public class ElementController {
     private static final String SPECIAL_KEY_PAN_ZOOM_MODE = "PZM";
     private static final String SPECIAL_KEY_OPEN_GAME_MENU = "OGM";
     private static final String SPECIAL_KEY_EDIT_MODE_SWITCH = "EMS"; // 编辑模式
+    private static final String SPECIAL_KEY_MOUSE_MOVE_ONLY = "MMO"; // 仅鼠标移动
 
 
 
@@ -126,6 +141,52 @@ public class ElementController {
     private static final int MOUSE_SCROLL_INITIAL_DELAY = 150; // 初始延迟（毫秒）
     private static int MOUSE_SCROLL_REPEAT_INTERVAL = 100; // 重复间隔（毫秒）
 
+    private static final String CROWN_DETAIL_ACTION_BAR_TAG = "crown_detail_action_bar";
+    private static final String PREF_CROWN_ALIGNMENT_SNAP_ENABLED = "crown_alignment_snap_enabled";
+    private static final int ALIGNMENT_SNAP_THRESHOLD_DP = 8;
+
+    static class SnapResult {
+        public final int centralX;
+        public final int centralY;
+
+        private SnapResult(int centralX, int centralY) {
+            this.centralX = centralX;
+            this.centralY = centralY;
+        }
+    }
+
+    private static class AxisSnap {
+        private int center;
+        private int guideOffset;
+        private int distance = Integer.MAX_VALUE;
+        private boolean matched = false;
+
+        AxisSnap(int center) {
+            this.center = center;
+        }
+
+        void consider(int candidateCenter, int movingOffset, int targetGuide, int threshold) {
+            int candidateGuide = candidateCenter + movingOffset;
+            int candidateDistance = Math.abs(candidateGuide - targetGuide);
+            if (candidateDistance > threshold || candidateDistance >= distance) {
+                return;
+            }
+
+            center = targetGuide - movingOffset;
+            guideOffset = movingOffset;
+            distance = candidateDistance;
+            matched = true;
+        }
+
+        int getCenter() {
+            return center;
+        }
+
+        float getGuide(int finalCenter) {
+            return matched ? finalCenter + guideOffset : EditGridView.NO_GUIDE;
+        }
+    }
+
     public static void setMouseScrollRepeatInterval(int interval) {
         MOUSE_SCROLL_REPEAT_INTERVAL = interval;
     }
@@ -166,6 +227,19 @@ public class ElementController {
         return dragEditEnabled;
     }
 
+    private boolean alignmentSnapEnabled = true;
+
+    private void setAlignmentSnapEnabled(boolean enabled) {
+        alignmentSnapEnabled = enabled;
+        PreferenceManager.getDefaultSharedPreferences(context)
+                .edit()
+                .putBoolean(PREF_CROWN_ALIGNMENT_SNAP_ENABLED, enabled)
+                .apply();
+        if (!enabled) {
+            clearAlignmentGuides();
+        }
+    }
+
 
     public void showToast(String message) {
         if (currentToast != null) {
@@ -188,6 +262,8 @@ public class ElementController {
         this.editGridView = new EditGridView(context);
         this.bottomViewAmount = elementsLayout.getChildCount();
         this.deviceVibrator = (Vibrator) context.getSystemService(Context.VIBRATOR_SERVICE);
+        SharedPreferences preferences = PreferenceManager.getDefaultSharedPreferences(context);
+        this.alignmentSnapEnabled = preferences.getBoolean(PREF_CROWN_ALIGNMENT_SNAP_ENABLED, true);
         initEditPage();
     }
 
@@ -197,11 +273,18 @@ public class ElementController {
             public void onClick(View v) {
                 changeMode(Mode.Normal);
                 controllerManager.pageSuperMenuController.open();
-                // 1. 通过公共方法通知 Game Activity 切换回普通菜单模式
-                ((Game) context).setcurrentBackKeyMenu(Game.BackKeyMenuMode.GAME_MENU);
-
-                // 2. 显示操作成功的提示信息
-                Toast.makeText(context, context.getString(R.string.toast_back_key_menu_switch_1), Toast.LENGTH_SHORT).show();
+                // 一次性模式（NO_MENU）退出后回到游戏菜单，否则保持王冠模式
+                if (((Game) context).getCurrentBackKeyMenuMode() == Game.BackKeyMenuMode.NO_MENU) {
+                    ((Game) context).setcurrentBackKeyMenu(Game.BackKeyMenuMode.GAME_MENU);
+                } else {
+                    ((Game) context).setcurrentBackKeyMenu(Game.BackKeyMenuMode.CROWN_MODE);
+                }
+            }
+        });
+        pageEdit.findViewById(R.id.page_edit_auto_color_all).setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                applyCrownAutoColorsToAll();
             }
         });
         ((NumberSeekbar) pageEdit.findViewById(R.id.page_edit_edit_grid_width)).setOnNumberSeekbarChangeListener(new NumberSeekbar.OnNumberSeekbarChangeListener() {
@@ -321,6 +404,20 @@ public class ElementController {
                     setDragEditEnabled(isChecked);
                     String message = isChecked ? "长按移动按键" : "可直接拖动按键";
                     showToast(message);
+                }
+            });
+        }
+        Switch alignmentSnapSwitch = pageEdit.findViewById(R.id.page_edit_alignment_snap_switch);
+        if (alignmentSnapSwitch != null) {
+            alignmentSnapSwitch.setChecked(alignmentSnapEnabled);
+            alignmentSnapSwitch.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
+                @Override
+                public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
+                    setAlignmentSnapEnabled(isChecked);
+                    int messageResId = isChecked
+                            ? R.string.crown_alignment_snap_enabled
+                            : R.string.crown_alignment_snap_disabled;
+                    showToast(context.getString(messageResId));
                 }
             });
         }
@@ -539,12 +636,96 @@ public class ElementController {
         return position - position % editGridWidth;
     }
 
+    protected SnapResult snapElementPosition(Element movingElement, int candidateCentralX, int candidateCentralY) {
+        int snappedCentralX = editGridHandle(candidateCentralX);
+        int snappedCentralY = editGridHandle(candidateCentralY);
+        if (mode != Mode.Edit || !alignmentSnapEnabled || movingElement == null || elementsLayout == null) {
+            clearAlignmentGuides();
+            return new SnapResult(snappedCentralX, snappedCentralY);
+        }
+
+        int threshold = dp(ALIGNMENT_SNAP_THRESHOLD_DP);
+        AxisSnap xSnap = new AxisSnap(snappedCentralX);
+        AxisSnap ySnap = new AxisSnap(snappedCentralY);
+
+        int halfWidth = movingElement.getElementWidth() / 2;
+        int halfHeight = movingElement.getElementHeight() / 2;
+        int[] movingXOffsets = new int[]{-halfWidth, 0, halfWidth};
+        int[] movingYOffsets = new int[]{-halfHeight, 0, halfHeight};
+
+        int layoutWidth = elementsLayout.getWidth();
+        int layoutHeight = elementsLayout.getHeight();
+        if (layoutWidth > 0) {
+            considerAxisGuides(xSnap, snappedCentralX, movingXOffsets, new int[]{0, layoutWidth / 2, layoutWidth}, threshold);
+        }
+        if (layoutHeight > 0) {
+            considerAxisGuides(ySnap, snappedCentralY, movingYOffsets, new int[]{0, layoutHeight / 2, layoutHeight}, threshold);
+        }
+
+        for (Element element : elements) {
+            if (element == movingElement || element.getVisibility() != View.VISIBLE) {
+                continue;
+            }
+
+            int elementHalfWidth = element.getElementWidth() / 2;
+            int elementHalfHeight = element.getElementHeight() / 2;
+            int elementCentralX = element.getElementCentralX();
+            int elementCentralY = element.getElementCentralY();
+            considerAxisGuides(
+                    xSnap,
+                    snappedCentralX,
+                    movingXOffsets,
+                    new int[]{elementCentralX - elementHalfWidth, elementCentralX, elementCentralX + elementHalfWidth},
+                    threshold
+            );
+            considerAxisGuides(
+                    ySnap,
+                    snappedCentralY,
+                    movingYOffsets,
+                    new int[]{elementCentralY - elementHalfHeight, elementCentralY, elementCentralY + elementHalfHeight},
+                    threshold
+            );
+        }
+
+        int finalCentralX = editGridHandle(xSnap.getCenter());
+        int finalCentralY = editGridHandle(ySnap.getCenter());
+        updateAlignmentGuides(xSnap.getGuide(finalCentralX), ySnap.getGuide(finalCentralY));
+        return new SnapResult(finalCentralX, finalCentralY);
+    }
+
+    protected void clearAlignmentGuides() {
+        if (editGridView != null) {
+            editGridView.clearAlignmentGuides();
+        }
+    }
+
+    private void considerAxisGuides(AxisSnap snap,
+                                    int movingCenter,
+                                    int[] movingOffsets,
+                                    int[] targetGuides,
+                                    int threshold) {
+        for (int movingOffset : movingOffsets) {
+            for (int targetGuide : targetGuides) {
+                snap.consider(movingCenter, movingOffset, targetGuide, threshold);
+            }
+        }
+    }
+
+    private void updateAlignmentGuides(float verticalGuide, float horizontalGuide) {
+        if (editGridView != null) {
+            editGridView.setAlignmentGuides(verticalGuide, horizontalGuide);
+        }
+    }
+
 
     public void toggleInfoPage(SuperPageLayout elementSettingPage) {
         if (elementSettingPage == controllerManager.getSuperPagesController().getPageNow()) {
             controllerManager.getSuperPagesController().openNewPage(
                     controllerManager.getSuperPagesController().getPageNull());
         } else {
+            applyCrownDetailStyle(elementSettingPage);
+            promoteCrownDetailActions(elementSettingPage);
+            positionCrownDetailPageAwayFromOwner(elementSettingPage);
             controllerManager.getSuperPagesController().openNewPage(elementSettingPage);
             elementSettingPage.setPageReturnListener(new SuperPageLayout.ReturnListener() {
                 @Override
@@ -553,6 +734,316 @@ public class ElementController {
                 }
             });
         }
+    }
+
+    private void positionCrownDetailPageAwayFromOwner(SuperPageLayout page) {
+        Element owner = getCrownAutoColorOwner(page);
+        if (owner == null || owner.getWidth() <= 0) {
+            return;
+        }
+
+        int[] location = new int[2];
+        owner.getLocationOnScreen(location);
+        float ownerCenterX = location[0] + owner.getWidth() / 2f;
+        int screenWidth = context.getResources().getDisplayMetrics().widthPixels;
+        SuperPagesController.BoxPosition targetPosition = ownerCenterX > screenWidth / 2f
+                ? SuperPagesController.BoxPosition.Left
+                : SuperPagesController.BoxPosition.Right;
+        controllerManager.getSuperPagesController().setPosition(targetPosition);
+    }
+
+    private void promoteCrownDetailActions(SuperPageLayout page) {
+        if (page.findViewWithTag(CROWN_DETAIL_ACTION_BAR_TAG) != null) {
+            return;
+        }
+
+        List<Button> actionButtons = new ArrayList<>();
+        collectCrownActionButtons(page, actionButtons);
+        Element autoColorOwner = getCrownAutoColorOwner(page);
+        boolean supportsAutoColor = autoColorOwner != null && autoColorOwner.supportsCrownAutoColors();
+        if (actionButtons.isEmpty() && !supportsAutoColor) {
+            return;
+        }
+
+        LinearLayout actionBar = new LinearLayout(context);
+        actionBar.setTag(CROWN_DETAIL_ACTION_BAR_TAG);
+        actionBar.setGravity(Gravity.END);
+        actionBar.setOrientation(LinearLayout.HORIZONTAL);
+
+        FrameLayout.LayoutParams actionBarParams = new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                dp(32),
+                Gravity.TOP | Gravity.END
+        );
+        actionBarParams.setMargins(0, dp(10), dp(20), 0);
+
+        if (supportsAutoColor) {
+            ImageButton autoColorButton = createCrownIconActionButton(
+                    R.drawable.phc_action_auto_color,
+                    context.getString(R.string.crown_auto_color_action),
+                    v -> applyCrownAutoColors(autoColorOwner, page)
+            );
+            actionBar.addView(autoColorButton, createCrownIconActionParams());
+        }
+
+        for (Button originalButton : actionButtons) {
+            String idName = context.getResources().getResourceEntryName(originalButton.getId());
+            ImageButton actionButton = createCrownIconActionButton(
+                    getCrownActionIconRes(idName),
+                    originalButton.getText(),
+                    v -> originalButton.performClick()
+            );
+            actionBar.addView(actionButton, createCrownIconActionParams());
+            originalButton.setVisibility(View.GONE);
+            hideActionRowIfNeeded(originalButton);
+        }
+
+        page.addView(actionBar, actionBarParams);
+    }
+
+    private ImageButton createCrownIconActionButton(int iconResId, CharSequence contentDescription, View.OnClickListener listener) {
+        ImageButton actionButton = new ImageButton(context);
+        actionButton.setBackgroundResource(R.drawable.crown_action_icon_button_bg);
+        actionButton.setColorFilter(context.getResources().getColor(R.color.crown_text_primary));
+        actionButton.setContentDescription(contentDescription);
+        actionButton.setImageResource(iconResId);
+        actionButton.setPadding(dp(8), dp(8), dp(8), dp(8));
+        actionButton.setScaleType(ImageView.ScaleType.CENTER_INSIDE);
+        actionButton.setOnClickListener(listener);
+        return actionButton;
+    }
+
+    private LinearLayout.LayoutParams createCrownIconActionParams() {
+        LinearLayout.LayoutParams buttonParams = new LinearLayout.LayoutParams(
+                dp(32),
+                ViewGroup.LayoutParams.MATCH_PARENT
+        );
+        buttonParams.setMarginStart(dp(4));
+        return buttonParams;
+    }
+
+    private Element getCrownAutoColorOwner(SuperPageLayout page) {
+        Object owner = page.getTag(R.id.crown_auto_color_owner);
+        if (owner instanceof Element) {
+            return (Element) owner;
+        }
+        return null;
+    }
+
+    private void applyCrownAutoColors(Element element, SuperPageLayout page) {
+        if (!(context instanceof Game)) {
+            Toast.makeText(context, R.string.crown_auto_color_no_frame, Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        CrownScreenColorSampler.sample((Game) context, new CrownScreenColorSampler.Callback() {
+            @Override
+            public void onPalette(CrownAutoColorPalette palette) {
+                if (element.applyCrownAutoColors(palette, page)) {
+                    Toast.makeText(context, R.string.crown_auto_color_done, Toast.LENGTH_SHORT).show();
+                } else {
+                    Toast.makeText(context, R.string.crown_auto_color_failed, Toast.LENGTH_SHORT).show();
+                }
+            }
+
+            @Override
+            public void onError(String message) {
+                Toast.makeText(context, message, Toast.LENGTH_SHORT).show();
+            }
+        });
+    }
+
+    private void applyCrownAutoColorsToAll() {
+        if (!(context instanceof Game)) {
+            Toast.makeText(context, R.string.crown_auto_color_no_frame, Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        CrownScreenColorSampler.sample((Game) context, new CrownScreenColorSampler.Callback() {
+            @Override
+            public void onPalette(CrownAutoColorPalette palette) {
+                int appliedCount = 0;
+                for (Element element : elements) {
+                    if (!element.supportsCrownAutoColors()) {
+                        continue;
+                    }
+                    if (element.applyCrownAutoColors(palette, null)) {
+                        appliedCount++;
+                    }
+                }
+
+                if (appliedCount > 0) {
+                    Toast.makeText(
+                            context,
+                            context.getString(R.string.crown_auto_color_all_done, appliedCount),
+                            Toast.LENGTH_SHORT
+                    ).show();
+                } else {
+                    Toast.makeText(context, R.string.crown_auto_color_no_supported_elements, Toast.LENGTH_SHORT).show();
+                }
+            }
+
+            @Override
+            public void onError(String message) {
+                Toast.makeText(context, message, Toast.LENGTH_SHORT).show();
+            }
+        });
+    }
+
+    private int getCrownActionIconRes(String idName) {
+        if (idName.endsWith("_copy")) {
+            return R.drawable.phc_action_copy;
+        }
+        if (idName.endsWith("_delete")) {
+            return R.drawable.phc_action_trash;
+        }
+        if (idName.endsWith("_reset")) {
+            return R.drawable.phc_action_reset;
+        }
+        if (idName.endsWith("_ensure")) {
+            return R.drawable.phc_action_check;
+        }
+        return R.drawable.phc_settings;
+    }
+
+    private void collectCrownActionButtons(View view, List<Button> actionButtons) {
+        if (view instanceof Button && isCrownDetailActionButton(view)) {
+            actionButtons.add((Button) view);
+            return;
+        }
+
+        if (view instanceof ViewGroup) {
+            ViewGroup viewGroup = (ViewGroup) view;
+            for (int i = 0; i < viewGroup.getChildCount(); i++) {
+                collectCrownActionButtons(viewGroup.getChildAt(i), actionButtons);
+            }
+        }
+    }
+
+    private boolean isCrownDetailActionButton(View view) {
+        if (view.getId() == View.NO_ID) {
+            return false;
+        }
+
+        String idName;
+        try {
+            idName = context.getResources().getResourceEntryName(view.getId());
+        } catch (Resources.NotFoundException e) {
+            return false;
+        }
+        return idName.endsWith("_copy")
+                || idName.endsWith("_delete")
+                || idName.endsWith("_reset")
+                || idName.endsWith("_ensure");
+    }
+
+    private void hideActionRowIfNeeded(Button originalButton) {
+        ViewParent parent = originalButton.getParent();
+        if (!(parent instanceof ViewGroup)) {
+            return;
+        }
+
+        ViewGroup row = (ViewGroup) parent;
+        if (containsVisibleActionButton(row)) {
+            return;
+        }
+        if (containsVisibleNonActionChild(row)) {
+            return;
+        }
+
+        row.setVisibility(View.GONE);
+        ViewParent sectionParent = row.getParent();
+        if (sectionParent instanceof ViewGroup) {
+            ViewGroup section = (ViewGroup) sectionParent;
+            if (hasOnlyTextAndHiddenActionRows(section)) {
+                section.setVisibility(View.GONE);
+            }
+        }
+    }
+
+    private boolean containsVisibleActionButton(ViewGroup viewGroup) {
+        for (int i = 0; i < viewGroup.getChildCount(); i++) {
+            View child = viewGroup.getChildAt(i);
+            if (child instanceof Button && child.getVisibility() == View.VISIBLE && isCrownDetailActionButton(child)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean containsVisibleNonActionChild(ViewGroup viewGroup) {
+        for (int i = 0; i < viewGroup.getChildCount(); i++) {
+            View child = viewGroup.getChildAt(i);
+            if (child.getVisibility() != View.VISIBLE) {
+                continue;
+            }
+            if (!(child instanceof Button) || !isCrownDetailActionButton(child)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean hasOnlyTextAndHiddenActionRows(ViewGroup viewGroup) {
+        boolean hasHiddenActionRow = false;
+        for (int i = 0; i < viewGroup.getChildCount(); i++) {
+            View child = viewGroup.getChildAt(i);
+            if (child.getVisibility() == View.GONE && child instanceof ViewGroup) {
+                hasHiddenActionRow = true;
+                continue;
+            }
+            if (child instanceof TextView) {
+                continue;
+            }
+            return false;
+        }
+        return hasHiddenActionRow;
+    }
+
+    private int dp(int value) {
+        return Math.round(value * context.getResources().getDisplayMetrics().density);
+    }
+
+    private void applyCrownDetailStyle(View view) {
+        if (view instanceof Switch) {
+            Switch switchView = (Switch) view;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                switchView.setThumbTintList(getColorStateList(R.color.crown_switch_thumb));
+                switchView.setTrackTintList(getColorStateList(R.color.crown_switch_track));
+            }
+        } else if (view instanceof RadioButton) {
+            RadioButton radioButton = (RadioButton) view;
+            radioButton.setTextColor(context.getResources().getColor(R.color.crown_text_primary));
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                radioButton.setButtonTintList(getColorStateList(R.color.crown_radio_button));
+            }
+        } else if (view instanceof Button) {
+            Button button = (Button) view;
+            button.setBackgroundResource(R.drawable.crown_config_action_button_bg);
+            button.setTextColor(context.getResources().getColor(R.color.crown_text_primary));
+        } else if (view instanceof EditText) {
+            EditText editText = (EditText) view;
+            if (!(editText.getBackground() instanceof ColorDrawable)) {
+                editText.setTextColor(context.getResources().getColor(R.color.crown_text_primary));
+                editText.setHintTextColor(context.getResources().getColor(R.color.crown_text_secondary));
+            }
+        } else if (view instanceof TextView) {
+            ((TextView) view).setTextColor(context.getResources().getColor(R.color.crown_text_primary));
+        }
+
+        if (view instanceof ViewGroup) {
+            ViewGroup viewGroup = (ViewGroup) view;
+            for (int i = 0; i < viewGroup.getChildCount(); i++) {
+                applyCrownDetailStyle(viewGroup.getChildAt(i));
+            }
+        }
+    }
+
+    private ColorStateList getColorStateList(int colorResId) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            return context.getResources().getColorStateList(colorResId, context.getTheme());
+        }
+        return context.getResources().getColorStateList(colorResId);
     }
 
     public SuperPageLayout getCurrentEditingPage() {
@@ -576,6 +1067,15 @@ public class ElementController {
                 superPagesController.openNewPage(pageNull);
             }
         });
+        pageEdit.post(new Runnable() {
+            @Override
+            public void run() {
+                View scrollView = pageEdit.findViewById(R.id.page_edit_scroll);
+                if (scrollView != null) {
+                    scrollView.scrollTo(0, 0);
+                }
+            }
+        });
     }
 
     public void changeMode(Mode mode) {
@@ -588,6 +1088,7 @@ public class ElementController {
             case Normal:
                 controllerManager.getTouchController().enableTouch(true);
                 this.mode = Mode.Normal;
+                clearAlignmentGuides();
                 elementsLayout.removeView(editGridView);
                 for (Element element : elements) {
                     element.invalidate();
@@ -606,6 +1107,7 @@ public class ElementController {
                 }
                 break;
             case Select:
+                clearAlignmentGuides();
                 elementsLayout.removeView(editGridView);
                 this.mode = Mode.Select;
                 for (Element element : elements) {
@@ -917,21 +1419,21 @@ public class ElementController {
                             contentValues.put(PageConfigController.COLUMN_BOOLEAN_ENHANCED_TOUCH, String.valueOf(true));
                             controllerManager.getTouchController().setTouchMode(false);
                             controllerManager.getTouchController().setEnhancedTouch(true);
-                            showToast("多点触控模式");
+                            showToast(context.getString(R.string.touch_mode_multitouch));
                         } else if (!touchMode && enhancedTouch) {
                             // 当前是多点触控模式 -> 切换到触控板模式
                             contentValues.put(PageConfigController.COLUMN_BOOLEAN_TOUCH_MODE, String.valueOf(true));
                             contentValues.put(PageConfigController.COLUMN_BOOLEAN_ENHANCED_TOUCH, String.valueOf(false));
                             controllerManager.getTouchController().setTouchMode(true);
                             controllerManager.getTouchController().setEnhancedTouch(false);
-                            showToast("触控板模式");
+                            showToast(context.getString(R.string.touch_mode_trackpad));
                         } else {
                             // 当前是触控板模式 -> 切换到经典鼠标模式
                             contentValues.put(PageConfigController.COLUMN_BOOLEAN_TOUCH_MODE, String.valueOf(false));
                             contentValues.put(PageConfigController.COLUMN_BOOLEAN_ENHANCED_TOUCH, String.valueOf(false));
                             controllerManager.getTouchController().setTouchMode(false);
                             controllerManager.getTouchController().setEnhancedTouch(false);
-                            showToast("经典鼠标模式");
+                            showToast(context.getString(R.string.touch_mode_classic_mouse));
                         }
 
                         // 保存到数据库中
@@ -946,11 +1448,11 @@ public class ElementController {
                 }
             };
         } else if (key.equals(SPECIAL_KEY_CLASSIC_MOUSE_SWITCH)) {
-            return switchMouseMode(false, false, "经典鼠标模式");
+            return switchMouseMode(false, false, context.getString(R.string.touch_mode_classic_mouse));
         } else if (key.equals(SPECIAL_KEY_TRACKPAD_MODE)) {
-            return switchMouseMode(true, false, "触控板模式");
+            return switchMouseMode(true, false, context.getString(R.string.touch_mode_trackpad));
         } else if (key.equals(SPECIAL_KEY_MULTI_TOUCH_MODE)) {
-            return switchMouseMode(false, true, "多点触控模式");
+            return switchMouseMode(false, true, context.getString(R.string.touch_mode_multitouch));
         } else if (key.equals(SPECIAL_KEY_PC_KEYBOARD_SWITCH)) {
             return new SendEventHandler() {
                 @Override
@@ -999,7 +1501,7 @@ public class ElementController {
 
                         // 弹出选择对话框
                         AlertDialog.Builder builder = new AlertDialog.Builder(context, R.style.AppDialogStyle);
-                        builder.setTitle("选择配置")
+                        AlertDialog dialog = builder.setTitle(R.string.dialog_title_select_config)
                                 .setItems(configNames.toArray(new String[0]), new DialogInterface.OnClickListener() {
                                     @Override
                                     public void onClick(DialogInterface dialog, int which) {
@@ -1019,13 +1521,14 @@ public class ElementController {
                                         } catch (Exception ignored) {}
                                         loadAllElement(newConfigId);
 
-                                        showToast("已切换到: " + newName);
+                                        showToast(context.getString(R.string.toast_switched_to_config, newName));
                                     }
                                 })
                                 .setNegativeButton(R.string.game_menu_cancel, null)
                                 .show();
+                        AppDialogStyler.INSTANCE.applySystemChoiceList(dialog, context);
                     } catch (Exception e) {
-                        Toast.makeText(context, "无法加载配置列表", Toast.LENGTH_SHORT).show();
+                        Toast.makeText(context, R.string.toast_config_list_load_failed, Toast.LENGTH_SHORT).show();
                     }
                 }
 
@@ -1038,7 +1541,9 @@ public class ElementController {
                 @Override
                 public void sendEvent(boolean down) {
                     if (down) {
-                        Toast.makeText(game, game.getisTouchOverrideEnabled()?"已关闭平移/缩放":"已开启平移/缩放", Toast.LENGTH_SHORT).show();
+                        Toast.makeText(game,
+                                game.getisTouchOverrideEnabled() ? R.string.toast_pan_zoom_disabled_short : R.string.toast_pan_zoom_enabled_short,
+                                Toast.LENGTH_SHORT).show();
                         game.setisTouchOverrideEnabled(!game.getisTouchOverrideEnabled());
                     }
                 }
@@ -1090,9 +1595,29 @@ public class ElementController {
                         //做实际的设置
                         controllerManager.getTouchController().enableTouch(!mouseEnable);
                         if (!mouseEnable) {
-                            showToast("开启触控");
+                            showToast(context.getString(R.string.toast_touch_enabled_short));
                         } else {
-                            showToast("关闭触控");
+                            showToast(context.getString(R.string.toast_touch_disabled_short));
+                        }
+                    }
+                }
+
+                @Override
+                public void sendEvent(int analog1, int analog2) {
+
+                }
+            };
+        }
+        else if (key.equals(SPECIAL_KEY_MOUSE_MOVE_ONLY)) {
+            return new SendEventHandler() {
+                @Override
+                public void sendEvent(boolean down) {
+                    if (down) {
+                        game.toggleMouseMoveOnly();
+                        if (game.isMouseMoveOnlyEnabled()) {
+                            showToast(context.getString(R.string.layout_page_device_text_mmo_true_text));
+                        } else {
+                            showToast(context.getString(R.string.layout_page_device_text_mmo_false_text));
                         }
                     }
                 }

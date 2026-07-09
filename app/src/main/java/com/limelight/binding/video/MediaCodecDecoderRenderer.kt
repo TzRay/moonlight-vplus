@@ -13,7 +13,9 @@ import android.os.Handler
 import android.os.HandlerThread
 import android.os.Process
 import android.os.SystemClock
+import android.view.Surface
 import android.view.SurfaceHolder
+import com.limelight.BuildConfig
 import com.limelight.LimeLog
 import com.limelight.nvstream.av.video.VideoDecoderRenderer
 import com.limelight.nvstream.jni.MoonBridge
@@ -25,6 +27,7 @@ import java.nio.ByteOrder
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 
 class MediaCodecDecoderRenderer(
@@ -56,6 +59,8 @@ class MediaCodecDecoderRenderer(
         private const val CR_FLAG_ALL = CR_FLAG_INPUT_THREAD or CR_FLAG_RENDER_THREAD or CR_FLAG_CHOREOGRAPHER
 
         private const val EXCEPTION_REPORT_DELAY_MS = 3000
+        private const val FRAMEGEN_SURFACE_SWITCH_MAX_RETRIES = 20
+        private const val FRAMEGEN_SURFACE_SWITCH_RETRY_DELAY_MS = 50L
     }
 
     // Used on versions < 5.0
@@ -105,6 +110,19 @@ class MediaCodecDecoderRenderer(
     private var initialHeight = 0
     private var videoFormat = 0
     private var renderTarget: SurfaceHolder? = null
+    /**
+     * 阶段 3 framegen 注入点：非 null 时，MediaCodec.configure() 用该 Surface 替代
+     * renderTarget.surface，把解码帧导向 ImageReader 而不是直接上屏。null 表示走原路径。
+     * 仅在 decoder 未配置（[configureAndStartDecoder] 调用前）期间设置才生效；
+     * 运行中切换需要先 [pauseProcessing] / [resumeProcessing]。
+     */
+    @Volatile
+    var framegenSurface: Surface? = null
+    @Volatile
+    private var framegenOutputSwitchPending = false
+    private val framegenOutputSwitchReady = AtomicBoolean(false)
+    private val framegenOutputSwitchRequested = AtomicBoolean(false)
+    private val framegenOutputSwitchRetryCount = AtomicInteger(0)
     @Volatile
     private var stopping = false
     private var reportedCrash = false
@@ -141,6 +159,24 @@ class MediaCodecDecoderRenderer(
     // Key: timestamp in microseconds (from enqueueTimeUs)
     // Value: enqueue time in milliseconds (from SystemClock.uptimeMillis())
     private val timestampToEnqueueTime: MutableMap<Long, Long> = ConcurrentHashMap()
+
+    // Map: 本地单调 timestampUs(送入 MediaCodec 的 PTS) -> host 节奏 PTS(presentationTimeUs, 微秒)
+    // host PTS 源自主机捕获时刻(见 common-c RtpVideoQueue.c: packet->timestamp * 1000 / PTS_DIVISOR)，
+    // 是三端同源的呈现节奏基准。之前在 JNI 边界被丢弃，现打通供 host-cadence pacing 使用。
+    private val timestampToHostPts: MutableMap<Long, Long> = ConcurrentHashMap()
+
+    // ---- host-cadence 去抖呈现时钟(alpha-beta / PI 时钟恢复，移植自鸿蒙 native_render，已离线仿真验证) ----
+    // 默认关闭：置 true 前，全部走原有 pacing，行为零变化。开启后在偏平滑档用 host PTS 复现主机出帧节奏，
+    // 消除"本地 vsync 网格 vs 主机节奏"错拍造成的微判抖；代价是自适应缓冲延迟(净 LAN≈1ms，抖动网络更大)。
+    // TODO(on-device): 接入设置项/按网络自适应开启，并在真机上标定 Kp/Ki/cushion。
+    private val useHostCadencePacing = false
+    // host PTS 旁路映射是否需要维护：直渲染档(useHostCadencePacing) 或 PRECISE_SYNC 两步呈现激活时都需要。
+    private val needsHostPtsMapping: Boolean
+        get() = useHostCadencePacing || framePacingController.isHostCadencePreciseSyncActive()
+    // 直渲染档(MAX_SMOOTHNESS/CAP_FPS)无 vsync snap 兜底：一帧迟到即可见 hitch，故用较大 cushion
+    // (3×MAD, floor 1ms)覆盖抖动分布。PRECISE_SYNC 路径(有 snap)将另建低 cushion 实例。
+    private val hostCadenceClock =
+        HostCadenceClock(cushionMul = 3.0, cushionFloorNs = 1_000_000L, enableDebugStats = BuildConfig.DEBUG)
 
     // Frame pacing and performance management (extracted)
     private val framePacingController: FramePacingController
@@ -329,6 +365,95 @@ class MediaCodecDecoderRenderer(
 
     fun setRenderTarget(renderTarget: SurfaceHolder) {
         this.renderTarget = renderTarget
+    }
+
+    fun setFramegenCaptureSwitchReady(ready: Boolean) {
+        framegenOutputSwitchReady.set(ready)
+        if (ready) {
+            requestFramegenOutputSurfaceSwitch("framegen prewarm ready")
+        }
+    }
+
+    private fun requestFramegenOutputSurfaceSwitch(reason: String) {
+        if (!framegenOutputSwitchPending || stopping) {
+            return
+        }
+        if (!framegenOutputSwitchReady.get()) {
+            return
+        }
+        if (!framegenOutputSwitchRequested.compareAndSet(false, true)) {
+            return
+        }
+
+        val switchAction = Runnable {
+            val targetSurface = framegenSurface
+            val decoder = videoDecoder
+            if (!framegenOutputSwitchPending || stopping || targetSurface == null || decoder == null) {
+                framegenOutputSwitchPending = false
+                framegenOutputSwitchRetryCount.set(0)
+                return@Runnable
+            }
+
+            val startMs = SystemClock.uptimeMillis()
+            try {
+                applyHdrDataSpace(targetSurface, "framegen capture")
+                decoder.setOutputSurface(targetSurface)
+                framegenOutputSwitchPending = false
+                framegenOutputSwitchRetryCount.set(0)
+                LimeLog.info(
+                    "Framegen delayed capture switch to ImageReader after $reason " +
+                        "elapsed=${SystemClock.uptimeMillis() - startMs}ms"
+                )
+            } catch (t: Throwable) {
+                val retry = framegenOutputSwitchRetryCount.incrementAndGet()
+                if (!stopping && retry <= FRAMEGEN_SURFACE_SWITCH_MAX_RETRIES) {
+                    framegenOutputSwitchRequested.set(false)
+                    LimeLog.warning(
+                        "Framegen delayed capture switch retry $retry/" +
+                            "$FRAMEGEN_SURFACE_SWITCH_MAX_RETRIES after $reason: " +
+                            "${t.javaClass.simpleName}: ${t.message}"
+                    )
+                    val retryAction = Runnable {
+                        requestFramegenOutputSurfaceSwitch("$reason retry")
+                    }
+                    codecCallbackHandler?.postDelayed(
+                        retryAction,
+                        FRAMEGEN_SURFACE_SWITCH_RETRY_DELAY_MS
+                    ) ?: retryAction.run()
+                    return@Runnable
+                }
+                framegenOutputSwitchPending = false
+                framegenOutputSwitchRetryCount.set(0)
+                LimeLog.warning(
+                    "Framegen delayed capture switch failed after $reason: " +
+                        "${t.javaClass.simpleName}: ${t.message}; staying on direct SurfaceView"
+                )
+            }
+        }
+
+        codecCallbackHandler?.post(switchAction) ?: switchAction.run()
+    }
+
+    private fun applyHdrDataSpace(surface: Surface, reason: String) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P || hdrDataSpace == 0) {
+            return
+        }
+
+        val result = MoonBridge.nativeSetSurfaceDataSpace(surface, hdrDataSpace)
+        LimeLog.info(
+            "Surface DataSpace ($reason): 0x${Integer.toHexString(hdrDataSpace)} result=$result"
+        )
+    }
+
+    private fun reapplyHdrDataSpaceIfChanged(surface: Surface, reason: String) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P || hdrDataSpace == 0) {
+            return
+        }
+
+        val currentDataSpace = MoonBridge.nativeGetSurfaceDataSpace(surface)
+        if (currentDataSpace != hdrDataSpace) {
+            applyHdrDataSpace(surface, reason)
+        }
     }
 
     init {
@@ -567,6 +692,11 @@ class MediaCodecDecoderRenderer(
             videoFormat.setInteger(MediaFormat.KEY_FRAME_RATE, refreshRate)
         }
 
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            videoFormat.setInteger(MediaFormat.KEY_ALLOW_FRAME_DROP, 1)
+            LimeLog.info("Decoder MediaFormat: KEY_ALLOW_FRAME_DROP enabled")
+        }
+
         // Populate keys for adaptive playback
         if (adaptivePlayback) {
             videoFormat.setInteger(MediaFormat.KEY_MAX_WIDTH, initialWidth)
@@ -675,7 +805,27 @@ class MediaCodecDecoderRenderer(
 
         LimeLog.info("Configuring with format: $format")
 
-        videoDecoder!!.configure(format, renderTarget!!.surface, null, 0)
+        // Framegen starts on the direct SurfaceView, then switches to ImageReader
+        // after the first visible frame. Native framegen presents back to this same
+        // SurfaceView and mirrors the HDR dataspace when HDR passthrough is active.
+        val pendingFramegenSurface = framegenSurface
+        framegenOutputSwitchRequested.set(false)
+        framegenOutputSwitchRetryCount.set(0)
+        framegenOutputSwitchPending =
+            pendingFramegenSurface != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M
+        val outSurface = if (framegenOutputSwitchPending) {
+            LimeLog.info(
+                "Framegen delayed capture active: decoder starts on SurfaceView " +
+                    "and will switch to ImageReader after first direct frame"
+            )
+            renderTarget!!.surface
+        } else {
+            if (pendingFramegenSurface != null) {
+                LimeLog.info("Framegen capture surface active (decoder output redirected to ImageReader)")
+            }
+            pendingFramegenSurface ?: renderTarget!!.surface
+        }
+        videoDecoder!!.configure(format, outSurface, null, 0)
 
         // Set DataSpace on the output Surface for HDR content.
         // Equivalent to HarmonyOS OH_NativeWindow_SetColorSpace().
@@ -696,9 +846,7 @@ class MediaCodecDecoderRenderer(
                 else
                     MoonBridge.DATASPACE_BT2020_PQ_LIMITED
             }
-            val result = MoonBridge.nativeSetSurfaceDataSpace(renderTarget!!.surface, hdrDataSpace)
-            LimeLog.info("Surface DataSpace: 0x" + Integer.toHexString(hdrDataSpace) +
-                " result=" + result)
+            applyHdrDataSpace(renderTarget!!.surface, "decoder output")
         }
 
         configuredFormat = format
@@ -709,6 +857,7 @@ class MediaCodecDecoderRenderer(
         spsBuffers.clear()
         ppsBuffers.clear()
         timestampToEnqueueTime.clear()
+        timestampToHostPts.clear()
 
         // This will contain the actual accepted input format attributes
         inputFormat = videoDecoder!!.inputFormat
@@ -718,6 +867,9 @@ class MediaCodecDecoderRenderer(
 
         // Start the decoder
         videoDecoder!!.start()
+        if (framegenOutputSwitchPending && framegenOutputSwitchReady.get()) {
+            requestFramegenOutputSurfaceSwitch("decoder started after framegen prewarm")
+        }
     }
 
     private fun tryConfigureDecoder(
@@ -831,7 +983,12 @@ class MediaCodecDecoderRenderer(
             val mediaFormat = createBaseMediaFormat(mimeType)
 
             // This will try low latency options until we find one that works (or we give up).
-            val newFormat = MediaCodecHelper.setDecoderLowLatencyOptions(mediaFormat, selectedDecoderInfo, tryNumber)
+            val newFormat = MediaCodecHelper.setDecoderLowLatencyOptions(
+                mediaFormat,
+                selectedDecoderInfo,
+                tryNumber,
+                prefs.forceMtkMaxOperatingRate
+            )
 
             // Throw the underlying codec exception on the last attempt if the caller requested it
             if (tryConfigureDecoder(selectedDecoderInfo, mediaFormat, !newFormat && throwOnCodecError)) {
@@ -858,6 +1015,7 @@ class MediaCodecDecoderRenderer(
                 if (!firstFrameDelivered) {
                     firstFrameDelivered = true
                     try { firstFrameCallback?.invoke() } catch (_: Throwable) {}
+                    requestFramegenOutputSurfaceSwitch("first rendered frame")
                 }
 
                 // presentationTimeUs: 我们告诉系统这一帧应该在什么时间点显示
@@ -1162,22 +1320,32 @@ class MediaCodecDecoderRenderer(
 
     /**
      * Delivers a decoded frame to the appropriate output path based on frame pacing mode.
-     * Used by both async callbacks and the sync renderer thread.
+     * Called only from the async output callback (onOutputBufferAvailable); the sync
+     * renderer thread in startRendererThread() releases output buffers directly and does
+     * not go through this method.
      */
-    private fun deliverDecodedFrame(bufferIndex: Int) {
+    private fun deliverDecodedFrame(bufferIndex: Int, hostPtsUs: Long = -1L) {
         if (prefs.framePacing == PreferenceConfiguration.FRAME_PACING_BALANCED ||
             prefs.framePacing == PreferenceConfiguration.FRAME_PACING_EXPERIMENTAL_LOW_LATENCY ||
             prefs.framePacing == PreferenceConfiguration.FRAME_PACING_PRECISE_SYNC
         ) {
             // Buffered modes - queue for frame pacing controller
-            framePacingController.offerOutputBuffer(bufferIndex)
+            framePacingController.offerOutputBuffer(bufferIndex, hostPtsUs)
         } else {
             // Direct render modes (MIN_LATENCY, MAX_SMOOTHNESS, CAP_FPS)
             try {
                 if (prefs.framePacing == PreferenceConfiguration.FRAME_PACING_MAX_SMOOTHNESS ||
                     prefs.framePacing == PreferenceConfiguration.FRAME_PACING_CAP_FPS
                 ) {
-                    videoDecoder!!.releaseOutputBuffer(bufferIndex, 0)
+                    if (useHostCadencePacing && hostPtsUs >= 0) {
+                        // host-cadence 呈现：按主机出帧节奏复现，去抖时钟给出精确呈现时刻。
+                        // 偏平滑档(MAX_SMOOTHNESS/CAP_FPS)权衡少量缓冲延迟换取无判抖，语义相符。
+                        val fps = if (refreshRate > 0) refreshRate else 60
+                        val frameIntervalNs = 1_000_000_000L / fps
+                        videoDecoder!!.releaseOutputBuffer(bufferIndex, hostCadenceClock.presentTimeNs(hostPtsUs, frameIntervalNs))
+                    } else {
+                        videoDecoder!!.releaseOutputBuffer(bufferIndex, 0)
+                    }
                 } else {
                     videoDecoder!!.releaseOutputBuffer(bufferIndex, System.nanoTime())
                 }
@@ -1188,6 +1356,7 @@ class MediaCodecDecoderRenderer(
                 if (!firstFrameDelivered) {
                     firstFrameDelivered = true
                     try { firstFrameCallback?.invoke() } catch (_: Throwable) {}
+                    requestFramegenOutputSurfaceSwitch("first released frame")
                 }
             } catch (e: IllegalStateException) {
                 handleDecoderException(e)
@@ -1226,7 +1395,9 @@ class MediaCodecDecoderRenderer(
                 }
 
                 // Deliver to frame pacing
-                deliverDecodedFrame(index)
+                val hostPtsUs = if (needsHostPtsMapping)
+                    (timestampToHostPts.remove(info.presentationTimeUs) ?: -1L) else -1L
+                deliverDecodedFrame(index, hostPtsUs)
 
                 doCodecRecoveryIfRequired(CR_FLAG_RENDER_THREAD)
             }
@@ -1241,15 +1412,8 @@ class MediaCodecDecoderRenderer(
                 outputFormat = format
                 LimeLog.info("New output format: $outputFormat")
 
-                // Re-apply DataSpace after format change
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P &&
-                    hdrDataSpace != 0 && renderTarget != null
-                ) {
-                    val currentDataSpace = MoonBridge.nativeGetSurfaceDataSpace(renderTarget!!.surface)
-                    if (currentDataSpace != hdrDataSpace) {
-                        MoonBridge.nativeSetSurfaceDataSpace(renderTarget!!.surface, hdrDataSpace)
-                        LimeLog.info("Re-applied Surface DataSpace: 0x" + Integer.toHexString(hdrDataSpace))
-                    }
+                renderTarget?.surface?.let {
+                    reapplyHdrDataSpaceIfChanged(it, "async format change")
                 }
             }
         }, codecCallbackHandler)
@@ -1330,14 +1494,8 @@ class MediaCodecDecoderRenderer(
                                     LimeLog.info("New output format: $outputFormat")
 
                                     // Re-apply DataSpace after format change — some decoders reset it
-                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P &&
-                                        hdrDataSpace != 0 && renderTarget != null
-                                    ) {
-                                        val currentDataSpace = MoonBridge.nativeGetSurfaceDataSpace(renderTarget!!.surface)
-                                        if (currentDataSpace != hdrDataSpace) {
-                                            MoonBridge.nativeSetSurfaceDataSpace(renderTarget!!.surface, hdrDataSpace)
-                                            LimeLog.info("Re-applied Surface DataSpace: 0x" + Integer.toHexString(hdrDataSpace))
-                                        }
+                                    renderTarget?.surface?.let {
+                                        reapplyHdrDataSpaceIfChanged(it, "format change")
                                     }
                                 }
                                 MediaCodec.INFO_TRY_AGAIN_LATER -> {}
@@ -1456,6 +1614,7 @@ class MediaCodecDecoderRenderer(
 
         // Clear timestamp tracking map
         timestampToEnqueueTime.clear()
+        timestampToHostPts.clear()
 
         // Halt the rendering thread
         rendererThread?.interrupt()
@@ -1501,6 +1660,7 @@ class MediaCodecDecoderRenderer(
             }
         }
         timestampToEnqueueTime.clear()
+        timestampToHostPts.clear()
 
         // Stop codec callback thread (async mode)
         if (codecCallbackThread != null) {
@@ -1653,7 +1813,8 @@ class MediaCodecDecoderRenderer(
         frameType: Int,
         frameHostProcessingLatency: Char,
         receiveTimeUs: Long,
-        enqueueTimeUs: Long
+        enqueueTimeUs: Long,
+        hostPresentationTimeUs: Long
     ): Int {
         if (stopping || isProcessingPaused) {
             // Don't bother if we're stopping or paused
@@ -1671,12 +1832,14 @@ class MediaCodecDecoderRenderer(
 
         if (lastFrameNumber == 0) {
             activeWindowVideoStats.measurementStartTimestamp = SystemClock.uptimeMillis()
-        } else if (frameNumber != lastFrameNumber && frameNumber != lastFrameNumber + 1) {
+        } else if (frameNumber > lastFrameNumber + 1) {
             // We can receive the same "frame" multiple times if it's an IDR frame.
             // In that case, each frame start NALU is submitted independently.
-            activeWindowVideoStats.framesLost += frameNumber - lastFrameNumber - 1
-            activeWindowVideoStats.totalFrames += frameNumber - lastFrameNumber - 1
+            val framesLost = frameNumber - lastFrameNumber - 1
+            activeWindowVideoStats.framesLost += framesLost
+            activeWindowVideoStats.totalFrames += framesLost
             activeWindowVideoStats.frameLossEvents++
+            perfListener.onVideoFrameLoss(framesLost, frameNumber)
         }
 
         // Reset CSD data for each IDR frame
@@ -1892,6 +2055,12 @@ class MediaCodecDecoderRenderer(
             timestampUs = lastTimestampUs + 1
         }
         lastTimestampUs = timestampUs
+
+        // 记录本地 codec PTS -> host 节奏 PTS 的映射，供输出侧 host-cadence pacing 还原(仅在开启时消费)。
+        // 用本地 timestampUs 作 MediaCodec 的 PTS(保持既有延迟统计/去重逻辑不变)，host PTS 另存旁路。
+        if (needsHostPtsMapping) {
+            timestampToHostPts[timestampUs] = hostPresentationTimeUs
+        }
 
         numFramesIn++
 

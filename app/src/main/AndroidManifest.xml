@@ -2,6 +2,13 @@
 <manifest xmlns:tools="http://schemas.android.com/tools"
     xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!--
+      :framegen 库需要 minSdk 29（AHardwareBuffer Vulkan import）。:app minSdk=22。
+      强制覆盖：framegen 功能本身在 SDK<29 上会通过 FramegenInterceptor.isAvailable()
+      返回 false 自动禁用，因此低版本设备不会触达 framegen 代码。
+    -->
+    <uses-sdk tools:overrideLibrary="com.limelight.framegen" />
+
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
@@ -10,6 +17,7 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission android:name="android.permission.READ_PRIVATE_SETTINGS"/>
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
@@ -92,6 +100,19 @@
             android:enabled="true"
             android:exported="false">
         </provider>
+
+        <!--
+            禁用 Firebase 自动初始化（issue #310）。
+            FirebaseInitProvider 在 Application.onCreate 之前运行，会触发
+            PackageManager.addOnPermissionsChangeListener（需 OBSERVE_GRANT_REVOKE_PERMISSIONS
+            系统级权限），在无 GMS 框架的 ROM（峰米投影仪 / 国产盒子 / 车机等）上
+            抛 SecurityException 导致 app 启动闪退。改为在 LimelightApplication.onCreate
+            中用 try-catch 包装手动调用 FirebaseApp.initializeApp()。
+        -->
+        <provider
+            android:name="com.google.firebase.provider.FirebaseInitProvider"
+            android:authorities="${applicationId}.firebaseinitprovider"
+            tools:node="remove" />
 
         <!-- FileProvider for APK installation -->
         <provider
@@ -202,6 +223,16 @@
             <meta-data android:name="WindowManagerPreference:FreeformWindowOrientation" android:value="landscape" />
         </activity>
         <activity
+            android:name=".preferences.CrownStoreActivity"
+            android:theme="@style/SettingsThemeCompat"
+            android:resizeableActivity="true"
+            android:enableOnBackInvokedCallback="true"
+            android:configChanges="mcc|mnc|touchscreen|keyboard|keyboardHidden|navigation|screenLayout|fontScale|uiMode|orientation|screenSize|smallestScreenSize|layoutDirection"
+            android:label="@string/title_crown_store_view">
+            <meta-data android:name="WindowManagerPreference:FreeformWindowSize" android:value="system-default" />
+            <meta-data android:name="WindowManagerPreference:FreeformWindowOrientation" android:value="landscape" />
+        </activity>
+        <activity
             android:name=".preferences.CapabilityDiagnosticActivity"
             android:resizeableActivity="true"
             android:enableOnBackInvokedCallback="true"
@@ -213,7 +244,7 @@
         <activity
             android:name=".preferences.AddComputerManually"
             android:resizeableActivity="true"
-            android:windowSoftInputMode="stateVisible"
+            android:windowSoftInputMode="adjustResize|stateHidden"
             android:enableOnBackInvokedCallback="true"
             android:configChanges="mcc|mnc|touchscreen|keyboard|keyboardHidden|navigation|screenLayout|fontScale|uiMode|orientation|screenSize|smallestScreenSize|layoutDirection"
             android:label="Add Computer Manually">
@@ -293,6 +324,18 @@
             android:exported="false">
             <intent-filter>
                 <action android:name="android.intent.action.DOWNLOAD_COMPLETE" />
+            </intent-filter>
+        </receiver>
+
+        <receiver
+            android:name=".utils.ConfigurationSyncReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.limelight.action.RUN_CONFIG_SYNC" />
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+                <action android:name="android.intent.action.USER_UNLOCKED" />
             </intent-filter>
         </receiver>
 

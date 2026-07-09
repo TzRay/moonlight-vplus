@@ -1,15 +1,12 @@
 package com.limelight.grid
 
-import android.app.Activity
 import android.content.Context
-import android.content.ContextWrapper
 import android.graphics.BitmapFactory
 import android.view.View
 import android.widget.ImageView
 import android.widget.TextView
 
 import com.limelight.AppView
-import com.limelight.LimeLog
 import com.limelight.R
 import com.limelight.grid.assets.CachedAppAssetLoader
 import com.limelight.grid.assets.DiskAssetLoader
@@ -64,14 +61,15 @@ class AppGridAdapter(
         if (scalingDivisor < 1.0) {
             scalingDivisor = 1.0
         }
-        LimeLog.info("Art scaling divisor: $scalingDivisor")
 
         if (loader != null) {
             cancelQueuedOperations()
         }
 
         loader = CachedAppAssetLoader(
-            context, computer, scalingDivisor,
+            context,
+            computer,
+            scalingDivisor,
             NetworkAssetLoader(context, uniqueId),
             MemoryAssetLoader(),
             DiskAssetLoader(context),
@@ -124,46 +122,34 @@ class AppGridAdapter(
         allApps.clear()
     }
 
-    override fun populateView(parentView: View, imgView: ImageView?, spinnerView: View?, txtView: TextView?, overlayView: ImageView?, obj: AppView.AppObject) {
-        loader?.populateImageView(obj, imgView!!, txtView, false) {
-            try {
-                val tuple = CachedAppAssetLoader.LoaderTuple(computer, obj.app)
-                val scaledBitmap = loader?.getBitmapFromCache(tuple)
-                if (scaledBitmap?.bitmap != null) {
-                    AppIconCache.instance.putIcon(computer, obj.app, scaledBitmap.bitmap)
-                    println("成功缓存app icon: ${obj.app.appName}")
-                } else {
-                    println("无法获取app icon进行缓存: ${obj.app.appName}")
-                }
-            } catch (e: Exception) {
-                println("缓存app icon时发生异常: ${obj.app.appName} - ${e.message}")
-            }
+    override fun getItemId(i: Int): Long {
+        return if (i in 0 until itemList.size) {
+            itemList[i].app.appId.toLong()
+        } else {
+            super.getItemId(i)
+        }
+    }
+
+    override fun populateView(
+        parentView: View,
+        imgView: ImageView?,
+        spinnerView: View?,
+        txtView: TextView?,
+        overlayView: ImageView?,
+        obj: AppView.AppObject
+    ) {
+        loader?.populateImageView(obj, imgView!!, txtView, false) { bitmap ->
+            AppIconCache.instance.putIcon(computer, obj.app, bitmap)
         }
 
         if (obj.isRunning) {
             overlayView?.setImageResource(R.drawable.ic_play_cute)
             overlayView?.visibility = View.VISIBLE
-            setBackgroundViaManager(obj)
         } else {
-            val activity = getActivity(context)
-            val blurView = activity?.findViewById<ImageView>(R.id.appBackgroundImageBlur)
-            if (obj.app.appName.equals("desktop", ignoreCase = true) && blurView != null && blurView.drawable == null) {
-                setBackgroundViaManager(obj)
-            }
             overlayView?.visibility = View.GONE
         }
 
-        if (obj.isHidden) {
-            parentView.alpha = 0.40f
-        } else {
-            parentView.alpha = 1.0f
-        }
-    }
-
-    private fun setBackgroundViaManager(obj: AppView.AppObject) {
-        val activity = getActivity(context) as? AppView ?: return
-        val bgManager = activity.backgroundImageManagerInstance ?: return
-        loader?.loadFullBitmap(obj.app) { bitmap -> bgManager.setBackgroundSmoothly(bitmap) }
+        parentView.alpha = if (obj.isHidden) 0.40f else 1.0f
     }
 
     companion object {
@@ -173,14 +159,6 @@ class AppGridAdapter(
 
         fun getLayoutIdForPreferences(prefs: PreferenceConfiguration): Int {
             return if (prefs.smallIconMode) R.layout.app_grid_item_small else R.layout.app_grid_item
-        }
-
-        fun getActivity(context: Context): Activity? {
-            return when (context) {
-                is Activity -> context
-                is ContextWrapper -> getActivity(context.baseContext)
-                else -> null
-            }
         }
 
         private fun sortList(list: MutableList<AppView.AppObject>) {

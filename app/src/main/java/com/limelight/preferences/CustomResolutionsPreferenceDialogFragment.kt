@@ -1,6 +1,8 @@
 package com.limelight.preferences
 
 import android.content.Context
+import android.graphics.Color
+import android.graphics.drawable.ColorDrawable
 import android.os.Bundle
 import android.view.Gravity
 import android.view.LayoutInflater
@@ -11,14 +13,22 @@ import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ListView
 
+import androidx.appcompat.app.AlertDialog
+import androidx.core.content.ContextCompat
 import androidx.preference.PreferenceDialogFragmentCompat
 
 import com.limelight.R
+import com.limelight.utils.AppDialogStyler
 
 class CustomResolutionsPreferenceDialogFragment : PreferenceDialogFragmentCompat() {
 
     private fun getPref(): CustomResolutionsPreference =
         preference as CustomResolutionsPreference
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        setStyle(STYLE_NORMAL, R.style.AppDialogStyle)
+    }
 
     override fun onCreateDialogView(context: Context): View {
         val pref = getPref()
@@ -33,6 +43,12 @@ class CustomResolutionsPreferenceDialogFragment : PreferenceDialogFragmentCompat
     override fun onBindDialogView(view: View) {
         super.onBindDialogView(view)
         getPref().loadStoredResolutions()
+    }
+
+    override fun onStart() {
+        super.onStart()
+        dialog?.window?.setBackgroundDrawableResource(R.drawable.app_dialog_bg_cute)
+        tintDialogButtons()
     }
 
     private fun createMainLayout(context: Context): LinearLayout {
@@ -57,8 +73,12 @@ class CustomResolutionsPreferenceDialogFragment : PreferenceDialogFragmentCompat
         list.layoutParams = layoutParams
         list.adapter = pref.adapter
         list.dividerHeight = dpToPx(context, 1)
-        @Suppress("DEPRECATION")
-        list.divider = context.resources.getDrawable(android.R.color.darker_gray)
+        list.divider = ColorDrawable(ContextCompat.getColor(context, R.color.app_dialog_outline))
+        list.setBackgroundColor(Color.TRANSPARENT)
+        list.cacheColorHint = Color.TRANSPARENT
+        ContextCompat.getDrawable(context, R.drawable.app_dialog_list_item_bg)?.let {
+            list.selector = it
+        }
         return list
     }
 
@@ -86,6 +106,16 @@ class CustomResolutionsPreferenceDialogFragment : PreferenceDialogFragmentCompat
         }
 
         return inputRow
+    }
+
+    private fun tintDialogButtons() {
+        val alert = dialog as? AlertDialog ?: return
+        AppDialogStyler.tintTitle(alert, requireContext())
+        val accentColor = ContextCompat.getColor(requireContext(), R.color.app_dialog_accent_color)
+        listOf(AlertDialog.BUTTON_POSITIVE, AlertDialog.BUTTON_NEGATIVE, AlertDialog.BUTTON_NEUTRAL)
+            .forEach { buttonId ->
+                alert.getButton(buttonId)?.setTextColor(accentColor)
+            }
     }
 
     override fun onDialogClosed(positiveResult: Boolean) {

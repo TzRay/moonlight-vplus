@@ -17,9 +17,11 @@ import com.google.gson.JsonParseException;
 import com.google.gson.JsonPrimitive;
 import com.google.gson.JsonSerializationContext;
 import com.google.gson.JsonSerializer;
+import com.google.gson.annotations.SerializedName;
 import com.limelight.binding.input.advance_setting.config.PageConfigController;
 import com.limelight.binding.input.advance_setting.element.DigitalSwitchButton;
 import com.limelight.binding.input.advance_setting.element.Element;
+import com.limelight.utils.ConfigurationSyncScheduler;
 import com.limelight.utils.MathUtils;
 
 import java.lang.reflect.Type;
@@ -32,9 +34,13 @@ import java.util.regex.Pattern;
 
 public class SuperConfigDatabaseHelper extends SQLiteOpenHelper {
     private class ExportFile {
+        @SerializedName("version")
         private int version;
+        @SerializedName("settings")
         private String settings;
+        @SerializedName("elements")
         private String elements;
+        @SerializedName("md5")
         private String md5;
 
         public ExportFile(int version, String settings, String elements) {
@@ -139,12 +145,15 @@ public class SuperConfigDatabaseHelper extends SQLiteOpenHelper {
     private static final int DATABASE_OLD_VERSION_4 = 4;
     private static final int DATABASE_OLD_VERSION_5 = 5;
     private static final int DATABASE_OLD_VERSION_6 = 6;
-    private static final int DATABASE_VERSION = 8;
+    private static final int DATABASE_OLD_VERSION_8 = 8;
+    private static final int DATABASE_VERSION = 9;
+    private final Context context;
     private SQLiteDatabase writableDataBase;
     private SQLiteDatabase readableDataBase;
 
     public SuperConfigDatabaseHelper(Context context) {
         super(context, DATABASE_NAME, null, DATABASE_VERSION);
+        this.context = context.getApplicationContext();
         writableDataBase = getWritableDatabase();
         readableDataBase = getReadableDatabase();
     }
@@ -203,7 +212,8 @@ public class SuperConfigDatabaseHelper extends SQLiteOpenHelper {
                 "game_vibrator TEXT," +
                 "button_vibrator TEXT," +
                 "mouse_wheel_speed INTEGER," +
-                PageConfigController.COLUMN_BOOLEAN_ENHANCED_TOUCH + " TEXT DEFAULT 'false'" +
+                PageConfigController.COLUMN_BOOLEAN_ENHANCED_TOUCH + " TEXT DEFAULT 'false'," +
+                PageConfigController.COLUMN_STRING_QUICK_ACTION_IDS + " TEXT" +
                 ")";
 
         db.execSQL(createConfigTable);
@@ -244,6 +254,9 @@ public class SuperConfigDatabaseHelper extends SQLiteOpenHelper {
         }
         if (oldVersion < 8) {
             db.execSQL("ALTER TABLE element ADD COLUMN extra_attributes TEXT;");
+        }
+        if (oldVersion < 9) {
+            db.execSQL("ALTER TABLE config ADD COLUMN " + PageConfigController.COLUMN_STRING_QUICK_ACTION_IDS + " TEXT;");
         }
     }
 
@@ -326,6 +339,8 @@ public class SuperConfigDatabaseHelper extends SQLiteOpenHelper {
                         element.getAsJsonObject().addProperty("extra_attributes", "{}");
                     }
                 }
+            case DATABASE_OLD_VERSION_8:
+                settingsJson.addProperty(PageConfigController.COLUMN_STRING_QUICK_ACTION_IDS, "");
             case DATABASE_VERSION:
                 break; // 到达最新版本，停止
             default:
@@ -343,6 +358,7 @@ public class SuperConfigDatabaseHelper extends SQLiteOpenHelper {
 
     public void insertElement(ContentValues values) {
         writableDataBase.insert("element", null, values);
+        notifyConfigSyncChanged();
     }
 
     public void deleteElement(long configId, long elementId) {
@@ -354,6 +370,7 @@ public class SuperConfigDatabaseHelper extends SQLiteOpenHelper {
 
         // 执行删除操作
         writableDataBase.delete("element", selection, selectionArgs);
+        notifyConfigSyncChanged();
     }
 
     public void updateElement(long configId, long elementId, ContentValues values) {
@@ -369,6 +386,7 @@ public class SuperConfigDatabaseHelper extends SQLiteOpenHelper {
                 selection, // WHERE 子句
                 selectionArgs // WHERE 子句中的占位符值
         );
+        notifyConfigSyncChanged();
     }
 
     public List<Long> queryAllElementIds(long configId) {
@@ -504,6 +522,7 @@ public class SuperConfigDatabaseHelper extends SQLiteOpenHelper {
     public void insertConfig(ContentValues values) {
 
         writableDataBase.insert("config", null, values);
+        notifyConfigSyncChanged();
 
     }
 
@@ -519,6 +538,7 @@ public class SuperConfigDatabaseHelper extends SQLiteOpenHelper {
 
         //删除element表中所有的config_id的element
         writableDataBase.delete("element", selection, selectionArgs);
+        notifyConfigSyncChanged();
 
     }
 
@@ -536,7 +556,12 @@ public class SuperConfigDatabaseHelper extends SQLiteOpenHelper {
                 selectionArgs // WHERE 子句中的占位符值
         );
 
+        notifyConfigSyncChanged();
 
+    }
+
+    private void notifyConfigSyncChanged() {
+        ConfigurationSyncScheduler.requestSyncSoon(context);
     }
 
     public List<Long> queryAllConfigIds() {

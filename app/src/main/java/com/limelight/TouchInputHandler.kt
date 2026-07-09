@@ -11,6 +11,7 @@ import com.limelight.binding.input.touch.AbsoluteTouchContext
 import com.limelight.binding.input.touch.NativeTouchContext
 import com.limelight.binding.input.touch.RelativeTouchContext
 import com.limelight.binding.input.touch.TouchContext
+import com.limelight.binding.input.touchpad.NonRootTouchpadHandler
 import com.limelight.binding.input.virtual_controller.VirtualController
 import com.limelight.nvstream.NvConnection
 import com.limelight.nvstream.input.MouseButtonPacket
@@ -59,6 +60,7 @@ class TouchInputHandler(private val game: Game) {
     private var detectScrolling = false
     var detectMouseMiddle = false         // 键盘处理也会读写
     var detectMouseMiddleDown = false     // 键盘处理也会读写
+    private val nonRootTouchpadHandler = NonRootTouchpadHandler()
 
     // ---- 公共入口 ----
 
@@ -67,6 +69,17 @@ class TouchInputHandler(private val game: Game) {
         if (!game.grabbedInput) return false
 
         val eventSource = event.source
+
+        if (!BuildConfig.ROOT_BUILD && game.prefConfig.optimizeHardwareTouchpad &&
+            !eventHasStylusTool(event) &&
+            NonRootTouchpadHandler.isHardwareTouchpadEvent(event)) {
+            if (game.inputCaptureProvider.isCapturingActive()) {
+                nonRootTouchpadHandler.handleMotionEvent(event, game.conn)
+            } else {
+                nonRootTouchpadHandler.cancelAll(game.conn)
+            }
+            return true
+        }
 
         // 华为平板原生鼠标下的滚动逻辑
         if (game.prefConfig.fixMouseWheel && game.cursorVisible &&
@@ -242,11 +255,17 @@ class TouchInputHandler(private val game: Game) {
                     changedButtons = buttonState xor lastButtonState
                 }
 
+                if (view != null && eventHasStylusTool(event) && trySendPenEvent(view, event)) {
+                    lastButtonState = buttonState
+                    return true
+                }
+
                 if (!game.inputCaptureProvider.isCapturingActive()) {
                     return true
                 }
 
-                if (game.inputCaptureProvider.eventHasRelativeMouseAxes(event)) {
+                val eventHasRelativeMouseAxes = game.inputCaptureProvider.eventHasRelativeMouseAxes(event)
+                if (eventHasRelativeMouseAxes) {
                     val deltaX = game.inputCaptureProvider.getRelativeAxisX(event).toInt().toShort()
                     val deltaY = game.inputCaptureProvider.getRelativeAxisY(event).toInt().toShort()
                     if (deltaX.toInt() != 0 || deltaY.toInt() != 0) {
@@ -440,8 +459,10 @@ class TouchInputHandler(private val game: Game) {
 
                         if (multiFingerDownTime == 0L && event.pointerCount == 2 && !twoFingerMoved && game.prefConfig.touchscreenTrackpad) {
                             if (event.eventTime - twoFingerDownTime < TWO_FINGER_TAP_THRESHOLD) {
-                                game.conn?.sendMouseButtonDown(MouseButtonPacket.BUTTON_RIGHT)
-                                game.conn?.sendMouseButtonUp(MouseButtonPacket.BUTTON_RIGHT)
+                                if (!game.isMouseMoveOnlyEnabled) {
+                                    game.conn?.sendMouseButtonDown(MouseButtonPacket.BUTTON_RIGHT)
+                                    game.conn?.sendMouseButtonUp(MouseButtonPacket.BUTTON_RIGHT)
+                                }
                                 twoFingerTapPending = false
                                 twoFingerMoved = true
                                 context.cancelTouch()
@@ -459,8 +480,10 @@ class TouchInputHandler(private val game: Game) {
                         ) {
                             if (twoFingerTapPending && !twoFingerMoved && game.prefConfig.touchscreenTrackpad) {
                                 if (event.eventTime - firstFingerUpTime < TWO_FINGER_TAP_THRESHOLD) {
-                                    game.conn?.sendMouseButtonDown(MouseButtonPacket.BUTTON_RIGHT)
-                                    game.conn?.sendMouseButtonUp(MouseButtonPacket.BUTTON_RIGHT)
+                                    if (!game.isMouseMoveOnlyEnabled) {
+                                        game.conn?.sendMouseButtonDown(MouseButtonPacket.BUTTON_RIGHT)
+                                        game.conn?.sendMouseButtonUp(MouseButtonPacket.BUTTON_RIGHT)
+                                    }
                                     twoFingerTapPending = false
                                     for (tc in touchContextMap) {
                                         tc?.cancelTouch()
@@ -526,6 +549,120 @@ class TouchInputHandler(private val game: Game) {
             return true
         }
         return false
+    }
+
+    private fun handleTouchInput(
+        event: MotionEvent,
+        inputContextMap: Array<TouchContext?>,
+        isTouchScreen: Boolean,
+        invertAxis: Boolean = false,
+        eventAction: Int = event.actionMasked,
+        actionIndex: Int = event.actionIndex,
+        pointerCount: Int = event.pointerCount
+    ): Boolean {
+        val context = if (actionIndex < inputContextMap.size) inputContextMap[actionIndex] else null
+        if (context == null) {
+            return false
+        }
+
+        val actualPointerCount = event.pointerCount
+        val shouldDuplicateMovement = actualPointerCount < pointerCount
+
+        if (eventAction == MotionEvent.ACTION_MOVE) {
+            for (i in 0 until event.historySize) {
+                for (touchContext in inputContextMap) {
+                    if (touchContext != null && touchContext.getActionIndex() < pointerCount) {
+                        val actualActionIndex = if (shouldDuplicateMovement) 0 else touchContext.getActionIndex()
+                        if (actualActionIndex >= actualPointerCount) continue
+
+                        var historicalX = event.getHistoricalX(actualActionIndex, i).toInt()
+                        var historicalY = event.getHistoricalY(actualActionIndex, i).toInt()
+                        if (isTouchScreen) {
+                            val normalizedCoords = getNormalizedCoordinates(game.streamView, historicalX.toFloat(), historicalY.toFloat())
+                            historicalX = normalizedCoords[0].toInt()
+                            historicalY = normalizedCoords[1].toInt()
+                        }
+
+                        if (invertAxis) {
+                            touchContext.touchMoveEvent(historicalY, historicalX, event.getHistoricalEventTime(i))
+                        } else {
+                            touchContext.touchMoveEvent(historicalX, historicalY, event.getHistoricalEventTime(i))
+                        }
+                    }
+                }
+            }
+
+            for (touchContext in inputContextMap) {
+                if (touchContext != null && touchContext.getActionIndex() < pointerCount) {
+                    val actualActionIndex = if (shouldDuplicateMovement) 0 else touchContext.getActionIndex()
+                    if (actualActionIndex >= actualPointerCount) continue
+
+                    var currentX = event.getX(actualActionIndex).toInt()
+                    var currentY = event.getY(actualActionIndex).toInt()
+                    if (isTouchScreen) {
+                        val normalizedCoords = getNormalizedCoordinates(game.streamView, currentX.toFloat(), currentY.toFloat())
+                        currentX = normalizedCoords[0].toInt()
+                        currentY = normalizedCoords[1].toInt()
+                    }
+
+                    if (invertAxis) {
+                        touchContext.touchMoveEvent(currentY, currentX, event.eventTime)
+                    } else {
+                        touchContext.touchMoveEvent(currentX, currentY, event.eventTime)
+                    }
+                }
+            }
+
+            return true
+        }
+
+        val actualActionIndex = event.actionIndex.coerceAtMost((actualPointerCount - 1).coerceAtLeast(0))
+        var eventX = event.getX(actualActionIndex).toInt()
+        var eventY = event.getY(actualActionIndex).toInt()
+
+        if (isTouchScreen) {
+            val normalizedCoords = getNormalizedCoordinates(game.streamView, eventX.toFloat(), eventY.toFloat())
+            eventX = normalizedCoords[0].toInt()
+            eventY = normalizedCoords[1].toInt()
+        }
+
+        when (eventAction) {
+            MotionEvent.ACTION_POINTER_DOWN, MotionEvent.ACTION_DOWN -> {
+                for (touchContext in inputContextMap) touchContext?.setPointerCount(pointerCount)
+                context.touchDownEvent(eventX, eventY, event.eventTime, true)
+            }
+            MotionEvent.ACTION_POINTER_UP, MotionEvent.ACTION_UP -> {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                    (event.flags and MotionEvent.FLAG_CANCELED) != 0
+                ) {
+                    context.cancelTouch()
+                } else {
+                    context.touchUpEvent(eventX, eventY, event.eventTime)
+                }
+
+                for (touchContext in inputContextMap) touchContext?.setPointerCount(pointerCount - 1)
+                if (actionIndex == 0 && pointerCount > 1 && !context.isCancelled()) {
+                    val secondaryIndex = if (actualPointerCount > 1) 1 else 0
+                    var secondX = event.getX(secondaryIndex).toInt()
+                    var secondY = event.getY(secondaryIndex).toInt()
+                    if (isTouchScreen) {
+                        val normalizedCoords = getNormalizedCoordinates(game.streamView, secondX.toFloat(), secondY.toFloat())
+                        secondX = normalizedCoords[0].toInt()
+                        secondY = normalizedCoords[1].toInt()
+                    }
+                    context.touchDownEvent(secondX, secondY, event.eventTime, false)
+                }
+            }
+            MotionEvent.ACTION_CANCEL -> {
+                for (touchContext in inputContextMap) {
+                    touchContext?.cancelTouch()
+                    touchContext?.setPointerCount(0)
+                }
+            }
+            else -> return false
+        }
+
+        return true
     }
 
     // ---- updateMousePosition ----
@@ -621,12 +758,18 @@ class TouchInputHandler(private val game: Game) {
             )
         }
 
-        val scaleX = activeStreamView.scaleX
-        val scaleY = activeStreamView.scaleY
-        if (scaleX == 0f || scaleY == 0f) return floatArrayOf(0f, 0f)
-
-        val absoluteX = (rawX - activeStreamView.x) / scaleX
-        val absoluteY = (rawY - activeStreamView.y) / scaleY
+        val absoluteX: Float
+        val absoluteY: Float
+        if (view == activeStreamView) {
+            absoluteX = rawX
+            absoluteY = rawY
+        } else {
+            val scaleX = activeStreamView.scaleX
+            val scaleY = activeStreamView.scaleY
+            if (scaleX == 0f || scaleY == 0f) return floatArrayOf(0f, 0f)
+            absoluteX = (rawX - activeStreamView.x) / scaleX
+            absoluteY = (rawY - activeStreamView.y) / scaleY
+        }
         val streamWidth = activeStreamView.width
         val streamHeight = activeStreamView.height
         if (streamWidth == 0 || streamHeight == 0) return floatArrayOf(0f, 0f)
@@ -859,6 +1002,16 @@ class TouchInputHandler(private val game: Game) {
         )
     }
 
+    private fun eventHasStylusTool(event: MotionEvent): Boolean {
+        for (i in 0 until event.pointerCount) {
+            when (event.getToolType(i)) {
+                MotionEvent.TOOL_TYPE_STYLUS,
+                MotionEvent.TOOL_TYPE_ERASER -> return true
+            }
+        }
+        return false
+    }
+
     fun getRelativeTouchContextMap(): Array<RelativeTouchContext?> =
         Array(relativeTouchContextMap.size) { i ->
             relativeTouchContextMap[i] as? RelativeTouchContext
@@ -884,6 +1037,10 @@ class TouchInputHandler(private val game: Game) {
         if (game.prefConfig.enableEnhancedTouch) {
             game.prefConfig.enableNativeMousePointer = false
         }
+    }
+
+    fun cancelNonRootTouchpad() {
+        nonRootTouchpadHandler.cancelAll(game.conn)
     }
 
     /**

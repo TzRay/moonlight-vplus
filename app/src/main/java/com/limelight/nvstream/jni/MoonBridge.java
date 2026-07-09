@@ -92,6 +92,8 @@ public class MoonBridge {
 
     public static final int LI_ERR_UNSUPPORTED = -5501;
 
+    public static final int LI_FF_TOUCHPAD_FRAME_EVENTS = 0x20;
+
     public static final byte LI_TOUCH_EVENT_HOVER       = 0x00;
     public static final byte LI_TOUCH_EVENT_DOWN        = 0x01;
     public static final byte LI_TOUCH_EVENT_UP          = 0x02;
@@ -108,6 +110,8 @@ public class MoonBridge {
     public static final byte LI_PEN_BUTTON_PRIMARY = 0x01;
     public static final byte LI_PEN_BUTTON_SECONDARY = 0x02;
     public static final byte LI_PEN_BUTTON_TERTIARY = 0x04;
+
+    public static final byte SS_TOUCHPAD_BUTTON_PRIMARY = 0x01;
 
     public static final byte LI_TILT_UNKNOWN = (byte)0xFF;
     public static final short LI_ROT_UNKNOWN = (short)0xFFFF;
@@ -272,10 +276,11 @@ public class MoonBridge {
 
     public static int bridgeDrSubmitDecodeUnit(byte[] decodeUnitData, int decodeUnitLength, int decodeUnitType,
                                                int frameNumber, int frameType, char frameHostProcessingLatency,
-                                               long receiveTimeUs, long enqueueTimeUs) {
+                                               long receiveTimeUs, long enqueueTimeUs, long hostPresentationTimeUs) {
         if (videoRenderer != null) {
             return videoRenderer.submitDecodeUnit(decodeUnitData, decodeUnitLength,
-                    decodeUnitType, frameNumber, frameType, frameHostProcessingLatency, receiveTimeUs, enqueueTimeUs);
+                    decodeUnitType, frameNumber, frameType, frameHostProcessingLatency, receiveTimeUs, enqueueTimeUs,
+                    hostPresentationTimeUs);
         }
         else {
             return DR_OK;
@@ -508,6 +513,14 @@ public class MoonBridge {
     public static native int sendTouchEvent(byte eventType, int pointerId, float x, float y, float pressure,
                                             float contactAreaMajor, float contactAreaMinor, short rotation);
 
+    public static native int sendTouchpadEvent(byte eventType, int pointerId, float x, float y, float pressure,
+                                               float contactAreaMajor, float contactAreaMinor, short rotation,
+                                               short deviceWidthMm, short deviceHeightMm, byte buttonState);
+
+    public static native int sendTouchpadFrameEvent(byte contactCount, byte[] eventTypes, int[] pointerIds,
+                                                    float[] x, float[] y, float[] pressure, short rotation,
+                                                    short deviceWidthMm, short deviceHeightMm, byte buttonState);
+
     public static native int sendPenEvent(byte eventType, byte toolType, byte penButtons, float x, float y,
                                           float pressure, float contactAreaMajor, float contactAreaMinor,
                                           short rotation, byte tilt);
@@ -589,11 +602,11 @@ public class MoonBridge {
     // Surface DataSpace control for HDR color space
     // Uses ANativeWindow_setBuffersDataSpace() via JNI (API 28+)
 
-    // DataSpace constants: STANDARD_BT2020 | TRANSFER | RANGE
-    public static final int DATASPACE_BT2020_HLG_FULL = 0x09C60000;
-    public static final int DATASPACE_BT2020_HLG_LIMITED = 0x11C60000;
-    public static final int DATASPACE_BT2020_PQ_FULL = 0x09860000;
-    public static final int DATASPACE_BT2020_PQ_LIMITED = 0x11860000;
+    // DataSpace constants from android/data_space.h: STANDARD_BT2020 | TRANSFER | RANGE
+    public static final int DATASPACE_BT2020_HLG_FULL = 0x0A060000;
+    public static final int DATASPACE_BT2020_HLG_LIMITED = 0x12060000;
+    public static final int DATASPACE_BT2020_PQ_FULL = 0x09C60000;
+    public static final int DATASPACE_BT2020_PQ_LIMITED = 0x11C60000;
 
     /**
      * Set the DataSpace on a Surface for HDR content.

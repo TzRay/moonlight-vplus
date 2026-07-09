@@ -287,18 +287,35 @@ class AppSettingsManager(private val context: Context) {
     fun createStartIntentWithLastSettingsIfEnabled(
             parent: Activity, app: NvApp,
             computer: ComputerDetails?,
-            managerBinder: ComputerManagerService.ComputerManagerBinder
+            managerBinder: ComputerManagerService.ComputerManagerBinder,
+            useVdd: Boolean? = null,
+            forceResumeCurrentSession: Boolean = false
     ): Intent {
         val useLastSettingsEnabled = isUseLastSettingsEnabled
 
         if (useLastSettingsEnabled && computer != null) {
             val lastSettings = getAppLastSettings(computer.uuid!!, app)
             if (lastSettings != null) {
-                return ServerHelper.createStartIntent(parent, app, computer, managerBinder, lastSettings)
+                return ServerHelper.createStartIntent(
+                    parent,
+                    app,
+                    computer,
+                    managerBinder,
+                    lastSettings,
+                    useVdd = useVdd,
+                    forceResumeCurrentSession = forceResumeCurrentSession
+                )
             }
         }
 
-        return ServerHelper.createStartIntent(parent, app, computer!!, managerBinder)
+        return ServerHelper.createStartIntent(
+            parent,
+            app,
+            computer!!,
+            managerBinder,
+            useVdd = useVdd,
+            forceResumeCurrentSession = forceResumeCurrentSession
+        )
     }
 
     /**

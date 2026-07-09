@@ -10,6 +10,7 @@ import java.io.StringReader
 import java.net.Inet4Address
 import java.net.InetAddress
 import java.net.Proxy
+import java.net.URLEncoder
 import java.security.KeyManagementException
 import java.security.KeyStore
 import java.security.NoSuchAlgorithmException
@@ -59,7 +60,8 @@ class NvHTTP(
     uniqueId: String,
     clientName: String,
     serverCert: X509Certificate?,
-    cryptoProvider: LimelightCryptoProvider
+    private val cryptoProvider: LimelightCryptoProvider,
+    private val timeoutConfig: TimeoutConfig = TimeoutConfig.DEFAULT
 ) {
     private var uniqueId: String = "0123456789ABCDEF"
     val pairingManager: PairingManager
@@ -77,6 +79,27 @@ class NvHTTP(
     private lateinit var trustManager: X509TrustManager
     private lateinit var keyManager: X509KeyManager
     internal var serverCert: X509Certificate? = null
+    private var lastServerInfoTrustedByCert = false
+
+    data class TimeoutConfig(
+        val connectTimeoutMs: Int,
+        val readTimeoutMs: Int,
+        val shortConnectTimeoutMs: Int
+    ) {
+        init {
+            require(connectTimeoutMs > 0) { "connectTimeoutMs must be positive" }
+            require(readTimeoutMs >= 0) { "readTimeoutMs must be non-negative" }
+            require(shortConnectTimeoutMs > 0) { "shortConnectTimeoutMs must be positive" }
+        }
+
+        companion object {
+            val DEFAULT = TimeoutConfig(
+                LONG_CONNECTION_TIMEOUT,
+                READ_TIMEOUT,
+                SHORT_CONNECTION_TIMEOUT
+            )
+        }
+    }
 
     class DisplayInfo(
         val index: Int,
@@ -159,21 +182,49 @@ class NvHTTP(
             HttpsURLConnection.getDefaultHostnameVerifier().verify(hostname, session)
         }
 
+        val sc = createSslContext()
+
         httpClientLongConnectTimeout = OkHttpClient.Builder()
             .connectionPool(ConnectionPool(0, 1, TimeUnit.MILLISECONDS))
             .hostnameVerifier(hv)
-            .readTimeout(READ_TIMEOUT.toLong(), TimeUnit.MILLISECONDS)
-            .connectTimeout(LONG_CONNECTION_TIMEOUT.toLong(), TimeUnit.MILLISECONDS)
+            .sslSocketFactory(sc.socketFactory, trustManager)
+            .readTimeout(timeoutConfig.readTimeoutMs.toLong(), TimeUnit.MILLISECONDS)
+            .connectTimeout(timeoutConfig.connectTimeoutMs.toLong(), TimeUnit.MILLISECONDS)
             .proxy(Proxy.NO_PROXY)
             .build()
 
         httpClientShortConnectTimeout = httpClientLongConnectTimeout.newBuilder()
-            .connectTimeout(SHORT_CONNECTION_TIMEOUT.toLong(), TimeUnit.MILLISECONDS)
+            .connectTimeout(timeoutConfig.shortConnectTimeoutMs.toLong(), TimeUnit.MILLISECONDS)
             .build()
 
         httpClientLongConnectNoReadTimeout = httpClientLongConnectTimeout.newBuilder()
             .readTimeout(0, TimeUnit.MILLISECONDS)
             .build()
+    }
+
+    @Synchronized
+    private fun rebuildHttpClientsAfterTlsFailure(failedClient: OkHttpClient): OkHttpClient {
+        val wasShortConnectClient = failedClient === httpClientShortConnectTimeout
+        val wasNoReadTimeoutClient = failedClient === httpClientLongConnectNoReadTimeout
+
+        httpClientLongConnectTimeout.dispatcher.cancelAll()
+        httpClientLongConnectTimeout.connectionPool.evictAll()
+        httpClientShortConnectTimeout.dispatcher.cancelAll()
+        httpClientShortConnectTimeout.connectionPool.evictAll()
+        httpClientLongConnectNoReadTimeout.dispatcher.cancelAll()
+        httpClientLongConnectNoReadTimeout.connectionPool.evictAll()
+
+        initializeHttpState(cryptoProvider)
+
+        return when {
+            wasShortConnectClient -> httpClientShortConnectTimeout
+            wasNoReadTimeoutClient -> httpClientLongConnectNoReadTimeout
+            else -> httpClientLongConnectTimeout
+        }
+    }
+
+    private fun shouldRetryTlsHandshake(e: SSLHandshakeException): Boolean {
+        return e.cause !is CertificateException
     }
 
     @Throws(IOException::class, InterruptedException::class)
@@ -192,6 +243,7 @@ class NvHTTP(
     @Throws(IOException::class, XmlPullParserException::class, InterruptedException::class)
     fun getServerInfo(likelyOnline: Boolean): String {
         val client = if (likelyOnline) httpClientLongConnectTimeout else httpClientShortConnectTimeout
+        lastServerInfoTrustedByCert = false
 
         if (serverCert != null) {
             try {
@@ -206,6 +258,7 @@ class NvHTTP(
                     }
                 }
                 getServerVersion(resp)
+                lastServerInfoTrustedByCert = true
                 return resp
             } catch (e: HostHttpResponseException) {
                 if (e.getErrorCode() == 401) {
@@ -239,9 +292,11 @@ class NvHTTP(
         details.remoteAddress = makeTuple(getXmlString(serverInfo, "ExternalIP", false), details.externalPort)
 
         details.pairState = getPairState(serverInfo)
+        details.serverInfoTrustedByCert = lastServerInfoTrustedByCert
         details.runningGameId = getCurrentGame(serverInfo)
 
         details.nvidiaServer = getXmlString(serverInfo, "state", true)!!.contains("MJOLNIR")
+        details.supportsDesktopSpecialApp = getXmlString(serverInfo, "DesktopSpecialAppSupport", false) == "1"
 
         try {
             details.sunshineVersion = getSunshineVersion(serverInfo)
@@ -259,11 +314,11 @@ class NvHTTP(
         return getComputerDetails(getServerInfo(likelyOnline))
     }
 
-    private fun performAndroidTlsHack(client: OkHttpClient): OkHttpClient {
+    private fun createSslContext(): SSLContext {
         try {
             val sc = SSLContext.getInstance("TLS")
             sc.init(arrayOf<KeyManager>(keyManager), arrayOf<TrustManager>(trustManager), SecureRandom())
-            return client.newBuilder().sslSocketFactory(sc.socketFactory, trustManager).build()
+            return sc
         } catch (e: NoSuchAlgorithmException) {
             throw RuntimeException(e)
         } catch (e: KeyManagementException) {
@@ -290,7 +345,16 @@ class NvHTTP(
     private fun openHttpConnection(client: OkHttpClient, baseUrl: HttpUrl, path: String, query: String?): ResponseBody {
         val completeUrl = getCompleteUrl(baseUrl, path, query)
         val request = Request.Builder().url(completeUrl).get().build()
-        val response = performAndroidTlsHack(client).newCall(request).execute()
+        val response = try {
+            client.newCall(request).execute()
+        } catch (e: SSLHandshakeException) {
+            if (!shouldRetryTlsHandshake(e)) {
+                throw e
+            }
+
+            LimeLog.warning("$completeUrl -> TLS handshake failed; rebuilding HTTP client and retrying once")
+            rebuildHttpClientsAfterTlsFailure(client).newCall(request).execute()
+        }
 
         val body = response.body
 
@@ -347,7 +411,7 @@ class NvHTTP(
             .addHeader("Content-Type", "application/json")
             .build()
 
-        val response = performAndroidTlsHack(client).newCall(request).execute()
+        val response = client.newCall(request).execute()
         val responseBody = response.body
 
         if (response.isSuccessful) {
@@ -599,6 +663,11 @@ class NvHTTP(
 
     @Throws(IOException::class, XmlPullParserException::class, InterruptedException::class)
     fun launchApp(context: ConnectionContext, verb: String, appId: Int, enableHdr: Boolean): Boolean {
+        if (appId == NvApp.DESKTOP_APP_ID && !context.supportsDesktopSpecialApp) {
+            LimeLog.warning("Refusing Desktop special app launch without DesktopSpecialAppSupport")
+            return false
+        }
+
         val streamConfig = context.streamConfig
         val fps = if (context.isNvidiaServerSoftware && streamConfig.launchRefreshRate > 60)
             0 else streamConfig.launchRefreshRate
@@ -626,23 +695,21 @@ class NvHTTP(
             "&remoteControllersBitmap=${streamConfig.attachedGamepadMask}" +
             "&gcmap=${streamConfig.attachedGamepadMask}" +
             "&gcpersist=${if (streamConfig.getPersistGamepadsAfterDisconnect()) 1 else 0}" +
-            "&useVdd=${if (streamConfig.getUseVdd()) 1 else 0}" +
             "&minBrightness=${context.minBrightness}" +
             "&maxBrightness=${context.maxBrightness}" +
             "&maxAverageBrightness=${context.maxAverageBrightness}"
+
+        streamConfig.getUseVdd()?.let { useVdd ->
+            queryParams += "&useVdd=${if (useVdd) 1 else 0}"
+        }
 
         val customScreenMode = streamConfig.customScreenMode
         if (customScreenMode != -1) {
             queryParams += "&customScreenMode=$customScreenMode"
         }
 
-        val customVddScreenMode = streamConfig.customVddScreenMode
-        if (customVddScreenMode != -1) {
-            queryParams += "&customVddScreenMode=$customVddScreenMode"
-        }
-
-        if (!context.displayName.isNullOrEmpty()) {
-            queryParams += "&display_name=${context.displayName}"
+        context.displayName?.takeIf { it.isNotEmpty() }?.let { displayName ->
+            queryParams += "&display_name=${URLEncoder.encode(displayName, "UTF-8")}"
         }
 
         queryParams += MoonBridge.getLaunchUrlQueryParameters()
@@ -702,8 +769,7 @@ class NvHTTP(
     /** ABR HTTPS GET 助手；返回响应正文或 null。*/
     private fun abrGet(pathSegments: String): String? = try {
         val url = getHttpsUrl(true).newBuilder().addPathSegments(pathSegments).build()
-        performAndroidTlsHack(httpClientLongConnectTimeout)
-            .newCall(Request.Builder().url(url).get().build())
+        httpClientLongConnectTimeout.newCall(Request.Builder().url(url).get().build())
             .execute()
             .use { if (it.isSuccessful) it.body.string() else null }
     } catch (e: Exception) { null }
@@ -713,8 +779,7 @@ class NvHTTP(
         val url = getHttpsUrl(true).newBuilder().addPathSegments(pathSegments).build()
         val body = payload.toString()
             .toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull())
-        performAndroidTlsHack(httpClientLongConnectTimeout)
-            .newCall(Request.Builder().url(url).post(body).build())
+        httpClientLongConnectTimeout.newCall(Request.Builder().url(url).post(body).build())
             .execute()
             .use { if (it.isSuccessful) it.body.string() else null }
     } catch (e: Exception) { null }
@@ -796,8 +861,7 @@ class NvHTTP(
             .post(body)
             .addHeader("X-Clipboard-Mime", mime)
             .build()
-        performAndroidTlsHack(clipboardBlobClient())
-            .newCall(request).execute().use { response ->
+        clipboardBlobClient().newCall(request).execute().use { response ->
                 val responseBody = response.body
                 if (!response.isSuccessful) {
                     throw HostHttpResponseException(response.code, response.message)
@@ -819,8 +883,7 @@ class NvHTTP(
             .addPathSegment(id)
             .build()
         val request = Request.Builder().url(url).get().build()
-        performAndroidTlsHack(clipboardBlobClient())
-            .newCall(request).execute().use { response ->
+        clipboardBlobClient().newCall(request).execute().use { response ->
                 val responseBody = response.body
                 if (!response.isSuccessful) {
                     throw HostHttpResponseException(response.code, response.message)

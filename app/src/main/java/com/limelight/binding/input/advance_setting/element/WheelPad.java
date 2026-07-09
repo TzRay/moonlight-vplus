@@ -34,7 +34,7 @@ import com.limelight.binding.input.advance_setting.PageDeviceController;
 import com.limelight.binding.input.advance_setting.superpage.ElementEditText;
 import com.limelight.binding.input.advance_setting.superpage.NumberSeekbar;
 import com.limelight.binding.input.advance_setting.superpage.SuperPageLayout;
-import com.limelight.utils.ColorPickerDialog;
+import com.limelight.utils.AppDialogStyler;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -670,9 +670,14 @@ public class WheelPad extends Element {
                         for (ElementController.SendEventHandler handler : handlers) {
                             handler.sendEvent(true);
                         }
-                        // 释放
-                        for (int i = handlers.size() - 1; i >= 0; i--) {
-                            handlers.get(i).sendEvent(false);
+
+                        // 加入 30 毫秒延迟后再发送释放事件，防止按键时间过短被游戏忽略
+                        if (!handlers.isEmpty()) {
+                            elementController.getHandler().postDelayed(() -> {
+                                for (int i = handlers.size() - 1; i >= 0; i--) {
+                                    handlers.get(i).sendEvent(false);
+                                }
+                            }, 30); // 30 毫秒的持续时间
                         }
                     }
                     isWheelActive = false;
@@ -740,6 +745,7 @@ public class WheelPad extends Element {
 
         NumberSeekbar textSizeNumberSeekbar = wheelPadPage.findViewById(R.id.page_wheel_pad_text_size);
         ElementEditText normalTextColorElementEditText = wheelPadPage.findViewById(R.id.page_wheel_pad_normal_text_color);
+        ElementEditText pressedTextColorElementEditText = wheelPadPage.findViewById(R.id.page_wheel_pad_pressed_text_color);
         NumberSeekbar centerTextSizeNumberSeekbar = wheelPadPage.findViewById(R.id.page_wheel_pad_center_text_size);
         ElementEditText centerTextColorElementEditText = wheelPadPage.findViewById(R.id.page_wheel_pad_center_text_color);
         NumberSeekbar triggerTextSizeNumberSeekbar = wheelPadPage.findViewById(R.id.page_wheel_pad_trigger_text_size);
@@ -854,11 +860,15 @@ public class WheelPad extends Element {
             }
         });
 
-        setupColorPickerButton(normalTextColorElementEditText, () -> this.normalTextColor, color -> {
+        CrownColorPickerBinder.bind(this, normalTextColorElementEditText, () -> this.normalTextColor, color -> {
             this.normalTextColor = color;
             invalidate();
         });
-        setupColorPickerButton(centerTextColorElementEditText, () -> this.centerTextColor, color -> {
+        CrownColorPickerBinder.bind(this, pressedTextColorElementEditText, () -> this.pressedTextColor, color -> {
+            this.pressedTextColor = color;
+            invalidate();
+        });
+        CrownColorPickerBinder.bind(this, centerTextColorElementEditText, () -> this.centerTextColor, color -> {
             this.centerTextColor = color;
             invalidate();
         });
@@ -906,6 +916,7 @@ public class WheelPad extends Element {
 
         JsonObject extraAttrs = new JsonObject();
         extraAttrs.addProperty("normalTextColor", this.normalTextColor);
+        extraAttrs.addProperty("pressedTextColor", this.pressedTextColor);
         extraAttrs.addProperty("centerTextColor", this.centerTextColor);
         extraAttrs.addProperty("textSizePercent", this.textSizePercent);
         extraAttrs.addProperty("centerTextSizePercent", this.centerTextSizePercent);
@@ -1058,9 +1069,9 @@ public class WheelPad extends Element {
             }
         });
 
-        setupColorPickerButton(normalColor, () -> this.normalColor, this::setElementNormalColor);
-        setupColorPickerButton(pressedColor, () -> this.pressedColor, this::setElementPressedColor);
-        setupColorPickerButton(backgroundColor, () -> this.backgroundColor, this::setElementBackgroundColor);
+        CrownColorPickerBinder.bind(this, normalColor, () -> this.normalColor, this::setElementNormalColor);
+        CrownColorPickerBinder.bind(this, pressedColor, () -> this.pressedColor, this::setElementPressedColor);
+        CrownColorPickerBinder.bind(this, backgroundColor, () -> this.backgroundColor, this::setElementBackgroundColor);
 
         copy.setOnClickListener(v -> {
             ContentValues cv = new ContentValues();
@@ -1165,6 +1176,21 @@ public class WheelPad extends Element {
         invalidate();
     }
 
+    protected void setElementNormalTextColor(int normalTextColor) {
+        this.normalTextColor = normalTextColor;
+        invalidate();
+    }
+
+    protected void setElementPressedTextColor(int pressedTextColor) {
+        this.pressedTextColor = pressedTextColor;
+        invalidate();
+    }
+
+    protected void setElementCenterTextColor(int centerTextColor) {
+        this.centerTextColor = centerTextColor;
+        invalidate();
+    }
+
     protected void setCenterText(String text) {
         this.centerText = text;
         this.isPopupMode = !text.isEmpty();
@@ -1181,7 +1207,7 @@ public class WheelPad extends Element {
 
     private String getDisplayStringForValue(String value) {
         if (value == null || value.isEmpty() || value.equals("null")) {
-            return "空";
+            return getContext().getString(R.string.empty_value);
         }
 
         if (value.startsWith("gb")) {
@@ -1189,12 +1215,12 @@ public class WheelPad extends Element {
                 long elementId = Long.parseLong(value.substring(2));
                 Element element = elementController.findElementById(elementId);
                 if (element instanceof GroupButton) {
-                    return "[组] " + ((GroupButton) element).getText();
+                    return getContext().getString(R.string.wheel_value_group, ((GroupButton) element).getText());
                 } else {
-                    return "[无效的组]";
+                    return getContext().getString(R.string.wheel_value_invalid_group);
                 }
             } catch (NumberFormatException e) {
-                return "[格式错误的组ID]";
+                return getContext().getString(R.string.wheel_value_bad_group_id);
             }
         }
 
@@ -1222,7 +1248,7 @@ public class WheelPad extends Element {
 
         if (currentKeys.isEmpty()) {
             TextView emptyText = new TextView(context);
-            emptyText.setText("当前无按键，请点击下方按钮添加");
+            emptyText.setText(R.string.wheel_empty_keys);
             emptyText.setPadding(0, 10, 0, 10);
             keysContainer.addView(emptyText);
         } else if (isGroup) {
@@ -1234,7 +1260,9 @@ public class WheelPad extends Element {
                     final GroupButton groupButton = (GroupButton) element;
                     final SuperPageLayout groupButtonSettingsPage = groupButton.getInfoPage();
                     Button groupBtnDisplay = new Button(context);
-                    groupBtnDisplay.setText("[组] " + groupButton.getText() + " (单击设置/长按删除)");
+                    groupBtnDisplay.setText(context.getString(
+                            R.string.wheel_group_button_action,
+                            context.getString(R.string.wheel_value_group, groupButton.getText())));
                     groupBtnDisplay.setAllCaps(false);
 
                     // 单击打开组按键设置页
@@ -1261,7 +1289,7 @@ public class WheelPad extends Element {
                         // 更新UI以反映移除
                         updateKeyCombinationDisplay(keysContainer, currentKeys, addButton, addGroupButton, dialog);
 
-                        Toast.makeText(context, "已移除组按键，点击确定保存设置", Toast.LENGTH_SHORT).show();
+                        Toast.makeText(context, R.string.wheel_group_removed, Toast.LENGTH_SHORT).show();
 
                         return true; // 返回true表示事件已被消费
                     });
@@ -1270,7 +1298,7 @@ public class WheelPad extends Element {
                     // 如果找到了元素但类型不对，也显示错误
                     currentKeys.clear();
                     TextView errorText = new TextView(context);
-                    errorText.setText("错误：ID " + elementId + " 不是一个组按键。");
+                    errorText.setText(context.getString(R.string.wheel_group_wrong_type, elementId));
                     keysContainer.addView(errorText);
                     updateKeyCombinationDisplay(keysContainer, currentKeys, addButton, addGroupButton, dialog);
                 }
@@ -1278,7 +1306,7 @@ public class WheelPad extends Element {
                 // 如果解析或查找失败，显示错误信息并允许重新选择
                 currentKeys.clear();
                 TextView errorText = new TextView(context);
-                errorText.setText("错误：关联的组按键已不存在，请重新设置。");
+                errorText.setText(R.string.wheel_group_missing);
                 keysContainer.addView(errorText);
             }
         } else {
@@ -1286,7 +1314,9 @@ public class WheelPad extends Element {
             for (int i = 0; i < currentKeys.size(); i++) {
                 final int keyIndex = i;
                 TextView keyView = new TextView(context);
-                keyView.setText(pageDeviceController.getKeyNameByValue(currentKeys.get(keyIndex)) + "  (点击移除)");
+                keyView.setText(context.getString(
+                        R.string.wheel_key_tap_remove,
+                        pageDeviceController.getKeyNameByValue(currentKeys.get(keyIndex))));
                 keyView.setTextSize(16);
                 keyView.setBackgroundResource(R.drawable.enabled_square);
                 keyView.setPadding(20, 15, 20, 15);
@@ -1307,8 +1337,8 @@ public class WheelPad extends Element {
     }
 
     private void showKeyCombinationDialog(Context context, final int index, final TextView valueText) {
-        AlertDialog.Builder builder = new AlertDialog.Builder(context);
-        builder.setTitle("编辑按键(可组合) (分区 " + (index + 1) + ")");
+        AlertDialog.Builder builder = new AlertDialog.Builder(context, R.style.AppDialogStyle);
+        builder.setTitle(context.getString(R.string.wheel_edit_keys_title, index + 1));
 
         LinearLayout dialogLayout = new LinearLayout(context);
         dialogLayout.setOrientation(LinearLayout.VERTICAL);
@@ -1344,13 +1374,13 @@ public class WheelPad extends Element {
         buttonContainer.setGravity(Gravity.CENTER);
 
         Button addButton = new Button(context);
-        addButton.setText("添加按键");
+        addButton.setText(R.string.wheel_add_key);
         LinearLayout.LayoutParams buttonParams = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1.0f);
         buttonParams.setMarginEnd(10);
         addButton.setLayoutParams(buttonParams);
 
         Button addGroupButton = new Button(context);
-        addGroupButton.setText("添加组按键");
+        addGroupButton.setText(R.string.wheel_add_group_key);
         LinearLayout.LayoutParams groupButtonParams = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1.0f);
         groupButtonParams.setMarginStart(10);
         addGroupButton.setLayoutParams(groupButtonParams);
@@ -1367,7 +1397,7 @@ public class WheelPad extends Element {
         updateKeyCombinationDisplay(keysContainer, currentKeys, addButton, addGroupButton, dialog);
         dialog.setView(dialogLayout);
 
-        dialog.setButton(AlertDialog.BUTTON_POSITIVE, "确定", (d, which) -> {
+        dialog.setButton(AlertDialog.BUTTON_POSITIVE, context.getString(R.string.dialog_button_ok), (d, which) -> {
             String finalValue;
             if (currentKeys.isEmpty()) {
                 finalValue = "null";
@@ -1380,7 +1410,7 @@ public class WheelPad extends Element {
             valueText.setText(getDisplayStringForValue(finalValue));
             save();
         });
-        dialog.setButton(AlertDialog.BUTTON_NEGATIVE, "取消", (d, which) -> d.dismiss());
+        dialog.setButton(AlertDialog.BUTTON_NEGATIVE, context.getString(R.string.dialog_button_cancel), (d, which) -> d.dismiss());
 
         // "添加组按键" 的点击逻辑
         addGroupButton.setOnClickListener(v -> {
@@ -1397,11 +1427,11 @@ public class WheelPad extends Element {
             for (GroupButton gb : groupButtons) {
                 options.add(gb.getText() + " (ID: " + gb.elementId + ")");
             }
-            options.add("创建新的组按键...");
+            options.add(context.getString(R.string.wheel_create_new_group));
 
             // 3. 显示选择对话框
-            new AlertDialog.Builder(context)
-                    .setTitle("选择一个组按键")
+            AlertDialog groupSelectionDialog = new AlertDialog.Builder(context, R.style.AppDialogStyle)
+                    .setTitle(R.string.wheel_select_group_title)
                     .setItems(options.toArray(new String[0]), (selectionDialog, which) -> {
 
                         String selectedValue = null;
@@ -1434,12 +1464,13 @@ public class WheelPad extends Element {
 
                             // 如果是新创建的，提示用户去配置
                             if (newElementToEdit != null) {
-                                Toast.makeText(context, "新组按键已创建并关联，请进行配置", Toast.LENGTH_LONG).show();
+                                Toast.makeText(context, R.string.wheel_new_group_created, Toast.LENGTH_LONG).show();
                                 elementController.toggleInfoPage(newElementToEdit.getInfoPage());
                             }
                         }
                     })
                     .show();
+            AppDialogStyler.INSTANCE.applySystemChoiceList(groupSelectionDialog, context);
         });
 
         addButton.setOnClickListener(v -> {
@@ -1456,6 +1487,7 @@ public class WheelPad extends Element {
         });
 
         dialog.show();
+        AppDialogStyler.INSTANCE.apply(dialog, context);
     }
 
     private void updateValuesContainerUI() {
@@ -1468,7 +1500,7 @@ public class WheelPad extends Element {
             ElementEditText nameInput = valueView.findViewById(R.id.item_key_value_name);
             TextView valueText = valueView.findViewById(R.id.item_key_value_value);
 
-            title.setText("分区 " + (i + 1));
+            title.setText(getContext().getString(R.string.wheel_section_title, i + 1));
             final int index = i;
 
             if (index < segmentNames.size()) {
@@ -1491,38 +1523,4 @@ public class WheelPad extends Element {
         }
     }
 
-    private interface IntSupplier {
-        int get();
-    }
-
-    private interface IntConsumer {
-        void accept(int value);
-    }
-
-    private void updateColorDisplay(ElementEditText colorDisplay, int color) {
-        colorDisplay.setTextWithNoTextChangedCallBack(String.format("%08X", color));
-        colorDisplay.setBackgroundColor(color);
-        double luminance = (0.299 * Color.red(color) + 0.587 * Color.green(color) + 0.114 * Color.blue(color)) / 255;
-        colorDisplay.setTextColor(luminance > 0.5 ? Color.BLACK : Color.WHITE);
-        colorDisplay.setGravity(Gravity.CENTER);
-    }
-
-    private void setupColorPickerButton(ElementEditText colorDisplay, IntSupplier initialColorFetcher, IntConsumer colorUpdater) {
-        colorDisplay.setFocusable(false);
-        colorDisplay.setCursorVisible(false);
-        colorDisplay.setKeyListener(null);
-        updateColorDisplay(colorDisplay, initialColorFetcher.get());
-        colorDisplay.setOnClickListener(v -> {
-            new ColorPickerDialog(
-                    getContext(),
-                    initialColorFetcher.get(),
-                    true,
-                    newColor -> {
-                        colorUpdater.accept(newColor);
-                        save();
-                        updateColorDisplay(colorDisplay, newColor);
-                    }
-            ).show();
-        });
-    }
 }

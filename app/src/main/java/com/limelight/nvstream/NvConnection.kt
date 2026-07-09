@@ -4,6 +4,7 @@ import android.app.ActivityManager
 import android.content.Context
 import android.net.ConnectivityManager
 import android.os.Build
+import android.os.SystemClock
 import android.provider.Settings
 
 import com.limelight.utils.NetHelper
@@ -25,15 +26,18 @@ import javax.crypto.SecretKey
 import org.xmlpull.v1.XmlPullParserException
 
 import com.limelight.LimeLog
+import com.limelight.R
 import com.limelight.nvstream.av.audio.AudioRenderer
 import com.limelight.nvstream.av.video.VideoDecoderRenderer
 import com.limelight.nvstream.http.ComputerDetails
 import com.limelight.nvstream.http.HostHttpResponseException
 import com.limelight.nvstream.http.LimelightCryptoProvider
+import com.limelight.nvstream.http.NvApp
 import com.limelight.nvstream.http.NvHTTP
 import com.limelight.nvstream.http.PairingManager
 import com.limelight.nvstream.input.MouseButtonPacket
 import com.limelight.nvstream.jni.MoonBridge
+import com.limelight.utils.HdrCapabilityHelper
 
 open class NvConnection(
     private val appContext: Context,
@@ -44,7 +48,8 @@ open class NvConnection(
     config: StreamConfiguration,
     private val cryptoProvider: LimelightCryptoProvider,
     serverCert: X509Certificate?,
-    displayName: String? = null
+    displayName: String? = null,
+    forceResumeCurrentSession: Boolean = false
 ) {
     private val clientName: String =
         pairName.ifEmpty {
@@ -62,6 +67,7 @@ open class NvConnection(
         context.streamConfig = config
         context.serverCert = serverCert
         context.displayName = displayName
+        context.forceResumeCurrentSession = forceResumeCurrentSession
 
         context.riKey = generateRiAesKey()
         context.riKeyId = generateRiKeyId()
@@ -71,18 +77,32 @@ open class NvConnection(
             context.maxBrightness = config.hdrManualMaxBrightness
             context.maxAverageBrightness = config.hdrManualMaxAvgBrightness
             LimeLog.info(
-                "Using manual HDR brightness: min=${context.minBrightness}, " +
+                "使用手动 HDR 亮度：min=${context.minBrightness}, " +
                     "max=${context.maxBrightness}, maxAvg=${context.maxAverageBrightness}"
             )
         } else {
-            val brightnessRange = com.limelight.utils.HdrCapabilityHelper.getBrightnessRangeForLaunch(appContext)
+            val brightnessRange = HdrCapabilityHelper.getBrightnessRangeForLaunch(appContext).let {
+                if (config.hdrBrightnessOverride) {
+                    HdrCapabilityHelper.applyBrightnessOverride(it, config.hdrPeakBrightnessNits)
+                } else {
+                    it
+                }
+            }
             context.minBrightness = brightnessRange[0].toFloat()
             context.maxBrightness = brightnessRange[1].toInt()
             context.maxAverageBrightness = brightnessRange[2].toInt()
-            LimeLog.info(
-                "Using auto HDR brightness: min=${context.minBrightness}, " +
-                    "max=${context.maxBrightness}, maxAvg=${context.maxAverageBrightness}"
-            )
+
+            if (config.hdrBrightnessOverride) {
+                LimeLog.info(
+                    "HDR 亮度校准覆盖：min=${context.minBrightness}, " +
+                        "max=${context.maxBrightness}, avg=${context.maxAverageBrightness} nits"
+                )
+            } else {
+                LimeLog.info(
+                    "使用自动 HDR 亮度：min=${context.minBrightness}, " +
+                        "max=${context.maxBrightness}, maxAvg=${context.maxAverageBrightness}"
+                )
+            }
         }
     }
 
@@ -200,22 +220,34 @@ open class NvConnection(
         return StreamConfiguration.STREAM_CFG_AUTO
     }
 
+    private inline fun <T> timeConnectionStep(name: String, block: () -> T): T {
+        val startTime = SystemClock.elapsedRealtime()
+        return try {
+            block()
+        } finally {
+            LimeLog.info("Connection step '$name' completed in ${SystemClock.elapsedRealtime() - startTime}ms")
+        }
+    }
+
     @Throws(XmlPullParserException::class, IOException::class, InterruptedException::class)
     private fun startApp(): Boolean {
         val h = NvHTTP(context.serverAddress, context.httpsPort, uniqueId, clientName, context.serverCert, cryptoProvider)
         val connListener = context.connListener
         val streamConfig = context.streamConfig
 
-        val serverInfo = h.getServerInfo(true)
+        val serverInfo = timeConnectionStep("serverinfo") { h.getServerInfo(true) }
 
         context.serverAppVersion = h.getServerVersion(serverInfo)
 
         val details = h.getComputerDetails(serverInfo)
+        details.serverCert = context.serverCert
         context.isNvidiaServerSoftware = details.nvidiaServer
+        context.supportsDesktopSpecialApp = details.supportsDesktopSpecialApp
 
         context.serverGfeVersion = h.getGfeVersion(serverInfo)
 
-        if (h.getPairState(serverInfo) != PairingManager.PairState.PAIRED) {
+        if (details.pairState != PairingManager.PairState.PAIRED) {
+            LimeLog.warning("Rejecting NOT_PAIRED serverinfo while starting stream; trusted=${details.serverInfoTrustedByCert}")
             connListener.displayMessage("Device not paired with computer")
             return false
         }
@@ -248,7 +280,9 @@ open class NvConnection(
         }
 
         if (streamConfig.remote == StreamConfiguration.STREAM_CFG_AUTO) {
-            context.negotiatedRemoteStreaming = detectServerConnectionType()
+            context.negotiatedRemoteStreaming = timeConnectionStep("connection type detection") {
+                detectServerConnectionType()
+            }
             context.negotiatedPacketSize =
                 if (context.negotiatedRemoteStreaming == StreamConfiguration.STREAM_CFG_REMOTE)
                     1024 else streamConfig.maxPacketSize
@@ -267,47 +301,70 @@ open class NvConnection(
             }
         }
 
-        if (h.getCurrentGame(serverInfo) != 0) {
-            try {
-                if (h.getCurrentGame(serverInfo) == app.appId) {
-                    if (!h.launchApp(context, "resume", app.appId, context.negotiatedHdr)) {
-                        connListener.displayMessage("Failed to resume existing session")
-                        return false
-                    }
-                } else {
-                    return quitAndLaunch(h, context)
-                }
-            } catch (e: HostHttpResponseException) {
-                when (e.getErrorCode()) {
-                    470 -> {
-                        connListener.displayMessage(
-                            "This session wasn't started by this device," +
-                                    " so it cannot be resumed. End streaming on the original " +
-                                    "device or the PC itself and try again. (Error code: ${e.getErrorCode()})"
-                        )
-                        return false
-                    }
-                    525 -> {
-                        connListener.displayMessage(
-                            "The application is minimized. Resume it on the PC manually or " +
-                                    "quit the session and start streaming again."
-                        )
-                        return false
-                    }
-                    else -> throw e
-                }
-            }
+        val currentGameId = h.getCurrentGame(serverInfo)
 
-            LimeLog.info("Resumed existing game session")
-            return true
-        } else {
-            return launchNotRunningApp(h, context)
+        if (context.forceResumeCurrentSession) {
+            val resumeAppId = if (currentGameId != 0) currentGameId else app.appId
+            return timeConnectionStep("resume app") { resumeExistingSession(h, context, resumeAppId) }
         }
+
+        if (currentGameId != 0) {
+            return if (currentGameId == app.appId) {
+                timeConnectionStep("resume app") { resumeExistingSession(h, context, app.appId) }
+            } else {
+                timeConnectionStep("quit and launch app") { quitAndLaunch(h, context) }
+            }
+        }
+
+        return timeConnectionStep("launch app") { launchNotRunningApp(h, context) }
+    }
+
+    @Throws(IOException::class, XmlPullParserException::class, InterruptedException::class)
+    private fun resumeExistingSession(h: NvHTTP, context: ConnectionContext, appId: Int): Boolean {
+        val connListener = context.connListener
+
+        if (!ensureDesktopSpecialAppSupported(context, appId)) {
+            return false
+        }
+
+        try {
+            if (!h.launchApp(context, "resume", appId, context.negotiatedHdr)) {
+                connListener.displayMessage("Failed to resume existing session")
+                return false
+            }
+        } catch (e: HostHttpResponseException) {
+            when (e.getErrorCode()) {
+                470 -> {
+                    connListener.displayMessage(
+                        "This session wasn't started by this device," +
+                                " so it cannot be resumed. End streaming on the original " +
+                                "device or the PC itself and try again. (Error code: ${e.getErrorCode()})"
+                    )
+                    return false
+                }
+                525 -> {
+                    connListener.displayMessage(
+                        "The application is minimized. Resume it on the PC manually or " +
+                                "quit the session and start streaming again."
+                    )
+                    return false
+                }
+                else -> throw e
+            }
+        }
+
+        LimeLog.info("Resumed existing game session")
+        return true
     }
 
     @Throws(IOException::class, XmlPullParserException::class, InterruptedException::class)
     protected fun quitAndLaunch(h: NvHTTP, context: ConnectionContext): Boolean {
         val connListener = context.connListener
+
+        if (!ensureDesktopSpecialAppSupported(context, context.streamConfig.app.appId)) {
+            return false
+        }
+
         try {
             if (!h.quitApp()) {
                 connListener.displayMessage("Failed to quit previous session! You must quit it manually")
@@ -331,6 +388,10 @@ open class NvConnection(
 
     @Throws(IOException::class, XmlPullParserException::class, InterruptedException::class)
     private fun launchNotRunningApp(h: NvHTTP, context: ConnectionContext): Boolean {
+        if (!ensureDesktopSpecialAppSupported(context, context.streamConfig.app.appId)) {
+            return false
+        }
+
         if (!h.launchApp(context, "launch", context.streamConfig.app.appId, context.negotiatedHdr)) {
             context.connListener.displayMessage("Failed to launch application")
             return false
@@ -338,6 +399,15 @@ open class NvConnection(
 
         LimeLog.info("Launched new game session")
         return true
+    }
+
+    private fun ensureDesktopSpecialAppSupported(context: ConnectionContext, appId: Int): Boolean {
+        if (appId != NvApp.DESKTOP_APP_ID || context.supportsDesktopSpecialApp) {
+            return true
+        }
+
+        context.connListener.displayMessage(appContext.getString(R.string.error_desktop_special_app_unsupported))
+        return false
     }
 
     fun start(audioRenderer: AudioRenderer, videoDecoderRenderer: VideoDecoderRenderer, connectionListener: NvConnectionListener) {
@@ -350,7 +420,7 @@ open class NvConnection(
             context.connListener.stageStarting(appName)
 
             try {
-                if (!startApp()) {
+                if (!timeConnectionStep("app negotiation") { startApp() }) {
                     context.connListener.stageFailed(appName, 0, 0)
                     return@Thread
                 }
@@ -380,7 +450,12 @@ open class NvConnection(
             ib.putInt(context.riKeyId)
 
             try {
+                val waitStartTime = SystemClock.elapsedRealtime()
                 connectionAllowed.acquire()
+                val waitMs = SystemClock.elapsedRealtime() - waitStartTime
+                if (waitMs > 10) {
+                    LimeLog.info("Connection step 'connection slot wait' completed in ${waitMs}ms")
+                }
             } catch (e: InterruptedException) {
                 context.connListener.displayMessage(e.message ?: "")
                 context.connListener.stageFailed(appName, 0, 0)
@@ -389,26 +464,28 @@ open class NvConnection(
 
             synchronized(MoonBridge::class.java) {
                 MoonBridge.setupBridge(videoDecoderRenderer, audioRenderer, connectionListener)
-                val ret = MoonBridge.startConnection(
-                    context.serverAddress.address,
-                    context.serverAppVersion, context.serverGfeVersion, context.rtspSessionUrl,
-                    context.serverCodecModeSupport,
-                    context.negotiatedWidth, context.negotiatedHeight,
-                    context.streamConfig.refreshRate, context.streamConfig.bitrate,
-                    context.negotiatedPacketSize, context.negotiatedRemoteStreaming,
-                    context.streamConfig.audioConfiguration.toInt(),
-                    context.streamConfig.supportedVideoFormats,
-                    context.streamConfig.clientRefreshRateX100,
-                    context.riKey.encoded, ib.array(),
-                    context.videoCapabilities,
-                    context.streamConfig.colorSpace,
-                    context.streamConfig.colorRange,
-                    context.streamConfig.hdrMode,
-                    context.streamConfig.getEnableMic(),
-                    context.streamConfig.getControlOnly(),
-                    context.streamConfig.audioCodec,
-                    context.streamConfig.audioBitrate
-                )
+                val ret = timeConnectionStep("native connection") {
+                    MoonBridge.startConnection(
+                        context.serverAddress.address,
+                        context.serverAppVersion, context.serverGfeVersion, context.rtspSessionUrl,
+                        context.serverCodecModeSupport,
+                        context.negotiatedWidth, context.negotiatedHeight,
+                        context.streamConfig.refreshRate, context.streamConfig.bitrate,
+                        context.negotiatedPacketSize, context.negotiatedRemoteStreaming,
+                        context.streamConfig.audioConfiguration.toInt(),
+                        context.streamConfig.supportedVideoFormats,
+                        context.streamConfig.clientRefreshRateX100,
+                        context.riKey.encoded, ib.array(),
+                        context.videoCapabilities,
+                        context.streamConfig.colorSpace,
+                        context.streamConfig.colorRange,
+                        context.streamConfig.hdrMode,
+                        context.streamConfig.getEnableMic(),
+                        context.streamConfig.getControlOnly(),
+                        context.streamConfig.audioCodec,
+                        context.streamConfig.audioBitrate
+                    )
+                }
                 if (ret != 0) {
                     connectionAllowed.release()
                     return@synchronized
@@ -497,6 +574,38 @@ open class NvConnection(
     ): Int {
         return if (!isMonkey) {
             MoonBridge.sendTouchEvent(eventType, pointerId, x, y, pressureOrDistance, contactAreaMajor, contactAreaMinor, rotation)
+        } else {
+            MoonBridge.LI_ERR_UNSUPPORTED
+        }
+    }
+
+    fun sendTouchpadEvent(
+        eventType: Byte, pointerId: Int, x: Float, y: Float, pressure: Float,
+        contactAreaMajor: Float, contactAreaMinor: Float, rotation: Short,
+        deviceWidthMm: Short, deviceHeightMm: Short, buttonState: Byte
+    ): Int {
+        return if (!isMonkey) {
+            MoonBridge.sendTouchpadEvent(
+                eventType, pointerId, x, y, pressure,
+                contactAreaMajor, contactAreaMinor, rotation,
+                deviceWidthMm, deviceHeightMm, buttonState
+            )
+        } else {
+            MoonBridge.LI_ERR_UNSUPPORTED
+        }
+    }
+
+    fun sendTouchpadFrameEvent(
+        contactCount: Byte, eventTypes: ByteArray, pointerIds: IntArray,
+        x: FloatArray, y: FloatArray, pressure: FloatArray, rotation: Short,
+        deviceWidthMm: Short, deviceHeightMm: Short, buttonState: Byte
+    ): Int {
+        return if (!isMonkey) {
+            MoonBridge.sendTouchpadFrameEvent(
+                contactCount, eventTypes, pointerIds,
+                x, y, pressure, rotation,
+                deviceWidthMm, deviceHeightMm, buttonState
+            )
         } else {
             MoonBridge.LI_ERR_UNSUPPORTED
         }

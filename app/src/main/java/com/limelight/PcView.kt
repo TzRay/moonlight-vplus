@@ -18,6 +18,7 @@ import com.bumptech.glide.request.RequestOptions
 import com.limelight.binding.PlatformBinding
 import com.limelight.binding.crypto.AndroidCryptoProvider
 import com.limelight.computers.ComputerManagerService
+import com.limelight.computers.PairStatePreflight
 import com.limelight.dialogs.AddressSelectionDialog
 import com.limelight.grid.PcGridAdapter
 import com.limelight.grid.assets.DiskAssetLoader
@@ -36,15 +37,18 @@ import com.limelight.services.KeyboardAccessibilityService
 import com.limelight.ui.AdapterFragment
 import com.limelight.ui.AdapterFragmentCallbacks
 import com.limelight.utils.AnalyticsManager
+import com.limelight.utils.AppDialogStyler
 import com.limelight.utils.AppCacheManager
 import com.limelight.utils.CacheHelper
+import com.limelight.utils.ConfigurationSyncScheduler
 import com.limelight.utils.Dialog
-import com.limelight.utils.EasyTierController
+import com.limelight.utils.easytier.EasyTierController
 import com.limelight.utils.HelpLauncher
 import com.limelight.utils.Iperf3Tester
 import com.limelight.utils.NetHelper
 import com.limelight.utils.ServerHelper
 import com.limelight.utils.ShortcutHelper
+import com.limelight.utils.SpinnerDialog
 import com.limelight.utils.UiHelper
 import com.limelight.utils.UpdateManager
 import com.squareup.seismic.ShakeDetector
@@ -78,9 +82,12 @@ import android.content.IntentFilter
 import android.content.ServiceConnection
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
+import android.content.res.ColorStateList
 import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.Color
+import android.graphics.Typeface
+import android.graphics.drawable.ColorDrawable
 import android.hardware.SensorManager
 import android.net.Uri
 import android.net.VpnService
@@ -103,11 +110,13 @@ import android.util.LruCache
 import android.view.ContextMenu
 import android.view.ContextMenu.ContextMenuInfo
 import android.view.GestureDetector
+import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.Menu
 import android.view.MenuItem
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewGroup
 import android.view.animation.AnimationUtils
 import android.view.animation.LayoutAnimationController
 import android.widget.AbsListView
@@ -116,6 +125,8 @@ import android.widget.AdapterView.AdapterContextMenuInfo
 import android.widget.GridView
 import android.widget.ImageButton
 import android.widget.ImageView
+import android.widget.LinearLayout
+import android.widget.PopupWindow
 import android.widget.RelativeLayout
 import android.widget.Space
 import android.widget.TextView
@@ -127,6 +138,7 @@ import javax.microedition.khronos.opengles.GL10
 
 import jp.wasabeef.glide.transformations.BlurTransformation
 import jp.wasabeef.glide.transformations.ColorFilterTransformation
+import androidx.core.content.ContextCompat
 import androidx.core.content.edit
 import androidx.core.content.pm.PackageInfoCompat
 import androidx.core.net.toUri
@@ -138,6 +150,8 @@ class PcView : Activity(), AdapterFragmentCallbacks, ShakeDetector.Listener, Eas
     // Constants
     companion object {
         private const val REFRESH_DEBOUNCE_DELAY = 150L
+        private const val STARTUP_UPDATE_CHECK_DELAY = 5000L
+        private const val STARTUP_DIALOG_GAP_DELAY = 250L
         private const val SHAKE_DEBOUNCE_INTERVAL = 3000L
         private const val MAX_DAILY_REFRESH = 7
         private const val VPN_PERMISSION_REQUEST_CODE = 101
@@ -183,7 +197,11 @@ class PcView : Activity(), AdapterFragmentCallbacks, ShakeDetector.Listener, Eas
     private var inForeground = false
     private var completeOnCreateCalled = false
     private var pendingSplashFadeIn = true
+    private var backgroundSourceDialogShowing = false
+    private var startupUpdateCheckPending = false
+    private var startupUpdateCheckRan = false
     private var lastShakeTime = 0L
+    private var activeSceneNumber: Int? = null
 
     // Helpers
     private lateinit var shortcutHelper: ShortcutHelper
@@ -288,6 +306,7 @@ class PcView : Activity(), AdapterFragmentCallbacks, ShakeDetector.Listener, Eas
             set.start()
         }
         super.onCreate(savedInstanceState)
+        ConfigurationSyncScheduler.runNow(this)
 
         //自动获取无障碍权限
         try {
@@ -417,11 +436,7 @@ class PcView : Activity(), AdapterFragmentCallbacks, ShakeDetector.Listener, Eas
         analyticsManager = AnalyticsManager.getInstance(this)
         analyticsManager?.logAppLaunch()
         // 延后 5 秒再做更新检查，避免一打开 PcView 就被对话框打断浏览
-        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-            if (!isFinishing && !isDestroyed) {
-                UpdateManager.checkForUpdatesOnStartup(this)
-            }
-        }, 5000)
+        scheduleStartupUpdateCheck()
 
         bindService(Intent(this, ComputerManagerService::class.java), serviceConnection,
             BIND_AUTO_CREATE
@@ -494,20 +509,199 @@ class PcView : Activity(), AdapterFragmentCallbacks, ShakeDetector.Listener, Eas
 
     private fun setupButtons() {
         val settingsButton = findViewById<ImageButton>(R.id.settingsButton)
-        val restoreSessionButton = findViewById<ImageButton>(R.id.restoreSessionButton)
         val aboutButton = findViewById<ImageButton>(R.id.aboutButton)
         val easyTierButton = findViewById<ImageButton>(R.id.easyTierControlButton)
-        val toggleUnpairedButton = findViewById<ImageButton>(R.id.toggleUnpairedButton)
+        val toolbarMenuButton = findViewById<ImageButton>(R.id.pcToolbarMenuButton)
 
         settingsButton.setOnClickListener { startActivity(Intent(this, StreamSettings::class.java)) }
-        restoreSessionButton.setOnClickListener { restoreLastSession() }
 
         aboutButton?.setOnClickListener { showAboutDialog() }
         easyTierButton?.setOnClickListener { showEasyTierControlDialog() }
-        toggleUnpairedButton?.let { btn ->
-            updateToggleUnpairedButtonIcon(btn)
-            btn.setOnClickListener { toggleUnpairedDevices(btn) }
+        toolbarMenuButton?.setOnClickListener { showPcToolbarMenu(it) }
+    }
+
+    private fun showPcToolbarMenu(anchor: View) {
+        val isLandscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+        val popupWidth = dpToPx(if (isLandscape) 256 else 236)
+
+        val menu = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dpToPx(4), dpToPx(6), dpToPx(4), dpToPx(6))
+            background = ContextCompat.getDrawable(this@PcView, R.drawable.pc_toolbar_menu_panel_bg)
         }
+
+        val popup = PopupWindow(menu, popupWidth, ViewGroup.LayoutParams.WRAP_CONTENT, true).apply {
+            isOutsideTouchable = true
+            setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                elevation = dpToPx(8).toFloat()
+            }
+        }
+
+        addToolbarMenuItem(
+            menu,
+            R.drawable.ic_restore,
+            getString(R.string.pcview_toolbar_restore_session)
+        ) {
+            popup.dismiss()
+            restoreLastSession()
+        }
+
+        val showUnpaired = pcGridAdapter.isShowUnpairedDevices()
+        addToolbarMenuItem(
+            menu,
+            if (showUnpaired) R.drawable.ic_visibility_off else R.drawable.ic_visibility,
+            getString(
+                if (showUnpaired) R.string.pcview_toolbar_toggle_unpaired_hide
+                else R.string.pcview_toolbar_toggle_unpaired_show
+            )
+        ) {
+            popup.dismiss()
+            toggleUnpairedDevices()
+        }
+
+        addToolbarMenuItem(
+            menu,
+            R.drawable.ic_theme_mode,
+            getString(R.string.pcview_toolbar_theme),
+            getThemeModeLabel(UiHelper.getAppThemeMode(this)),
+            accent = true
+        ) {
+            popup.dismiss()
+            showThemeModeDialog()
+        }
+
+        menu.measure(
+            View.MeasureSpec.makeMeasureSpec(popupWidth, View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED)
+        )
+
+        val anchorLocation = IntArray(2)
+        anchor.getLocationOnScreen(anchorLocation)
+        val screenWidth = resources.displayMetrics.widthPixels
+        val screenHeight = resources.displayMetrics.heightPixels
+        val menuHeight = menu.measuredHeight
+        val anchorLeft = anchorLocation[0]
+        val anchorTop = anchorLocation[1]
+        val anchorRight = anchorLeft + anchor.width
+        val anchorBottom = anchorTop + anchor.height
+
+        val popupX = if (isLandscape) {
+            anchorRight
+        } else {
+            anchorRight - popupWidth
+        }.coerceIn(0, (screenWidth - popupWidth).coerceAtLeast(0))
+        val desiredY = if (anchorBottom + menuHeight > screenHeight) {
+            anchorTop - menuHeight
+        } else {
+            anchorBottom
+        }
+        val popupY = desiredY.coerceIn(0, (screenHeight - menuHeight).coerceAtLeast(0))
+        popup.showAtLocation(anchor.rootView, Gravity.NO_GRAVITY, popupX, popupY)
+    }
+
+    private fun addToolbarMenuItem(
+        parent: LinearLayout,
+        iconRes: Int,
+        title: String,
+        subtitle: String? = null,
+        accent: Boolean = false,
+        onClick: () -> Unit
+    ) {
+        val iconColor = ColorStateList.valueOf(ContextCompat.getColor(
+            this,
+            if (accent) R.color.app_dialog_accent_color else R.color.ui_shell_text_secondary
+        ))
+        val titleColor = ContextCompat.getColor(this, R.color.ui_shell_text_primary)
+        val subtitleColor = ContextCompat.getColor(this, R.color.ui_shell_text_secondary)
+
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            isClickable = true
+            isFocusable = true
+            background = ContextCompat.getDrawable(this@PcView, R.drawable.pc_toolbar_menu_item_bg)
+            minimumHeight = dpToPx(if (subtitle == null) 46 else 50)
+            setPadding(dpToPx(10), dpToPx(6), dpToPx(10), dpToPx(6))
+            setOnClickListener { onClick() }
+        }
+
+        row.addView(ImageView(this).apply {
+            setImageResource(iconRes)
+            imageTintList = iconColor
+        }, LinearLayout.LayoutParams(dpToPx(22), dpToPx(22)).apply {
+            marginEnd = dpToPx(10)
+        })
+
+        row.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(TextView(this@PcView).apply {
+                text = title
+                textSize = 14f
+                typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+                setTextColor(titleColor)
+                includeFontPadding = false
+            }, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ))
+            if (subtitle != null) {
+                addView(TextView(this@PcView).apply {
+                    text = subtitle
+                    textSize = 11f
+                    setTextColor(subtitleColor)
+                    includeFontPadding = false
+                    setPadding(0, dpToPx(3), 0, 0)
+                }, LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ))
+            }
+        }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+
+        parent.addView(row, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply {
+            topMargin = dpToPx(1)
+            bottomMargin = dpToPx(1)
+        })
+    }
+
+    private fun showThemeModeDialog() {
+        val modes = arrayOf(
+            UiHelper.THEME_MODE_SYSTEM,
+            UiHelper.THEME_MODE_LIGHT,
+            UiHelper.THEME_MODE_DARK
+        )
+        val labels = modes.map { getThemeModeLabel(it) }.toTypedArray()
+        val checked = modes.indexOf(UiHelper.getAppThemeMode(this)).coerceAtLeast(0)
+
+        val dialog = AlertDialog.Builder(this, R.style.AppDialogStyle)
+            .setTitle(R.string.pcview_theme_dialog_title)
+            .setSingleChoiceItems(labels, checked) { dialogInterface, which ->
+                val mode = modes[which]
+                UiHelper.setAppThemeMode(this, mode)
+                showToast(getString(R.string.pcview_theme_applied, labels[which]))
+                dialogInterface.dismiss()
+                recreate()
+            }
+            .setNegativeButton(R.string.dialog_button_close, null)
+            .create()
+        dialog.show()
+        AppDialogStyler.applySystemChoiceList(dialog, this)
+    }
+
+    private fun getThemeModeLabel(mode: String): String {
+        return when (mode) {
+            UiHelper.THEME_MODE_LIGHT -> getString(R.string.pcview_theme_light)
+            UiHelper.THEME_MODE_DARK -> getString(R.string.pcview_theme_dark)
+            else -> getString(R.string.pcview_theme_follow_system)
+        }
+    }
+
+    private fun dpToPx(value: Int): Int {
+        return (value * resources.displayMetrics.density + 0.5f).toInt()
     }
 
     private fun setupAdapterFragment() {
@@ -629,6 +823,31 @@ class PcView : Activity(), AdapterFragmentCallbacks, ShakeDetector.Listener, Eas
         }
     }
 
+    private fun scheduleStartupUpdateCheck(delayMs: Long = STARTUP_UPDATE_CHECK_DELAY) {
+        refreshHandler.postDelayed({ runStartupUpdateCheckWhenIdle() }, delayMs)
+    }
+
+    private fun runStartupUpdateCheckWhenIdle() {
+        if (startupUpdateCheckRan || isFinishing || isDestroyed) {
+            return
+        }
+        if (backgroundSourceDialogShowing) {
+            startupUpdateCheckPending = true
+            return
+        }
+
+        startupUpdateCheckPending = false
+        startupUpdateCheckRan = true
+        UpdateManager.checkForUpdatesOnStartup(this)
+    }
+
+    private fun resumePendingStartupUpdateCheck() {
+        if (!startupUpdateCheckPending || backgroundSourceDialogShowing) {
+            return
+        }
+        scheduleStartupUpdateCheck(STARTUP_DIALOG_GAP_DELAY)
+    }
+
     /**
      * First-launch background source picker (issue #263).
      *
@@ -662,14 +881,9 @@ class PcView : Activity(), AdapterFragmentCallbacks, ShakeDetector.Listener, Eas
             BackgroundSource.Pipw   to R.string.background_source_pipw,
             BackgroundSource.None   to R.string.background_source_none,
         )
-        // NOTE: AlertDialog drops items if setMessage is also set (they fight for
-        // the same content slot). Inline the explanation into the title and keep
-        // the dialog cancellable so users can always back out.
-        val title = getString(R.string.background_source_dialog_title) + "\n\n" +
-                getString(R.string.background_source_dialog_message)
 
-        AlertDialog.Builder(this)
-            .setTitle(title)
+        val dialog = AlertDialog.Builder(this, R.style.AppDialogStyle)
+            .setCustomTitle(createBackgroundSourceDialogHeader())
             .setItems(choices.map { getString(it.second) }.toTypedArray()) { _, which ->
                 BackgroundSource.setActive(this, choices[which].first)
             }
@@ -680,7 +894,47 @@ class PcView : Activity(), AdapterFragmentCallbacks, ShakeDetector.Listener, Eas
             .setOnCancelListener {
                 BackgroundSource.setActive(this, BackgroundSource.Auto)
             }
-            .show()
+            .create()
+
+        dialog.setOnDismissListener {
+            backgroundSourceDialogShowing = false
+            resumePendingStartupUpdateCheck()
+        }
+        backgroundSourceDialogShowing = true
+        dialog.show()
+        AppDialogStyler.applySystemChoiceList(dialog, this)
+    }
+
+    private fun createBackgroundSourceDialogHeader(): View {
+        val density = resources.displayMetrics.density
+        fun dp(value: Int) = (value * density + 0.5f).toInt()
+        fun matchWrapParams() = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        )
+
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+            setPadding(dp(28), dp(22), dp(28), dp(8))
+            addView(TextView(this@PcView).apply {
+                text = getString(R.string.background_source_dialog_title)
+                gravity = Gravity.CENTER
+                setTypeface(typeface, Typeface.BOLD)
+                textSize = 20f
+                setTextColor(ContextCompat.getColor(this@PcView, R.color.app_dialog_title_color))
+                setShadowLayer(0f, 0f, 0f, Color.TRANSPARENT)
+            }, matchWrapParams())
+            addView(TextView(this@PcView).apply {
+                text = getString(R.string.background_source_dialog_message)
+                gravity = Gravity.CENTER
+                textSize = 14f
+                setLineSpacing(dp(2).toFloat(), 1f)
+                setPadding(0, dp(8), 0, 0)
+                setTextColor(ContextCompat.getColor(this@PcView, R.color.app_dialog_subtitle_color))
+                setShadowLayer(0f, 0f, 0f, Color.TRANSPARENT)
+            }, matchWrapParams())
+        }
     }
 
     private fun refreshBackgroundImage(isFromShake: Boolean) {
@@ -1142,7 +1396,6 @@ class PcView : Activity(), AdapterFragmentCallbacks, ShakeDetector.Listener, Eas
 
         if (isUnpaired && !pcGridAdapter.isShowUnpairedDevices()) {
             pcGridAdapter.setShowUnpairedDevices(true)
-            updateToggleUnpairedButtonIcon(findViewById(R.id.toggleUnpairedButton))
             showToast(getString(R.string.new_unpaired_device_shown))
         }
 
@@ -1211,24 +1464,146 @@ class PcView : Activity(), AdapterFragmentCallbacks, ShakeDetector.Listener, Eas
         noPcFoundLayout?.visibility = View.INVISIBLE
     }
 
-    // Toggle Unpaired Button
+    // Toggle Unpaired Hosts
 
-    private fun toggleUnpairedDevices(button: ImageButton) {
+    private fun toggleUnpairedDevices() {
         val newState = !pcGridAdapter.isShowUnpairedDevices()
         pcGridAdapter.setShowUnpairedDevices(newState)
-        updateToggleUnpairedButtonIcon(button)
         showToast(if (newState) getString(R.string.unpaired_devices_shown) else getString(R.string.unpaired_devices_hidden))
     }
 
-    private fun updateToggleUnpairedButtonIcon(button: ImageButton?) {
-        if (button == null) return
-        button.setImageResource(if (pcGridAdapter.isShowUnpairedDevices())
-            R.drawable.ic_visibility
-        else
-            R.drawable.ic_visibility_off)
-    }
-
     // Scene Configuration Methods
+
+    private data class SceneConfiguration(
+            val width: Int,
+            val height: Int,
+            val fps: Int,
+            val bitrate: Int,
+            val enableAdaptiveBitrate: Boolean,
+            val abrMode: String,
+            val videoFormat: PreferenceConfiguration.FormatOption,
+            val framePacing: Int,
+            val stretchVideo: Boolean,
+            val enableSops: Boolean,
+            val unlockFps: Boolean,
+            val reduceRefreshRate: Boolean,
+            val fullRange: Boolean,
+            val enableHdr: Boolean,
+            val enableHdrHighBrightness: Boolean,
+            val hdrMode: Int,
+            val enablePerfOverlay: Boolean,
+            val perfOverlayLocked: Boolean,
+            val perfOverlayBgOpacity: Int,
+            val perfOverlayOrientation: PreferenceConfiguration.PerfOverlayOrientation,
+            val perfOverlayPosition: PreferenceConfiguration.PerfOverlayPosition
+    ) {
+        fun applyTo(prefs: PreferenceConfiguration): PreferenceConfiguration {
+            prefs.width = width
+            prefs.height = height
+            prefs.fps = fps
+            prefs.bitrate = bitrate
+            prefs.enableAdaptiveBitrate = enableAdaptiveBitrate
+            prefs.abrMode = abrMode
+            prefs.videoFormat = videoFormat
+            prefs.framePacing = framePacing
+            prefs.stretchVideo = stretchVideo
+            prefs.enableSops = enableSops
+            prefs.unlockFps = unlockFps
+            prefs.reduceRefreshRate = reduceRefreshRate
+            prefs.fullRange = fullRange
+            prefs.enableHdr = enableHdr
+            prefs.enableHdrHighBrightness = enableHdrHighBrightness
+            prefs.hdrMode = hdrMode
+            prefs.enablePerfOverlay = enablePerfOverlay
+            prefs.perfOverlayLocked = perfOverlayLocked
+            prefs.perfOverlayBgOpacity = perfOverlayBgOpacity
+            prefs.perfOverlayOrientation = perfOverlayOrientation
+            prefs.perfOverlayPosition = perfOverlayPosition
+            return prefs
+        }
+
+        fun toJson(): JSONObject {
+            return JSONObject().apply {
+                put("width", width)
+                put("height", height)
+                put("fps", fps)
+                put("bitrate", bitrate)
+                put("enableAdaptiveBitrate", enableAdaptiveBitrate)
+                put("abrMode", abrMode)
+                put("videoFormat", videoFormat.name)
+                put("framePacing", framePacing)
+                put("stretchVideo", stretchVideo)
+                put("enableSops", enableSops)
+                put("unlockFps", unlockFps)
+                put("reduceRefreshRate", reduceRefreshRate)
+                put("fullRange", fullRange)
+                put("enableHdr", enableHdr)
+                put("enableHdrHighBrightness", enableHdrHighBrightness)
+                put("hdrMode", hdrMode)
+                put("enablePerfOverlay", enablePerfOverlay)
+                put("perfOverlayLocked", perfOverlayLocked)
+                put("perfOverlayBgOpacity", perfOverlayBgOpacity)
+                put("perfOverlayOrientation", perfOverlayOrientation.name)
+                put("perfOverlayPosition", perfOverlayPosition.name)
+            }
+        }
+
+        companion object {
+            fun fromPreferences(prefs: PreferenceConfiguration): SceneConfiguration {
+                return SceneConfiguration(
+                        width = prefs.width,
+                        height = prefs.height,
+                        fps = prefs.fps,
+                        bitrate = prefs.bitrate,
+                        enableAdaptiveBitrate = prefs.enableAdaptiveBitrate,
+                        abrMode = prefs.abrMode,
+                        videoFormat = prefs.videoFormat,
+                        framePacing = prefs.framePacing,
+                        stretchVideo = prefs.stretchVideo,
+                        enableSops = prefs.enableSops,
+                        unlockFps = prefs.unlockFps,
+                        reduceRefreshRate = prefs.reduceRefreshRate,
+                        fullRange = prefs.fullRange,
+                        enableHdr = prefs.enableHdr,
+                        enableHdrHighBrightness = prefs.enableHdrHighBrightness,
+                        hdrMode = prefs.hdrMode,
+                        enablePerfOverlay = prefs.enablePerfOverlay,
+                        perfOverlayLocked = prefs.perfOverlayLocked,
+                        perfOverlayBgOpacity = prefs.perfOverlayBgOpacity,
+                        perfOverlayOrientation = prefs.perfOverlayOrientation,
+                        perfOverlayPosition = prefs.perfOverlayPosition)
+            }
+
+            fun fromJson(json: JSONObject, fallback: PreferenceConfiguration): SceneConfiguration {
+                return SceneConfiguration(
+                        width = json.optInt("width", fallback.width),
+                        height = json.optInt("height", fallback.height),
+                        fps = json.optInt("fps", fallback.fps),
+                        bitrate = json.optInt("bitrate", fallback.bitrate),
+                        enableAdaptiveBitrate = json.optBoolean("enableAdaptiveBitrate", fallback.enableAdaptiveBitrate),
+                        abrMode = json.optString("abrMode", fallback.abrMode),
+                        videoFormat = parseEnum(json.optString("videoFormat", fallback.videoFormat.name), fallback.videoFormat),
+                        framePacing = json.optInt("framePacing", fallback.framePacing),
+                        stretchVideo = json.optBoolean("stretchVideo", fallback.stretchVideo),
+                        enableSops = json.optBoolean("enableSops", fallback.enableSops),
+                        unlockFps = json.optBoolean("unlockFps", fallback.unlockFps),
+                        reduceRefreshRate = json.optBoolean("reduceRefreshRate", fallback.reduceRefreshRate),
+                        fullRange = json.optBoolean("fullRange", fallback.fullRange),
+                        enableHdr = json.optBoolean("enableHdr", fallback.enableHdr),
+                        enableHdrHighBrightness = json.optBoolean("enableHdrHighBrightness", fallback.enableHdrHighBrightness),
+                        hdrMode = json.optInt("hdrMode", fallback.hdrMode),
+                        enablePerfOverlay = json.optBoolean("enablePerfOverlay", fallback.enablePerfOverlay),
+                        perfOverlayLocked = json.optBoolean("perfOverlayLocked", fallback.perfOverlayLocked),
+                        perfOverlayBgOpacity = json.optInt("perfOverlayBgOpacity", fallback.perfOverlayBgOpacity),
+                        perfOverlayOrientation = parseEnum(json.optString("perfOverlayOrientation", fallback.perfOverlayOrientation.name), fallback.perfOverlayOrientation),
+                        perfOverlayPosition = parseEnum(json.optString("perfOverlayPosition", fallback.perfOverlayPosition.name), fallback.perfOverlayPosition))
+            }
+
+            private inline fun <reified T : Enum<T>> parseEnum(value: String, fallback: T): T {
+                return runCatching { enumValueOf<T>(value.uppercase(Locale.US)) }.getOrDefault(fallback)
+            }
+        }
+    }
 
     private fun initSceneButtons() {
         try {
@@ -1249,8 +1624,35 @@ class PcView : Activity(), AdapterFragmentCallbacks, ShakeDetector.Listener, Eas
                     true
                 }
             }
+            updateSceneButtonStates()
         } catch (e: Exception) {
             LimeLog.warning("Scene init failed: $e")
+        }
+    }
+
+    private fun updateSceneButtonStates() {
+        val sceneButtonIds = intArrayOf(R.id.scene1Btn, R.id.scene2Btn, R.id.scene3Btn, R.id.scene4Btn, R.id.scene5Btn)
+        val prefs = getSharedPreferences(SCENE_PREF_NAME, MODE_PRIVATE)
+
+        for (i in sceneButtonIds.indices) {
+            val sceneNumber = i + 1
+            val btn = findViewById<ImageButton>(sceneButtonIds[i]) ?: continue
+            val isConfigured = prefs.contains(SCENE_KEY_PREFIX + sceneNumber)
+            val isActive = activeSceneNumber == sceneNumber
+
+            btn.alpha = when {
+                isActive -> 1.0f
+                isConfigured -> 0.9f
+                else -> 0.68f
+            }
+            btn.imageTintList = ColorStateList.valueOf(when {
+                isActive -> Color.WHITE
+                isConfigured -> Color.argb(230, 255, 255, 255)
+                else -> Color.argb(190, 255, 255, 255)
+            })
+            btn.contentDescription = getString(
+                    if (isConfigured) R.string.scene_configured_content_description else R.string.scene_empty_content_description,
+                    sceneNumber)
         }
     }
 
@@ -1261,27 +1663,21 @@ class PcView : Activity(), AdapterFragmentCallbacks, ShakeDetector.Listener, Eas
             val configJson = prefs.getString(SCENE_KEY_PREFIX + sceneNumber, null)
 
             if (configJson == null) {
-                showToast(getString(R.string.scene_not_configured, sceneNumber))
+                showUnconfiguredSceneDialog(sceneNumber)
                 return
             }
 
-            val config = JSONObject(configJson)
-            val configPrefs = PreferenceConfiguration.readPreferences(this).copy()
+            val configPrefs = PreferenceConfiguration.readPreferences(this)
+            SceneConfiguration.fromJson(JSONObject(configJson), configPrefs).applyTo(configPrefs)
 
-            configPrefs.width = config.optInt("width", 1920)
-            configPrefs.height = config.optInt("height", 1080)
-            configPrefs.fps = config.optInt("fps", 60)
-            configPrefs.bitrate = config.optInt("bitrate", 10000)
-            configPrefs.videoFormat = PreferenceConfiguration.FormatOption.valueOf(config.optString("videoFormat", "auto"))
-            configPrefs.enableHdr = config.optBoolean("enableHdr", false)
-            configPrefs.enablePerfOverlay = config.optBoolean("enablePerfOverlay", false)
-
-            if (!configPrefs.writePreferences(this)) {
+            if (!configPrefs.writeScenePreferences(this)) {
                 showToast(getString(R.string.config_save_failed))
                 return
             }
 
             pcGridAdapter.updateLayoutWithPreferences(this, configPrefs)
+            activeSceneNumber = sceneNumber
+            updateSceneButtonStates()
             showToast(getString(R.string.scene_config_applied, sceneNumber, configPrefs.width, configPrefs.height,
                     configPrefs.fps, configPrefs.bitrate / 1000.0, configPrefs.videoFormat.toString(),
                     if (configPrefs.enableHdr) "On" else "Off"))
@@ -1292,10 +1688,19 @@ class PcView : Activity(), AdapterFragmentCallbacks, ShakeDetector.Listener, Eas
         }
     }
 
+    private fun showUnconfiguredSceneDialog(sceneNumber: Int) {
+        AlertDialog.Builder(this, R.style.AppDialogStyle)
+                .setTitle(getString(R.string.scene_empty_title, sceneNumber))
+                .setMessage(getString(R.string.scene_empty_message, sceneNumber))
+                .setPositiveButton(R.string.save_current_config_to_scene) { _, _ -> saveCurrentConfiguration(sceneNumber) }
+                .setNegativeButton(R.string.dialog_button_cancel, null)
+                .show()
+    }
+
     private fun showSaveConfirmationDialog(sceneNumber: Int) {
         AlertDialog.Builder(this, R.style.AppDialogStyle)
                 .setTitle(getString(R.string.save_to_scene, sceneNumber))
-                .setMessage(getString(R.string.overwrite_current_config))
+                .setMessage(getString(R.string.overwrite_scene_config, sceneNumber))
                 .setPositiveButton(R.string.dialog_button_save) { _, _ -> saveCurrentConfiguration(sceneNumber) }
                 .setNegativeButton(R.string.dialog_button_cancel, null)
                 .show()
@@ -1303,21 +1708,17 @@ class PcView : Activity(), AdapterFragmentCallbacks, ShakeDetector.Listener, Eas
 
     private fun saveCurrentConfiguration(sceneNumber: Int) {
         try {
-            val prefs = PreferenceConfiguration.readPreferences(this)
-            val config = JSONObject()
-            config.put("width", prefs.width)
-            config.put("height", prefs.height)
-            config.put("fps", prefs.fps)
-            config.put("bitrate", prefs.bitrate)
-            config.put("videoFormat", prefs.videoFormat.toString())
-            config.put("enableHdr", prefs.enableHdr)
-            config.put("enablePerfOverlay", prefs.enablePerfOverlay)
+            val config = SceneConfiguration
+                    .fromPreferences(PreferenceConfiguration.readPreferences(this))
+                    .toJson()
 
             getSharedPreferences(SCENE_PREF_NAME, MODE_PRIVATE)
                     .edit {
                         putString(SCENE_KEY_PREFIX + sceneNumber, config.toString())
                     }
 
+            activeSceneNumber = sceneNumber
+            updateSceneButtonStates()
             showToast(getString(R.string.scene_saved_successfully, sceneNumber))
         } catch (e: JSONException) {
             showToast(getString(R.string.config_save_failed))
@@ -1426,7 +1827,7 @@ class PcView : Activity(), AdapterFragmentCallbacks, ShakeDetector.Listener, Eas
             getString(R.string.addpc_manual),
             getString(R.string.addpc_qr_scan)
         )
-        AlertDialog.Builder(this)
+        val dialog = AlertDialog.Builder(this, R.style.AppDialogStyle)
             .setTitle(getString(R.string.title_add_pc_choose))
             .setItems(items) { _, which ->
                 if (which == 0) {
@@ -1435,7 +1836,9 @@ class PcView : Activity(), AdapterFragmentCallbacks, ShakeDetector.Listener, Eas
                     startQrScan()
                 }
             }
-            .show()
+            .create()
+        dialog.show()
+        AppDialogStyler.applySystemChoiceList(dialog, this)
     }
 
     private fun startQrScan() {
@@ -1622,10 +2025,12 @@ class PcView : Activity(), AdapterFragmentCallbacks, ShakeDetector.Listener, Eas
 
                     if (httpConn.getPairState() == PairState.PAIRED) {
                         httpConn.unpair()
-                        if (httpConn.getPairState() == PairState.NOT_PAIRED)
+                        if (httpConn.getPairState() == PairState.NOT_PAIRED) {
+                            binder.markComputerNotPaired(computer, "Local unpair")
                             getString(R.string.unpair_success)
-                        else
+                        } else {
                             getString(R.string.unpair_fail)
+                        }
                     } else {
                         getString(R.string.unpair_error)
                     }
@@ -1650,11 +2055,45 @@ class PcView : Activity(), AdapterFragmentCallbacks, ShakeDetector.Listener, Eas
             showToast(getString(R.string.error_pc_offline))
             return
         }
-        if (managerBinder == null) {
+        val binder = managerBinder
+        if (binder == null) {
             showToast(getString(R.string.error_manager_not_running))
             return
         }
 
+        val target = prepareComputerWithAddress(computer)
+        if (target == null || target.activeAddress == null) {
+            showToast(getString(R.string.error_pc_offline))
+            return
+        }
+
+        if (PairStatePreflight.hasTrustedPairState(target)) {
+            openAppList(target, newlyPaired, showHiddenGames)
+            return
+        }
+
+        val spinner = SpinnerDialog.displayDialog(this,
+                resources.getString(R.string.applist_refresh_title),
+                resources.getString(R.string.applist_refresh_msg),
+                false)
+
+        uiScope.launch {
+            val isNotPaired = PairStatePreflight.isConfirmedNotPaired(target, binder, "Opening app list")
+
+            spinner.dismiss()
+            if (isFinishing || isDestroyed) {
+                return@launch
+            }
+
+            if (isNotPaired) {
+                showToast(getString(R.string.scut_not_paired))
+            } else {
+                openAppList(target, newlyPaired, showHiddenGames)
+            }
+        }
+    }
+
+    private fun openAppList(computer: ComputerDetails, newlyPaired: Boolean, showHiddenGames: Boolean) {
         val i = Intent(this, AppView::class.java)
         i.putExtra(AppView.NAME_EXTRA, computer.name)
         i.putExtra(AppView.UUID_EXTRA, computer.uuid)
@@ -1679,8 +2118,7 @@ class PcView : Activity(), AdapterFragmentCallbacks, ShakeDetector.Listener, Eas
             return
         }
 
-        computer.useVdd = true
-        quickStartStreamWithScreenMode(computer, null, true, 2)
+        quickStartStreamWithScreenMode(computer, null, true, 4)
     }
 
     // Quick Start Stream Methods
@@ -1707,7 +2145,7 @@ class PcView : Activity(), AdapterFragmentCallbacks, ShakeDetector.Listener, Eas
                 if (computer.runningGameId != 0)
                     getNvAppById(computer.runningGameId, computer.uuid!!)
                 else
-                    getFirstAppFromCache(computer.uuid!!)
+                    getDefaultQuickStartApp(computer)
             }
 
             if (targetApp == null) {
@@ -1720,13 +2158,21 @@ class PcView : Activity(), AdapterFragmentCallbacks, ShakeDetector.Listener, Eas
                 showToast(getString(R.string.error_pc_offline))
                 return@launch
             }
-
             if (targetComputer.hasMultipleLanAddresses()) {
                 showAddressSelectionDialog(targetComputer)
                 return@launch
             }
+            if (PairStatePreflight.isConfirmedNotPaired(targetComputer, managerBinder!!, "Quick start")) {
+                showToast(getString(R.string.scut_not_paired))
+                return@launch
+            }
 
-            ServerHelper.doStart(this@PcView, targetApp, targetComputer, managerBinder!!)
+            ServerHelper.doStart(
+                this@PcView,
+                targetApp,
+                targetComputer,
+                managerBinder!!
+            )
         }
     }
 
@@ -1748,7 +2194,7 @@ class PcView : Activity(), AdapterFragmentCallbacks, ShakeDetector.Listener, Eas
                 if (computer.runningGameId != 0)
                     getNvAppById(computer.runningGameId, computer.uuid!!)
                 else
-                    getFirstAppFromCache(computer.uuid!!)
+                    getDefaultQuickStartApp(computer)
             }
 
             if (targetApp == null) {
@@ -1761,19 +2207,25 @@ class PcView : Activity(), AdapterFragmentCallbacks, ShakeDetector.Listener, Eas
                 showToast(getString(R.string.error_pc_offline))
                 return@launch
             }
-
             if (targetComputer.hasMultipleLanAddresses()) {
                 showAddressSelectionDialog(targetComputer)
                 return@launch
             }
+            if (PairStatePreflight.isConfirmedNotPaired(targetComputer, managerBinder!!, "Secondary screen start")) {
+                showToast(getString(R.string.scut_not_paired))
+                return@launch
+            }
 
-            val intent = ServerHelper.createStartIntent(this@PcView, targetApp, targetComputer, managerBinder!!, null)
+            val intent = ServerHelper.createStartIntent(
+                this@PcView,
+                targetApp,
+                targetComputer,
+                managerBinder!!,
+                lastSettings = null,
+                useVdd = if (isSecondaryScreen) true else null
+            )
             if (screenMode != -1) {
-                if (targetComputer.useVdd) {
-                    intent.putExtra(Game.EXTRA_VDD_SCREEN_COMBINATION_MODE, screenMode)
-                } else {
-                    intent.putExtra(Game.EXTRA_SCREEN_COMBINATION_MODE, screenMode)
-                }
+                intent.putExtra(Game.EXTRA_SCREEN_COMBINATION_MODE, screenMode)
             }
             startActivity(intent)
         }
@@ -1790,6 +2242,7 @@ class PcView : Activity(), AdapterFragmentCallbacks, ShakeDetector.Listener, Eas
 
     private fun fallbackToAppList(computer: ComputerDetails) {
         runOnUiThread {
+            showToast(getString(R.string.quick_start_load_app_list_first))
             val target = prepareComputerWithAddress(computer)
             doAppList(target ?: computer, newlyPaired = false, showHiddenGames = false)
         }
@@ -1811,8 +2264,12 @@ class PcView : Activity(), AdapterFragmentCallbacks, ShakeDetector.Listener, Eas
         }
     }
 
-    private fun getFirstAppFromCache(uuid: String): NvApp? {
-        val appList = getAppListFromCache(uuid)
+    private fun getDefaultQuickStartApp(computer: ComputerDetails): NvApp? {
+        if (computer.supportsDesktopSpecialApp) {
+            return NvApp(NvApp.DESKTOP_APP_NAME, NvApp.DESKTOP_APP_ID, false)
+        }
+
+        val appList = getAppListFromCache(computer.uuid!!)
         return if (!appList.isNullOrEmpty()) appList[0] else null
     }
 
@@ -1857,7 +2314,13 @@ class PcView : Activity(), AdapterFragmentCallbacks, ShakeDetector.Listener, Eas
         }
 
         showToast(getString(R.string.restoring_session, target.name))
-        ServerHelper.doStart(this, app, target, managerBinder!!)
+        uiScope.launch {
+            if (PairStatePreflight.isConfirmedNotPaired(target, managerBinder!!, "Restore session")) {
+                showToast(getString(R.string.scut_not_paired))
+                return@launch
+            }
+            ServerHelper.doStart(this@PcView, app, target, managerBinder!!, forceResumeCurrentSession = true)
+        }
     }
 
     private fun showAddressSelectionDialog(computer: ComputerDetails) {
@@ -2109,7 +2572,14 @@ class PcView : Activity(), AdapterFragmentCallbacks, ShakeDetector.Listener, Eas
         if (app == null) {
             app = NvApp("app", details.runningGameId, false)
         }
-        ServerHelper.doStart(this, app, details, managerBinder!!)
+        val binder = managerBinder!!
+        uiScope.launch {
+            if (PairStatePreflight.isConfirmedNotPaired(details, binder, "Resume session")) {
+                showToast(getString(R.string.scut_not_paired))
+                return@launch
+            }
+            ServerHelper.doStart(this@PcView, app, details, binder, forceResumeCurrentSession = true)
+        }
     }
 
     private fun handleQuit(details: ComputerDetails) {
@@ -2188,7 +2658,9 @@ class PcView : Activity(), AdapterFragmentCallbacks, ShakeDetector.Listener, Eas
         return R.layout.pc_grid_view
     }
 
-    override fun receiveAbsListView(gridView: View) {
+    override fun receiveAbsListView(gridView: View?) {
+        if (gridView == null) return
+
         receiveAdapterView(gridView)
     }
 
@@ -2333,10 +2805,17 @@ class PcView : Activity(), AdapterFragmentCallbacks, ShakeDetector.Listener, Eas
                 .setNeutralButton(R.string.about_dialog_github) { _, _ -> openUrl("https://github.com/qiin2333/moonlight-vplus") }
                 .setNegativeButton(R.string.about_dialog_qq) { _, _ -> joinQQGroup("LlbLDIF_YolaM4HZyLx0xAXXo04ZmoBM") }
                 .create()
-        if (dialog.window != null) {
-            dialog.window?.setBackgroundDrawableResource(R.drawable.app_dialog_bg_cute)
-        }
         dialog.show()
+        dialog.window?.setBackgroundDrawableResource(R.drawable.dialog_about_window_bg)
+        tintAboutDialogButtons(dialog)
+    }
+
+    private fun tintAboutDialogButtons(dialog: AlertDialog) {
+        val accentColor = androidx.core.content.ContextCompat.getColor(this, R.color.app_dialog_accent_color)
+        listOf(AlertDialog.BUTTON_POSITIVE, AlertDialog.BUTTON_NEGATIVE, AlertDialog.BUTTON_NEUTRAL)
+                .forEach { buttonId ->
+                    dialog.getButton(buttonId)?.setTextColor(accentColor)
+                }
     }
 
     @SuppressLint("DefaultLocale")

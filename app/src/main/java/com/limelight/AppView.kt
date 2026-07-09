@@ -4,10 +4,10 @@ package com.limelight
 import java.io.IOException
 import java.io.StringReader
 import java.util.HashSet
+import java.util.concurrent.ConcurrentHashMap
 
 import android.annotation.SuppressLint
 import android.app.Activity
-import android.app.AlertDialog
 import android.content.ComponentName
 import android.content.Intent
 import android.content.ServiceConnection
@@ -28,12 +28,16 @@ import android.view.ContextMenu.ContextMenuInfo
 import android.view.Menu
 import android.view.MenuItem
 import android.view.View
+import android.view.ViewGroup
 import android.widget.AbsListView
 import android.widget.AdapterView.AdapterContextMenuInfo
 import android.widget.CheckBox
+import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.RadioButton
+import android.widget.RadioGroup
+import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 
@@ -44,6 +48,7 @@ import org.xmlpull.v1.XmlPullParserException
 
 import com.limelight.binding.PlatformBinding
 import com.limelight.computers.ComputerManagerService
+import com.limelight.computers.PairStatePreflight
 import com.limelight.grid.AppGridAdapter
 import com.limelight.grid.assets.CachedAppAssetLoader
 import com.limelight.nvstream.http.ComputerDetails
@@ -55,13 +60,16 @@ import com.limelight.preferences.PreferenceConfiguration
 import com.limelight.ui.AdapterFragment
 import com.limelight.ui.AdapterFragmentCallbacks
 import com.limelight.ui.AdapterRecyclerBridge
+import com.limelight.ui.ScreenCombinationModePickerView
 import com.limelight.ui.SelectionIndicatorAnimator
 import com.limelight.utils.AppSettingsManager
 import com.limelight.utils.BackgroundImageManager
 import com.limelight.utils.CacheHelper
 import com.limelight.utils.Dialog
+import com.limelight.utils.FrameMetricsLogger
 import com.limelight.utils.ServerHelper
 import com.limelight.utils.ShortcutHelper
+import com.limelight.utils.SoftBackgroundColorExtractor
 import com.limelight.utils.SpinnerDialog
 import com.limelight.utils.UiHelper
 
@@ -76,6 +84,7 @@ import kotlinx.coroutines.withContext
 import androidx.core.content.edit
 import androidx.core.view.isVisible
 import androidx.core.view.isNotEmpty
+import androidx.preference.PreferenceManager
 import kotlin.math.ceil
 
 class AppView : Activity(), AdapterFragmentCallbacks {
@@ -108,7 +117,12 @@ class AppView : Activity(), AdapterFragmentCallbacks {
         private const val DEFAULT_HORIZONTAL_SPAN_COUNT = 1
         private const val VERTICAL_SINGLE_ROW_THRESHOLD = 5
         private const val BACKGROUND_CHANGE_DELAY = 300 // ms
+        private const val DISPLAY_CHECK_DELAY_MS = 800L
+        private const val NOT_PAIRED_EXIT_CONFIRMATION_UPDATES = 2
         private const val VIRTUAL_DISPLAY_ID = 212333
+        private const val APPVIEW_PREFS_NAME = "AppView"
+        private const val KEY_APP_BACKGROUND_MODE = "app_background_mode"
+        private const val SCREEN_COMBINATION_MODE_PREF_KEY = "list_screen_combination_mode"
     }
 
     // ==================== 核心数据 ====================
@@ -118,6 +132,7 @@ class AppView : Activity(), AdapterFragmentCallbacks {
     private lateinit var computerName: String
     private var lastRawApplist: String? = null
     private var lastRunningAppId = 0
+    private var notPairedExitUpdateCount = 0
     private var suspendGridUpdates = false
     private var inForeground = false
     private var showHiddenApps = false
@@ -135,13 +150,23 @@ class AppView : Activity(), AdapterFragmentCallbacks {
     private var backgroundImageManager: BackgroundImageManager? = null
     private val backgroundChangeHandler = Handler(Looper.getMainLooper())
     private var backgroundChangeRunnable: Runnable? = null
+    private val displayCheckHandler = Handler(Looper.getMainLooper())
+    private var displayCheckRunnable: Runnable? = null
+    private lateinit var appBackgroundModeGroup: RadioGroup
+    private var appBackgroundMode = AppBackgroundMode.Artwork
+    private var activeBackgroundAppId: Int? = null
+    private var activeBackgroundMode: AppBackgroundMode? = null
+    private var backgroundRequestSerial = 0
+    private val appSoftColorCache = ConcurrentHashMap<Int, Int>()
 
     // ==================== UI 组件 - 选中框 & 列表 ====================
     private var selectionAnimator: SelectionIndicatorAnimator? = null
     private var currentRecyclerView: RecyclerView? = null
     private var currentAdapterBridge: AdapterRecyclerBridge? = null
+    private var pendingAdapterFragmentView: View? = null
     private var selectedPosition = -1
     private var isFirstFocus = true
+    private var frameMetricsLogger: FrameMetricsLogger? = null
 
     // ==================== UI 组件 - 上一次设置 ====================
     private var appSettingsManager: AppSettingsManager? = null
@@ -150,15 +175,20 @@ class AppView : Activity(), AdapterFragmentCallbacks {
     private lateinit var useLastSettingsCheckbox: CheckBox
 
     // ==================== UI 组件 - 顶部下拉面板 & 显示器选择 ====================
-    private lateinit var topDropdownPanel: LinearLayout
+    private lateinit var topPanelScrim: View
+    private lateinit var topDropdownPanel: ScrollView
     private var isPanelOpen = false
     private lateinit var displaySelectionInfo: LinearLayout
-    private lateinit var displayRadioGroup: android.widget.RadioGroup
+    private lateinit var displayRadioGroup: RadioGroup
     private lateinit var screenCombinationModeLabel: TextView
+    private lateinit var screenCombinationModeOverlay: FrameLayout
     private var selectedScreenCombinationMode = -1
     private var currentModeNames: Array<String>? = null
     private var currentModeValues: Array<String>? = null
     private var availableDisplays: List<DisplayInfo>? = null
+    private val hostHttpLock = Any()
+    private var hostHttpClient: NvHTTP? = null
+    private var hostHttpKey: String? = null
 
     // ==================== 服务连接 ====================
 
@@ -195,6 +225,7 @@ class AppView : Activity(), AdapterFragmentCallbacks {
 
                     appGridAdapter?.updateHiddenApps(hiddenAppIds, true)
                     managerBinder = localBinder
+                    localBinder.setForegroundComputer(uuidString)
                     true
                 }
 
@@ -207,11 +238,19 @@ class AppView : Activity(), AdapterFragmentCallbacks {
 
                 populateAppGridWithCache()
                 startComputerUpdates()
+                scheduleDisplayCheck()
+
+                pendingAdapterFragmentView?.let { pendingView ->
+                    pendingAdapterFragmentView = null
+                    receiveAdapterView(pendingView)
+                }
 
                 try {
-                    fragmentManager.beginTransaction()
-                            .replace(R.id.appFragmentContainer, AdapterFragment())
-                            .commitAllowingStateLoss()
+                    if (fragmentManager.findFragmentById(R.id.appFragmentContainer) == null) {
+                        fragmentManager.beginTransaction()
+                                .replace(R.id.appFragmentContainer, AdapterFragment())
+                                .commitAllowingStateLoss()
+                    }
                 } catch (e: IllegalStateException) {
                     e.printStackTrace()
                 }
@@ -279,13 +318,15 @@ class AppView : Activity(), AdapterFragmentCallbacks {
             return
         }
 
-        if (details.state == ComputerDetails.State.ONLINE && details.pairState != PairingManager.PairState.PAIRED) {
+        if (shouldExitForNotPaired(details)) {
             shortcutHelper.disableComputerShortcut(details,
                     resources.getString(R.string.scut_not_paired))
             Toast.makeText(this, resources.getText(R.string.scut_not_paired), Toast.LENGTH_SHORT).show()
             finish()
             return
         }
+
+        computer = details
 
         // App list is the same or empty
         if (details.rawAppList == null || details.rawAppList == lastRawApplist) {
@@ -312,6 +353,26 @@ class AppView : Activity(), AdapterFragmentCallbacks {
         } catch (e: IOException) {
             e.printStackTrace()
         }
+    }
+
+    private fun shouldExitForNotPaired(details: ComputerDetails): Boolean {
+        if (details.state != ComputerDetails.State.ONLINE ||
+            details.pairState == PairingManager.PairState.PAIRED
+        ) {
+            notPairedExitUpdateCount = 0
+            return false
+        }
+
+        notPairedExitUpdateCount++
+        if (notPairedExitUpdateCount < NOT_PAIRED_EXIT_CONFIRMATION_UPDATES) {
+            LimeLog.warning(
+                "AppView: deferring NOT_PAIRED update for ${details.name ?: details.uuid} " +
+                        "($notPairedExitUpdateCount/$NOT_PAIRED_EXIT_CONFIRMATION_UPDATES)"
+            )
+            return false
+        }
+
+        return true
     }
 
     private fun stopComputerUpdates() {
@@ -361,36 +422,35 @@ class AppView : Activity(), AdapterFragmentCallbacks {
         useLastSettingsCheckbox = findViewById(R.id.useLastSettingsCheckbox)
 
         // Initialize top dropdown panel
+        topPanelScrim = findViewById(R.id.topPanelScrim)
+        topPanelScrim.setOnClickListener {
+            closeTopPanel()
+        }
         topDropdownPanel = findViewById(R.id.topDropdownPanel)
+        appBackgroundMode = readAppBackgroundMode()
+        appBackgroundModeGroup = findViewById(R.id.appBackgroundModeGroup)
+        setupAppBackgroundModeControls()
 
         // Initialize display selection UI components
         displaySelectionInfo = findViewById(R.id.displaySelectionInfo)
         displayRadioGroup = findViewById(R.id.displayRadioGroup)
         screenCombinationModeLabel = findViewById(R.id.screenCombinationModeLabel)
+        screenCombinationModeOverlay = findViewById(R.id.screenCombinationModeOverlay)
+        findViewById<TextView>(R.id.clearDisplaySelectionButton).setOnClickListener {
+            clearDisplaySelection()
+        }
         screenCombinationModeLabel.let { label ->
             label.paintFlags = label.paintFlags or Paint.UNDERLINE_TEXT_FLAG
 
-            // 点击组合模式标签时弹出选择对话框
-            label.setOnClickListener { showScreenCombinationModeDialog() }
+            // 点击组合模式标签时打开全屏选择视图
+            label.setOnClickListener { showScreenCombinationModeView() }
         }
+        refreshScreenCombinationModeFromPreferences()
 
         // 监听 RadioGroup 选中变化，动态更新组合模式选项
-        displayRadioGroup.setOnCheckedChangeListener { _, checkedId ->
-            if (checkedId == -1) {
-                screenCombinationModeLabel.visibility = View.GONE
-                selectedScreenCombinationMode = -1
-                return@setOnCheckedChangeListener
-            }
-
-            val isVdd = (checkedId == VIRTUAL_DISPLAY_ID)
-            val namesArrayId = if (isVdd) R.array.vdd_screen_combination_mode_names else R.array.screen_combination_mode_names
-            val valuesArrayId = if (isVdd) R.array.vdd_screen_combination_mode_values else R.array.screen_combination_mode_values
-
-            currentModeNames = resources.getStringArray(namesArrayId)
-            currentModeValues = resources.getStringArray(valuesArrayId)
-            selectedScreenCombinationMode = -1
+        displayRadioGroup.setOnCheckedChangeListener { _, _ ->
+            refreshScreenCombinationModeOptions()
             updateScreenCombinationModeLabel()
-            screenCombinationModeLabel.visibility = View.VISIBLE
         }
 
         // Set up event listeners
@@ -434,7 +494,7 @@ class AppView : Activity(), AdapterFragmentCallbacks {
                 for (i in 0 until (appGridAdapter?.count ?: 0)) {
                     val app = appGridAdapter?.getItem(i) as AppObject
                     if (app.app.appId == lastRunningAppId) {
-                        startStreamWithLastSettingsIfEnabled(app)
+                            startStreamWithLastSettingsIfEnabled(app, forceResumeCurrentSession = true)
                         break
                     }
                 }
@@ -467,8 +527,6 @@ class AppView : Activity(), AdapterFragmentCallbacks {
             BIND_AUTO_CREATE
         )
 
-        // Delay checking displays to allow service connection to complete
-        Handler(Looper.getMainLooper()).postDelayed({ checkDisplaysAndUpdateUI() }, 500)
     }
 
     // ==================== UI 更新 ====================
@@ -537,44 +595,117 @@ class AppView : Activity(), AdapterFragmentCallbacks {
         }
     }
 
-    /**
-     * 防抖的背景切换方法
-     *
-     * @param app 要切换背景的应用对象
-     */
     private fun changeBackgroundWithDebounce(app: AppObject?) {
-        // 取消之前的延迟任务
-        if (backgroundChangeRunnable != null) {
-            backgroundChangeHandler.removeCallbacks(backgroundChangeRunnable!!)
-        }
-
-        // 创建新的延迟任务
-        backgroundChangeRunnable = Runnable {
-            if (app != null && appGridAdapter != null && appGridAdapter?.getLoader() != null) {
-                setAppAsBackground(app)
-            }
-            backgroundChangeRunnable = null
-        }
-
-        // 延迟执行背景切换
-        backgroundChangeHandler.postDelayed(backgroundChangeRunnable!!, BACKGROUND_CHANGE_DELAY.toLong())
+        requestAppBackground(app, debounce = true)
     }
 
-    /**
-     * 设置指定应用为背景
-     *
-     * @param appObject 应用对象
-     */
-    private fun setAppAsBackground(appObject: AppObject) {
+    private fun requestAppBackground(app: AppObject?, debounce: Boolean, force: Boolean = false) {
+        backgroundChangeRunnable?.let { backgroundChangeHandler.removeCallbacks(it) }
+        if (app == null || !isBackgroundEligible(app)) {
+            backgroundChangeRunnable = null
+            return
+        }
+
+        val runnable = Runnable {
+            applyAppBackground(app, force)
+            backgroundChangeRunnable = null
+        }
+        backgroundChangeRunnable = runnable
+
+        if (debounce) {
+            backgroundChangeHandler.postDelayed(runnable, BACKGROUND_CHANGE_DELAY.toLong())
+        } else {
+            runnable.run()
+        }
+    }
+
+    private fun applyAppBackground(appObject: AppObject, force: Boolean = false) {
         if (isFinishing || isDestroyed) {
             return
         }
 
-        if (backgroundImageManager != null && appBackgroundImageBlur != null) {
-            val loader = appGridAdapter?.getLoader()
-            loader?.loadFullBitmap(appObject.app) { bitmap -> backgroundImageManager?.setBackgroundSmoothly(bitmap) }
+        val manager = backgroundImageManager ?: return
+        val mode = appBackgroundMode
+        val appId = appObject.app.appId
+        if (!force && activeBackgroundAppId == appId && activeBackgroundMode == mode && manager.hasBackground) {
+            return
+        }
+
+        activeBackgroundAppId = appId
+        activeBackgroundMode = mode
+        val requestId = ++backgroundRequestSerial
+
+        when (mode) {
+            AppBackgroundMode.Artwork -> {
+                val loader = appGridAdapter?.getLoader() ?: return
+                loader.loadFullBitmap(appObject.app) { bitmap ->
+                    runOnUiThread {
+                        if (requestId == backgroundRequestSerial) {
+                            manager.setBackgroundSmoothly(bitmap)
+                        }
+                    }
+                }
+            }
+            AppBackgroundMode.SoftColor -> {
+                applySoftColorBackground(appObject, requestId, manager)
+            }
         }
     }
+
+    private fun applySoftColorBackground(appObject: AppObject, requestId: Int, manager: BackgroundImageManager) {
+        val app = appObject.app
+        appSoftColorCache[app.appId]?.let {
+            manager.setBackgroundColorSmoothly(it)
+            return
+        }
+
+        val fallbackColor = SoftBackgroundColorExtractor.fallbackFor(app)
+        manager.setBackgroundColorSmoothly(fallbackColor)
+
+        val loader = appGridAdapter?.getLoader() ?: return
+        loader.loadFullBitmap(app) { bitmap ->
+            uiScope.launch(Dispatchers.Default) {
+                val color = SoftBackgroundColorExtractor.fromBitmap(bitmap, fallbackColor)
+                appSoftColorCache[app.appId] = color
+                withContext(Dispatchers.Main.immediate) {
+                    if (!isFinishing &&
+                            !isDestroyed &&
+                            requestId == backgroundRequestSerial &&
+                            appBackgroundMode == AppBackgroundMode.SoftColor &&
+                            activeBackgroundAppId == app.appId) {
+                        manager.setBackgroundColorSmoothly(color)
+                    }
+                }
+            }
+        }
+    }
+
+    private fun resolveCurrentBackgroundCandidate(): AppObject? {
+        val adapter = appGridAdapter ?: return null
+        val focused = if (selectedPosition in 0 until adapter.count) {
+            adapter.getItem(selectedPosition) as? AppObject
+        } else {
+            null
+        }
+        if (focused != null && isBackgroundEligible(focused)) return focused
+
+        findFirstBackgroundCandidate { it.isRunning }?.let { return it }
+        findFirstBackgroundCandidate { it.app.appName.equals("desktop", ignoreCase = true) }?.let { return it }
+        return findFirstBackgroundCandidate { true }
+    }
+
+    private fun findFirstBackgroundCandidate(predicate: (AppObject) -> Boolean): AppObject? {
+        val adapter = appGridAdapter ?: return null
+        for (i in 0 until adapter.count) {
+            val app = adapter.getItem(i) as? AppObject ?: continue
+            if (isBackgroundEligible(app) && predicate(app)) {
+                return app
+            }
+        }
+        return null
+    }
+
+    private fun isBackgroundEligible(app: AppObject): Boolean = !app.isHidden || showHiddenApps
 
     /**
      * 计算最优的spanCount
@@ -615,7 +746,6 @@ class AppView : Activity(), AdapterFragmentCallbacks {
         updateTitle(app.app.appName)
         if (appGridAdapter != null) {
             appGridAdapter?.selectedPosition = position
-            appGridAdapter?.notifyDataSetChanged()
         }
 
         // 防抖切换背景
@@ -665,9 +795,9 @@ class AppView : Activity(), AdapterFragmentCallbacks {
      *
      * @param app 应用对象
      */
-    private fun startStreamWithLastSettingsIfEnabled(app: AppObject) {
+    private fun startStreamWithLastSettingsIfEnabled(app: AppObject, forceResumeCurrentSession: Boolean = false) {
         var displayGuid: String? = null
-        var useVdd = false
+        var useVdd: Boolean? = null
 
         if (displaySelectionInfo.isVisible && availableDisplays != null) {
             val selectedId = displayRadioGroup.checkedRadioButtonId
@@ -676,13 +806,11 @@ class AppView : Activity(), AdapterFragmentCallbacks {
             } else if (selectedId >= 0 && selectedId < (availableDisplays?.size ?: 0)) {
                 val selectedDisplay = availableDisplays!![selectedId]
                 displayGuid = selectedDisplay.guid.ifEmpty { selectedDisplay.name }
+                useVdd = false
             }
         }
 
-        // 设置useVdd标志
-        computer?.useVdd = useVdd
-
-        doStartStream(app, displayGuid, useVdd)
+            doStartStream(app, displayGuid, useVdd, forceResumeCurrentSession)
     }
 
     // ==================== 顶部下拉面板 ====================
@@ -710,9 +838,15 @@ class AppView : Activity(), AdapterFragmentCallbacks {
         val toggle = findViewById<TextView>(R.id.topPanelToggle)
         toggle?.text = "\u2699 \u25B4"
 
+        topPanelScrim.visibility = View.VISIBLE
+        topPanelScrim.bringToFront()
+        toggle?.bringToFront()
+        topDropdownPanel.bringToFront()
+        topDropdownPanel.scrollTo(0, 0)
         topDropdownPanel.alpha = 0f
         topDropdownPanel.translationY = -20f
         topDropdownPanel.visibility = View.VISIBLE
+        constrainTopPanelHeight()
         topDropdownPanel.animate()
                 .alpha(1f)
                 .translationY(0f)
@@ -746,11 +880,99 @@ class AppView : Activity(), AdapterFragmentCallbacks {
                 .withEndAction {
                     topDropdownPanel.visibility = View.GONE
                     topDropdownPanel.translationY = 0f
+                    topPanelScrim.visibility = View.GONE
                     // 关闭后将焦点还给触发手柄
                     val toggleView = findViewById<View>(R.id.topPanelToggle)
                     toggleView?.requestFocus()
                 }
                 .start()
+    }
+
+    private fun constrainTopPanelHeight() {
+        topDropdownPanel.post {
+            val rootView = findViewById<View>(android.R.id.content) ?: return@post
+            val availableHeight = rootView.height - topDropdownPanel.top - dp(16)
+            val preferredMaxHeight = if (resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE) {
+                (rootView.height * 0.68f).toInt()
+            } else {
+                (rootView.height * 0.42f).toInt()
+            }
+            val maxHeight = kotlin.math.min(availableHeight, preferredMaxHeight).coerceAtLeast(dp(120))
+            val contentHeight = (topDropdownPanel.getChildAt(0)?.measuredHeight ?: 0) +
+                    topDropdownPanel.paddingTop + topDropdownPanel.paddingBottom
+            val targetHeight = if (contentHeight > maxHeight) {
+                maxHeight
+            } else {
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            }
+            val params = topDropdownPanel.layoutParams
+            if (params.height != targetHeight) {
+                params.height = targetHeight
+                topDropdownPanel.layoutParams = params
+            }
+        }
+    }
+
+    private fun setupAppBackgroundModeControls() {
+        appBackgroundModeGroup.check(
+            when (appBackgroundMode) {
+                AppBackgroundMode.Artwork -> R.id.appBackgroundModeArtwork
+                AppBackgroundMode.SoftColor -> R.id.appBackgroundModeSoftColor
+            }
+        )
+        appBackgroundModeGroup.setOnCheckedChangeListener { _, checkedId ->
+            val newMode = when (checkedId) {
+                R.id.appBackgroundModeSoftColor -> AppBackgroundMode.SoftColor
+                else -> AppBackgroundMode.Artwork
+            }
+            if (newMode == appBackgroundMode) return@setOnCheckedChangeListener
+
+            appBackgroundMode = newMode
+            getSharedPreferences(APPVIEW_PREFS_NAME, MODE_PRIVATE)
+                .edit()
+                .putString(KEY_APP_BACKGROUND_MODE, newMode.prefValue)
+                .apply()
+            resolveCurrentBackgroundCandidate()?.let {
+                requestAppBackground(it, debounce = false, force = true)
+            }
+        }
+    }
+
+    private fun readAppBackgroundMode(): AppBackgroundMode {
+        val value = getSharedPreferences(APPVIEW_PREFS_NAME, MODE_PRIVATE)
+            .getString(KEY_APP_BACKGROUND_MODE, null)
+        return AppBackgroundMode.fromPrefValue(value)
+    }
+
+    private fun scheduleDisplayCheck() {
+        displayCheckRunnable?.let { displayCheckHandler.removeCallbacks(it) }
+        displayCheckRunnable = Runnable {
+            displayCheckRunnable = null
+            checkDisplaysAndUpdateUI()
+        }
+        displayCheckHandler.postDelayed(displayCheckRunnable!!, DISPLAY_CHECK_DELAY_MS)
+    }
+
+    private fun getHostHttpClient(): NvHTTP? {
+        val comp = computer ?: return null
+        val address = comp.activeAddress ?: return null
+        val binder = managerBinder ?: return null
+        val cert = comp.serverCert ?: return null
+        val key = "${address}|${comp.httpsPort}|${cert.hashCode()}"
+
+        synchronized(hostHttpLock) {
+            if (hostHttpClient == null || hostHttpKey != key) {
+                hostHttpClient = NvHTTP(
+                    address, comp.httpsPort,
+                    binder.getUniqueId(), "", cert,
+                    PlatformBinding.getCryptoProvider(this@AppView)
+                )
+                hostHttpKey = key
+                LimeLog.info("AppView HTTP client prepared for $address")
+            }
+
+            return hostHttpClient
+        }
     }
 
     // ==================== 显示器选择 ====================
@@ -761,25 +983,25 @@ class AppView : Activity(), AdapterFragmentCallbacks {
     private fun checkDisplaysAndUpdateUI() {
         if (computer == null || computer?.activeAddress == null || managerBinder == null) {
             displaySelectionInfo.visibility = View.GONE
+            constrainTopPanelHeight()
             return
         }
 
         uiScope.launch {
             try {
                 val displays = withContext(Dispatchers.IO) {
-                    val httpConn = NvHTTP(computer?.activeAddress!!, (computer?.httpsPort ?: 0),
-                            managerBinder?.getUniqueId() ?: "", "", computer?.serverCert!!,
-                            PlatformBinding.getCryptoProvider(this@AppView))
-                    httpConn.getDisplays()
+                    getHostHttpClient()?.getDisplays() ?: emptyList()
                 }
                 if (displays.isNotEmpty()) {
                     updateDisplaySelectionUI(displays)
                 } else {
                     displaySelectionInfo.visibility = View.GONE
+                    constrainTopPanelHeight()
                 }
             } catch (e: Exception) {
                 LimeLog.warning("Failed to get displays: " + e.message)
                 displaySelectionInfo.visibility = View.GONE
+                constrainTopPanelHeight()
             }
         }
     }
@@ -808,8 +1030,10 @@ class AppView : Activity(), AdapterFragmentCallbacks {
                 VIRTUAL_DISPLAY_ID,
                 resources.getString(R.string.applist_menu_start_with_vdd)))
 
-        displayRadioGroup.clearCheck()
         displaySelectionInfo.visibility = View.VISIBLE
+        displayRadioGroup.clearCheck()
+        refreshScreenCombinationModeFromPreferences()
+        constrainTopPanelHeight()
     }
 
     /**
@@ -822,6 +1046,10 @@ class AppView : Activity(), AdapterFragmentCallbacks {
     private fun createDisplayRadioButton(id: Int, text: String): RadioButton {
         val radioButton = RadioButton(this)
         radioButton.id = id
+        radioButton.layoutParams = RadioGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT)
+        radioButton.minHeight = dp(32)
         radioButton.text = text
         radioButton.setTextColor(0xCCFFFFFF.toInt())
         radioButton.textSize = 12f
@@ -838,7 +1066,7 @@ class AppView : Activity(), AdapterFragmentCallbacks {
      * @param displayName 选择的显示器名称，如果为null则不指定显示器
      * @param useVdd 是否使用VDD虚拟显示器
      */
-    private fun doStartStream(app: AppObject, displayName: String?, useVdd: Boolean) {
+    private fun doStartStream(app: AppObject, displayName: String?, useVdd: Boolean?, forceResumeCurrentSession: Boolean = false) {
         val comp = computer ?: run {
             Toast.makeText(this, resources.getText(R.string.lost_connection), Toast.LENGTH_SHORT).show()
             return
@@ -848,46 +1076,97 @@ class AppView : Activity(), AdapterFragmentCallbacks {
             return
         }
 
+        if (PairStatePreflight.hasTrustedPairState(comp)) {
+            launchStartStream(app, comp, binder, displayName, useVdd, forceResumeCurrentSession)
+            return
+        }
+
+        uiScope.launch {
+            if (PairStatePreflight.isConfirmedNotPaired(comp, binder, "Starting stream")) {
+                if (!isFinishing && !isDestroyed) {
+                    shortcutHelper.disableComputerShortcut(comp,
+                            resources.getString(R.string.scut_not_paired))
+                    Toast.makeText(this@AppView, resources.getText(R.string.scut_not_paired), Toast.LENGTH_SHORT).show()
+                    finish()
+                }
+                return@launch
+            }
+
+            if (!isFinishing && !isDestroyed) {
+                launchStartStream(app, comp, binder, displayName, useVdd, forceResumeCurrentSession)
+            }
+        }
+    }
+
+    private fun launchStartStream(
+        app: AppObject,
+        comp: ComputerDetails,
+        binder: ComputerManagerService.ComputerManagerBinder,
+        displayName: String?,
+        useVdd: Boolean?,
+        forceResumeCurrentSession: Boolean
+    ) {
         if (appSettingsManager != null) {
             // 使用AppSettingsManager统一管理启动逻辑
             val startIntent = appSettingsManager?.createStartIntentWithLastSettingsIfEnabled(
-                    this, app.app, comp, binder)
+                    this, app.app, comp, binder,
+                    useVdd = useVdd,
+                    forceResumeCurrentSession = forceResumeCurrentSession)
             if (displayName != null) {
                 startIntent?.putExtra(Game.EXTRA_DISPLAY_NAME, displayName)
             }
             // 传递屏幕组合模式
-            startIntent?.let { addScreenCombinationModeToIntent(it, useVdd) }
+            startIntent?.let { addScreenCombinationModeToIntent(it) }
             startIntent?.let { startActivity(it) }
         } else {
             // 回退到默认方式启动
+            val startIntent = ServerHelper.createStartIntent(
+                    this, app.app, comp, binder,
+                    useVdd = useVdd,
+                    forceResumeCurrentSession = forceResumeCurrentSession)
             if (displayName != null) {
-                val startIntent = ServerHelper.createStartIntent(this, app.app, comp, binder)
                 startIntent.putExtra(Game.EXTRA_DISPLAY_NAME, displayName)
-                addScreenCombinationModeToIntent(startIntent, useVdd)
-                startActivity(startIntent)
-            } else {
-                ServerHelper.doStart(this, app.app, comp, binder)
             }
+            addScreenCombinationModeToIntent(startIntent)
+            startActivity(startIntent)
         }
     }
 
     /**
      * 将屏幕组合模式添加到 Intent
-     * 根据 useVdd 决定使用 EXTRA_VDD_SCREEN_COMBINATION_MODE 还是 EXTRA_SCREEN_COMBINATION_MODE
      */
-    private fun addScreenCombinationModeToIntent(intent: Intent, useVdd: Boolean) {
+    private fun addScreenCombinationModeToIntent(intent: Intent) {
         if (selectedScreenCombinationMode != -1) {
-            if (useVdd) {
-                intent.putExtra(Game.EXTRA_VDD_SCREEN_COMBINATION_MODE, selectedScreenCombinationMode)
-            } else {
-                intent.putExtra(Game.EXTRA_SCREEN_COMBINATION_MODE, selectedScreenCombinationMode)
-            }
+            intent.putExtra(Game.EXTRA_SCREEN_COMBINATION_MODE, selectedScreenCombinationMode)
         }
     }
 
     /**
      * 更新屏幕组合模式标签显示文本
      */
+    private fun refreshScreenCombinationModeOptions() {
+        currentModeNames = resources.getStringArray(R.array.screen_combination_mode_names)
+        currentModeValues = resources.getStringArray(R.array.screen_combination_mode_values)
+    }
+
+    private fun refreshScreenCombinationModeFromPreferences() {
+        refreshScreenCombinationModeOptions()
+        selectedScreenCombinationMode = PreferenceConfiguration.readPreferences(this).screenCombinationMode
+        updateScreenCombinationModeLabel()
+        screenCombinationModeLabel.visibility = View.VISIBLE
+    }
+
+    private fun persistScreenCombinationMode() {
+        PreferenceManager.getDefaultSharedPreferences(this).edit {
+            putString(SCREEN_COMBINATION_MODE_PREF_KEY, selectedScreenCombinationMode.toString())
+        }
+    }
+
+    private fun clearDisplaySelection() {
+        displayRadioGroup.clearCheck()
+        refreshScreenCombinationModeFromPreferences()
+    }
+
     private fun updateScreenCombinationModeLabel() {
         if (currentModeNames == null || currentModeNames?.isEmpty() == true) {
             return
@@ -907,36 +1186,58 @@ class AppView : Activity(), AdapterFragmentCallbacks {
     }
 
     /**
-     * 弹出屏幕组合模式选择对话框
+     * 打开屏幕组合模式全屏选择视图。
      */
-    private fun showScreenCombinationModeDialog() {
+    private fun showScreenCombinationModeView() {
         if (currentModeNames == null || currentModeValues == null) {
             return
         }
 
-        // 找到当前选中项的索引
-        var checkedIndex = 0
-        val targetValue = selectedScreenCombinationMode.toString()
-        for (i in currentModeValues?.indices ?: IntRange.EMPTY) {
-            if (currentModeValues!![i] == targetValue) {
-                checkedIndex = i
-                break
-            }
+        if (isPanelOpen) {
+            closeTopPanel()
         }
 
-        AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog)
-                .setTitle(R.string.title_screen_combination_mode)
-                .setSingleChoiceItems(currentModeNames, checkedIndex) { dialog, which ->
-                    selectedScreenCombinationMode = try {
-                        currentModeValues!![which].toInt()
-                    } catch (_: NumberFormatException) {
-                        -1
-                    }
+        val checkedIndex = findScreenCombinationModeIndex()
+        val descriptions = resources.getStringArray(R.array.screen_combination_mode_descriptions)
+        screenCombinationModeOverlay.removeAllViews()
+        screenCombinationModeOverlay.addView(
+            ScreenCombinationModePickerView(
+                context = this,
+                names = currentModeNames!!,
+                descriptions = descriptions,
+                values = currentModeValues!!,
+                checkedIndex = checkedIndex,
+                onClose = { hideScreenCombinationModeView() },
+                onModeSelected = { modeValue ->
+                    selectedScreenCombinationMode = modeValue
+                    persistScreenCombinationMode()
                     updateScreenCombinationModeLabel()
-                    dialog.dismiss()
+                    hideScreenCombinationModeView()
                 }
-                .setNegativeButton(android.R.string.cancel, null)
-                .show()
+            ),
+            FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+            )
+        )
+        screenCombinationModeOverlay.visibility = View.VISIBLE
+        screenCombinationModeOverlay.requestFocus()
+    }
+
+    private fun hideScreenCombinationModeView() {
+        screenCombinationModeOverlay.visibility = View.GONE
+        screenCombinationModeOverlay.removeAllViews()
+        screenCombinationModeLabel.requestFocus()
+    }
+
+    private fun findScreenCombinationModeIndex(): Int {
+        val values = currentModeValues ?: return 0
+        val targetValue = selectedScreenCombinationMode.toString()
+        return values.indexOfFirst { it == targetValue }.takeIf { it >= 0 } ?: 0
+    }
+
+    private fun dp(value: Int): Int {
+        return (value * resources.displayMetrics.density + 0.5f).toInt()
     }
 
     /**
@@ -1048,7 +1349,10 @@ class AppView : Activity(), AdapterFragmentCallbacks {
             backgroundChangeHandler.removeCallbacks(backgroundChangeRunnable!!)
             backgroundChangeRunnable = null
         }
+        displayCheckRunnable?.let { displayCheckHandler.removeCallbacks(it) }
+        displayCheckRunnable = null
 
+        managerBinder?.clearForegroundComputer(uuidString)
         if (managerBinder != null) {
             unbindService(serviceConnection)
         }
@@ -1058,6 +1362,9 @@ class AppView : Activity(), AdapterFragmentCallbacks {
             currentAdapterBridge?.cleanup()
             currentAdapterBridge = null
         }
+
+        frameMetricsLogger?.stop()
+        frameMetricsLogger = null
     }
 
     override fun onResume() {
@@ -1067,14 +1374,26 @@ class AppView : Activity(), AdapterFragmentCallbacks {
         UiHelper.showDecoderCrashDialog(this)
 
         inForeground = true
+        managerBinder?.setForegroundComputer(uuidString)
+        refreshScreenCombinationModeFromPreferences()
         startComputerUpdates()
+
+        if (BuildConfig.DEBUG && Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            frameMetricsLogger?.stop(reportIfNeeded = false)
+            frameMetricsLogger = FrameMetricsLogger(this, "AppView").also { it.start() }
+        }
     }
 
     override fun onPause() {
         super.onPause()
 
         inForeground = false
+        managerBinder?.clearForegroundComputer(uuidString)
+        displayCheckRunnable?.let { displayCheckHandler.removeCallbacks(it) }
+        displayCheckRunnable = null
         stopComputerUpdates()
+        frameMetricsLogger?.stop()
+        frameMetricsLogger = null
     }
 
     // ==================== 上下文菜单 ====================
@@ -1179,26 +1498,12 @@ class AppView : Activity(), AdapterFragmentCallbacks {
             }
 
             START_OR_RESUME_ID -> {
-                // Resume is the same as start for us
-                startStreamWithLastSettingsIfEnabled(app)
+                startStreamWithLastSettingsIfEnabled(app, forceResumeCurrentSession = true)
                 return true
             }
 
             START_WITH_LAST_SETTINGS_ID -> {
-                // Start with last settings (force use last settings for this launch)
-                val comp = computer ?: run {
-                    Toast.makeText(this, resources.getText(R.string.lost_connection), Toast.LENGTH_SHORT).show()
-                    return true
-                }
-                val binder = managerBinder ?: run {
-                    Toast.makeText(this, resources.getText(R.string.lost_connection), Toast.LENGTH_SHORT).show()
-                    return true
-                }
-                if (appSettingsManager != null) {
-                    val startIntent = appSettingsManager?.createStartIntentWithLastSettingsIfEnabled(
-                            this, app.app, comp, binder)
-                    startIntent?.let { startActivity(it) }
-                }
+                startStreamWithLastSettingsIfEnabled(app)
                 return true
             }
 
@@ -1313,9 +1618,8 @@ class AppView : Activity(), AdapterFragmentCallbacks {
 
             if (updated) {
                 appGridAdapter?.notifyDataSetChanged()
-                // Also refresh RecyclerView if it exists - use more efficient update
-                if (currentRecyclerView != null && currentRecyclerView?.adapter != null) {
-                    currentRecyclerView?.adapter?.notifyItemRangeChanged(0, appGridAdapter?.count ?: 0)
+                if (selectedPosition < 0) {
+                    requestAppBackground(resolveCurrentBackgroundCandidate(), debounce = false)
                 }
             }
 
@@ -1379,7 +1683,7 @@ class AppView : Activity(), AdapterFragmentCallbacks {
             appGridAdapter?.rebuildAppList(newAppObjects)
             appGridAdapter?.notifyDataSetChanged()
 
-            // Set first app's cover as background if no current background
+            // Establish the initial background from the same priority path used by focus changes.
             setFirstAppAsBackground(newAppObjects)
 
             // 检查并更新布局（竖屏时根据app数量调整行数）
@@ -1401,33 +1705,18 @@ class AppView : Activity(), AdapterFragmentCallbacks {
         }
 
         // Only set background if we don't have one already and there are apps
-        if (backgroundImageManager?.currentBackground == null &&
+        if (backgroundImageManager?.hasBackground != true &&
             appObjects.isNotEmpty() &&
             appBackgroundImageBlur != null) {
 
-            val firstApp = appObjects[0]
-
-            // Don't set background for hidden apps unless we're showing hidden apps
-            if (!firstApp.isHidden || showHiddenApps) {
-                if (appGridAdapter != null && appGridAdapter?.getLoader() != null) {
-                    setFirstAppBackgroundImage(firstApp)
-                }
-            }
+            requestAppBackground(resolveCurrentBackgroundCandidate(), debounce = false)
         }
-    }
-
-    private fun setFirstAppBackgroundImage(firstApp: AppObject) {
-        val loader = appGridAdapter?.getLoader()
-        loader?.loadFullBitmap(firstApp.app) { bitmap -> backgroundImageManager?.setBackgroundSmoothly(bitmap) }
     }
 
     override fun getAdapterFragmentLayoutId(): Int {
         return if (PreferenceConfiguration.readPreferences(this@AppView).smallIconMode)
             R.layout.app_grid_view_small else R.layout.app_grid_view
     }
-
-    val backgroundImageManagerInstance: BackgroundImageManager?
-        get() = backgroundImageManager
 
     fun receiveAbsListView(listView: AbsListView) {
         // Backwards-compatible wrapper: if a RecyclerView was passed as a View,
@@ -1436,13 +1725,26 @@ class AppView : Activity(), AdapterFragmentCallbacks {
         receiveAdapterView(listView)
     }
 
-    override fun receiveAbsListView(gridView: View) {
+    override fun receiveAbsListView(gridView: View?) {
         // Implementation for the generalized interface method
+        if (gridView == null) {
+            LimeLog.warning("AdapterFragment callback did not include a fragment view; ignoring setup")
+            return
+        }
+
         receiveAdapterView(gridView)
     }
 
     // New generalized receiver to accept RecyclerView or legacy AbsListView
     fun receiveAdapterView(view: View) {
+        if (appGridAdapter == null) {
+            pendingAdapterFragmentView = view
+            LimeLog.warning("AdapterFragment callback arrived before AppView adapter initialization; deferring setup")
+            return
+        }
+
+        pendingAdapterFragmentView = null
+
         if (view is RecyclerView) {
             setupRecyclerView(view)
         } else if (view is AbsListView) {
@@ -1453,10 +1755,15 @@ class AppView : Activity(), AdapterFragmentCallbacks {
     // ==================== RecyclerView 设置 ====================
 
     private fun setupRecyclerView(rv: RecyclerView) {
+        val adapter = appGridAdapter ?: run {
+            pendingAdapterFragmentView = rv
+            return
+        }
+
         currentRecyclerView = rv
 
         // 更新selectionAnimator的RecyclerView和Adapter引用
-        selectionAnimator?.updateReferences(rv, appGridAdapter!!)
+        selectionAnimator?.updateReferences(rv, adapter)
 
         // 创建并设置bridge adapter
         setupBridgeAdapter(rv)
@@ -1529,7 +1836,7 @@ class AppView : Activity(), AdapterFragmentCallbacks {
         rv.layoutManager = glm
 
         // 设置预加载
-        glm.initialPrefetchItemCount = 4
+        glm.initialPrefetchItemCount = (spanCount * 4).coerceAtLeast(4)
 
         // 设置居中布局，并标记需要在布局完成后聚焦第一个应用
         setupCenterAlignment(rv, spanCount, true)
@@ -1589,21 +1896,16 @@ class AppView : Activity(), AdapterFragmentCallbacks {
     private fun optimizeRecyclerViewPerformance(rv: RecyclerView) {
         // 基础性能优化
         rv.setHasFixedSize(true)
-        rv.setItemViewCacheSize(15)
-        rv.isDrawingCacheEnabled = true
-        rv.drawingCacheQuality = View.DRAWING_CACHE_QUALITY_HIGH
+        rv.setItemViewCacheSize(24)
         rv.isNestedScrollingEnabled = false
 
         // 滑动性能优化
         rv.overScrollMode = View.OVER_SCROLL_NEVER
         rv.itemAnimator = null
 
-        // 硬件加速
-        rv.setLayerType(View.LAYER_TYPE_HARDWARE, null)
-
         // 回收池优化
         val pool = rv.recycledViewPool
-        pool.setMaxRecycledViews(0, 20)
+        pool.setMaxRecycledViews(0, 32)
     }
 
     private fun setupRecyclerViewListeners(rv: RecyclerView) {
@@ -1713,9 +2015,14 @@ class AppView : Activity(), AdapterFragmentCallbacks {
     }
 
     private fun setupAbsListView(listView: AbsListView) {
-        listView.setAdapter(appGridAdapter)
+        val adapter = appGridAdapter ?: run {
+            pendingAdapterFragmentView = listView
+            return
+        }
+
+        listView.setAdapter(adapter)
         listView.setOnItemClickListener { _, _, pos, _ ->
-            val app = appGridAdapter?.getItem(pos) as AppObject
+            val app = adapter.getItem(pos) as AppObject
             handleSelectionChange(pos, app)
 
             if (lastRunningAppId != 0) {
@@ -1739,12 +2046,19 @@ class AppView : Activity(), AdapterFragmentCallbacks {
             if (!isTouchInsideView(topDropdownPanel, x, y)
                     && !isTouchInsideView(findViewById(R.id.topPanelToggle), x, y)) {
                 closeTopPanel()
+                return true
             }
         }
         return super.dispatchTouchEvent(ev)
     }
 
     override fun onKeyDown(keyCode: Int, event: android.view.KeyEvent): Boolean {
+        if (screenCombinationModeOverlay.isVisible && (keyCode == android.view.KeyEvent.KEYCODE_BACK
+                || keyCode == android.view.KeyEvent.KEYCODE_BUTTON_B)) {
+            hideScreenCombinationModeView()
+            return true
+        }
+
         // 面板打开时按返回键/B键关闭面板而非退出界面
         if (isPanelOpen && (keyCode == android.view.KeyEvent.KEYCODE_BACK
                 || keyCode == android.view.KeyEvent.KEYCODE_BUTTON_B)) {
@@ -1766,6 +2080,16 @@ class AppView : Activity(), AdapterFragmentCallbacks {
     }
 
     // ==================== 内部类 ====================
+
+    private enum class AppBackgroundMode(val prefValue: String) {
+        Artwork("artwork"),
+        SoftColor("soft_color");
+
+        companion object {
+            fun fromPrefValue(value: String?): AppBackgroundMode =
+                values().firstOrNull { it.prefValue == value } ?: Artwork
+        }
+    }
 
     class AppObject(val app: NvApp) {
         var isRunning = false

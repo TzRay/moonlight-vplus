@@ -11,10 +11,12 @@ import android.widget.Toast
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.limelight.computers.ComputerManagerService
+import com.limelight.computers.PairStatePreflight
 import com.limelight.grid.AppGridAdapter
 import com.limelight.nvstream.http.ComputerDetails
 import com.limelight.nvstream.http.NvApp
 import com.limelight.nvstream.http.NvHTTP
+import com.limelight.nvstream.http.PairingManager
 import com.limelight.nvstream.wol.WakeOnLanSender
 import com.limelight.preferences.PreferenceConfiguration
 import com.limelight.ui.AdapterRecyclerBridge
@@ -154,15 +156,16 @@ class AppSelectionActivity : Activity() {
             val comp = computer!!
             val binder = managerBinder!!
 
-            if (comp.state == ComputerDetails.State.ONLINE && comp.activeAddress != null) {
+            if (comp.state == ComputerDetails.State.ONLINE &&
+                comp.pairState == PairingManager.PairState.PAIRED &&
+                comp.activeAddress != null
+            ) {
                 if (comp.runningGameId != 0 && comp.runningGameId != obj.app.appId) {
                     UiHelper.displayQuitConfirmationDialog(this, {
-                        ServerHelper.doStart(this, obj.app, comp, binder)
-                        finish()
+                        startAppAfterPairStateCheck(obj.app, comp, binder)
                     }, null)
                 } else {
-                    ServerHelper.doStart(this, obj.app, comp, binder)
-                    finish()
+                    startAppAfterPairStateCheck(obj.app, comp, binder)
                 }
             } else {
                 pendingAppLaunch = obj
@@ -194,7 +197,10 @@ class AppSelectionActivity : Activity() {
         computer = details
 
         val pending = pendingAppLaunch ?: return
-        if (details.state == ComputerDetails.State.ONLINE && details.activeAddress != null) {
+        if (details.state == ComputerDetails.State.ONLINE &&
+            details.pairState == PairingManager.PairState.PAIRED &&
+            details.activeAddress != null
+        ) {
             if (connectingDialog != null) {
                 connectingDialog?.dismiss()
                 connectingDialog = null
@@ -204,13 +210,27 @@ class AppSelectionActivity : Activity() {
             val binder = managerBinder ?: return
             if (comp.runningGameId != 0 && comp.runningGameId != pending.app.appId) {
                 UiHelper.displayQuitConfirmationDialog(this@AppSelectionActivity, {
-                    ServerHelper.doStart(this@AppSelectionActivity, pending.app, comp, binder)
-                    finish()
+                    startAppAfterPairStateCheck(pending.app, comp, binder)
                 }, null)
             } else {
-                ServerHelper.doStart(this@AppSelectionActivity, pending.app, comp, binder)
-                finish()
+                startAppAfterPairStateCheck(pending.app, comp, binder)
             }
+        }
+    }
+
+    private fun startAppAfterPairStateCheck(
+        app: NvApp,
+        comp: ComputerDetails,
+        binder: ComputerManagerService.ComputerManagerBinder
+    ) {
+        uiScope.launch {
+            if (PairStatePreflight.isConfirmedNotPaired(comp, binder, "App selection start")) {
+                Toast.makeText(this@AppSelectionActivity, R.string.scut_not_paired, Toast.LENGTH_SHORT).show()
+                finish()
+                return@launch
+            }
+            ServerHelper.doStart(this@AppSelectionActivity, app, comp, binder)
+            finish()
         }
     }
 

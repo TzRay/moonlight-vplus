@@ -1,7 +1,27 @@
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
+    alias(libs.plugins.kotlin.compose)
 }
+
+def localProperties = new Properties()
+def localPropertiesFile = rootProject.file("local.properties")
+if (localPropertiesFile.exists()) {
+    localPropertiesFile.withInputStream { stream ->
+        localProperties.load(stream)
+    }
+}
+
+def githubOAuthClientId = (
+        project.findProperty("githubOAuthClientId")
+                ?: localProperties.getProperty("githubOAuthClientId")
+                ?: System.getenv("GITHUB_OAUTH_CLIENT_ID")
+                ?: ""
+).toString().trim()
+def escapeBuildConfigString = { value ->
+    value.replace("\\", "\\\\").replace("\"", "\\\"")
+}
+def enableX86TestAbi = (project.findProperty("enableX86TestAbi") ?: "false").toString().toBoolean()
 
 // 仅在存在 google-services.json 且满足条件时应用 Google Services 插件
 def hasGoogleServicesJson = file('google-services.json').exists()
@@ -24,14 +44,23 @@ android {
         minSdk 22
         targetSdk 35
 
-        versionName "12.9.1.2"
-        versionCode = 382
+        versionName "12.10.4"
+        versionCode = 392
+
+        // Optional GitHub OAuth App client ID. Enable Device Flow on the OAuth app,
+        // then set githubOAuthClientId in local.properties, pass -PgithubOAuthClientId=...,
+        // or set GITHUB_OAUTH_CLIENT_ID in the environment.
+        buildConfigField "String", "GITHUB_OAUTH_CLIENT_ID", "\"${escapeBuildConfigString(githubOAuthClientId)}\""
 
         // Generate native debug symbols to allow Google Play to symbolicate our native crashes
         ndk.debugSymbolLevel = 'FULL'
 
         ndk {
-            abiFilters 'arm64-v8a', 'armeabi-v7a'
+            def supportedAbis = ['arm64-v8a', 'armeabi-v7a']
+            if (enableX86TestAbi) {
+                supportedAbis += 'x86'
+            }
+            abiFilters(*supportedAbis)
         }
     }
 
@@ -39,6 +68,7 @@ android {
 
     buildFeatures {
         buildConfig = true
+        compose = true
     }
 
     productFlavors {
@@ -86,6 +116,7 @@ android {
     lint {
         disable 'MissingTranslation'
         lintConfig file('lint.xml')
+        baseline file('lint-baseline.xml')
     }
 
     bundle {
@@ -161,7 +192,7 @@ android {
             //
             // TL;DR: Leave the following line alone!
             applicationIdSuffix ".qiin"
-            resValue "string", "app_label", "Moonlight"
+            resValue "string", "app_label", "Moonlight V+"
             resValue "string", "app_label_root", "Moonlight (Root)"
 
             minifyEnabled true
@@ -182,7 +213,11 @@ android {
 dependencies {
     // Desugaring 支持，用于在旧版 Android 上使用 Java 8+ API
     coreLibraryDesugaring libs.desugar.jdk.libs
-    
+
+    // Lossless Scaling Frame Generation 桥接模块（仅 arm64-v8a 设备 + Android 10+ 实际可用）。
+    // 阶段 1：仅提供占位 API；阶段 2 起接入 MediaCodec 拦截路径。
+    implementation project(':framegen')
+
     implementation libs.bouncycastle.prov
     implementation libs.bouncycastle.pkix
     implementation libs.jcodec
@@ -204,6 +239,12 @@ dependencies {
     implementation libs.flexbox
     implementation libs.tvprovider
     implementation libs.zxing.embedded
+    implementation libs.androidx.activity.compose
+    implementation platform(libs.androidx.compose.bom)
+    implementation libs.androidx.compose.foundation
+    implementation libs.androidx.compose.material3
+    implementation libs.androidx.compose.ui
+    implementation libs.androidx.compose.ui.tooling.preview
 
     // Firebase Analytics + Crashlytics
     // BOM 版本说明: https://firebase.google.com/support/release-notes/android
@@ -217,4 +258,7 @@ dependencies {
     implementation libs.kotlin.stdlib
     implementation libs.kotlinx.coroutines.android
     implementation libs.androidx.lifecycle.runtime.ktx
+
+    testImplementation libs.junit
+    testImplementation libs.json
 }
