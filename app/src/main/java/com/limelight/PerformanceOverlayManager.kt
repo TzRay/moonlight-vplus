@@ -2,8 +2,11 @@ package com.limelight
 
 import android.annotation.SuppressLint
 import android.app.Activity
+import android.app.UiModeManager
+import android.content.Context
 import android.content.res.ColorStateList
 import android.content.SharedPreferences
+import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.graphics.Canvas
 import android.graphics.Color
@@ -61,6 +64,7 @@ class PerformanceOverlayManager(
 
     private var performanceOverlayView: LinearLayout? = null
     private lateinit var streamView: StreamView
+    private val isTvDevice: Boolean by lazy { isTvDevice(activity) }
 
     private val overlayPrefs: SharedPreferences by lazy {
         activity.getSharedPreferences("performance_overlay", Activity.MODE_PRIVATE)
@@ -673,9 +677,11 @@ class PerformanceOverlayManager(
             val lp = view.layoutParams as? LinearLayout.LayoutParams ?: continue
             if (lp.width != targetWidth) {
                 lp.width = targetWidth
-                view.layoutParams = lp
             }
+            configureItemSpacing(view, lp, isVertical)
+            view.layoutParams = lp
         }
+        configureOverlayPadding(overlay, isVertical)
         overlay.setBackgroundColor(getOverlayBackgroundColor())
 
         configureDisplayItems()
@@ -715,6 +721,42 @@ class PerformanceOverlayManager(
         overlay.layoutParams = layoutParams
         overlay.post { configureTextAlignment() }
         setupPerformanceOverlayDragging()
+    }
+
+    private fun configureOverlayPadding(overlay: LinearLayout, isVertical: Boolean) {
+        if (isTvDevice) {
+            val horizontalPadding = dp(if (isVertical) 6f else 8f)
+            val verticalPadding = dp(if (isVertical) 3f else 2f)
+            overlay.setPadding(horizontalPadding, verticalPadding, horizontalPadding, verticalPadding)
+        } else {
+            overlay.setPadding(0, dp(3f), dp(12f), dp(4f))
+        }
+    }
+
+    private fun configureItemSpacing(
+        view: TextView,
+        lp: LinearLayout.LayoutParams,
+        isVertical: Boolean
+    ) {
+        if (!isTvDevice) {
+            lp.marginStart = if (view.id == R.id.perfRes) dp(8f) else dp(12f)
+            lp.marginEnd = 0
+            lp.topMargin = 0
+            lp.bottomMargin = 0
+            return
+        }
+
+        if (isVertical) {
+            lp.marginStart = dp(2f)
+            lp.marginEnd = dp(2f)
+            lp.topMargin = dp(1f)
+            lp.bottomMargin = dp(1f)
+        } else {
+            lp.marginStart = if (view.id == R.id.perfRes) dp(2f) else dp(7f)
+            lp.marginEnd = 0
+            lp.topMargin = 0
+            lp.bottomMargin = 0
+        }
     }
 
     private fun configureDisplayItems() {
@@ -802,12 +844,25 @@ class PerformanceOverlayManager(
 
     private fun getAdaptiveTextSizePx(baseSizeSp: Float): Float {
         val dm: DisplayMetrics = activity.resources.displayMetrics
+        if (isTvDevice) {
+            val targetPx = baseSizeSp * dm.density * TV_COMPACT_TEXT_SCALE
+            return targetPx.coerceIn(7f * dm.density, 12f * dm.density)
+        }
+
         val shortSide = minOf(dm.widthPixels, dm.heightPixels)
         val shortSideDp = shortSide / dm.density
         val referenceDp = 411f
         val scaleFactor = sqrt((shortSideDp / referenceDp).toDouble()).toFloat()
         val targetPx = baseSizeSp * dm.density * scaleFactor
         return targetPx.coerceIn(8f, 40f)
+    }
+
+    private fun dp(value: Float): Int {
+        return TypedValue.applyDimension(
+            TypedValue.COMPLEX_UNIT_DIP,
+            value,
+            activity.resources.displayMetrics
+        ).toInt()
     }
 
     @SuppressLint("ClickableViewAccessibility")
@@ -1393,6 +1448,14 @@ class PerformanceOverlayManager(
         private const val DOUBLE_CLICK_TIMEOUT = 300
         private const val BATTERY_UPDATE_INTERVAL_MS = 15000L
         private const val OVERLAY_BACKGROUND_RGB = 0x16
+        private const val TV_COMPACT_TEXT_SCALE = 0.85f
+
+        private fun isTvDevice(context: Context): Boolean {
+            val uiModeManager = context.getSystemService(Context.UI_MODE_SERVICE) as? UiModeManager
+            return uiModeManager?.currentModeType == Configuration.UI_MODE_TYPE_TELEVISION ||
+                    context.packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK) ||
+                    context.packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK_ONLY)
+        }
 
         private val DECODER_TYPE_MAP = mapOf(
             "avc" to DecoderTypeInfo("H.264/AVC", "AVC"),
