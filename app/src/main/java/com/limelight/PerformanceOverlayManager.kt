@@ -857,14 +857,6 @@ class PerformanceOverlayManager(
         return targetPx.coerceIn(8f, 40f)
     }
 
-    private fun dp(value: Float): Int {
-        return TypedValue.applyDimension(
-            TypedValue.COMPLEX_UNIT_DIP,
-            value,
-            activity.resources.displayMetrics
-        ).toInt()
-    }
-
     @SuppressLint("ClickableViewAccessibility")
     private fun setupPerformanceOverlayDragging() {
         val overlay = performanceOverlayView ?: return
