@@ -43,4 +43,3 @@ v12.11.0 对音频振动进行了完整升级，并正式改用自研的 **Moonl
 音频振动默认关闭。连接支持振动的 Android 设备或手柄后，可在游戏菜单的“音频振动”卡片中开启。不同设备的马达能力有所差异，建议从默认强度开始，再按自己的手感调整。
 
 ## [关于雷蛇手柄支持与自研触觉 SDK 的公告](https://www.alkaidlab.com/docs/razer-haptics-sdk-announcement-zh)
-
