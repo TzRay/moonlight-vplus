@@ -4,6 +4,8 @@ package com.limelight
 import com.limelight.binding.PlatformBinding
 import com.limelight.binding.audio.AndroidAudioRenderer
 import com.limelight.binding.audio.AudioDiagnostics
+import com.limelight.binding.audio.AudioHapticsRuntimePolicy
+import com.limelight.binding.audio.AudioHapticsSettings
 import com.limelight.binding.audio.AudioVibrationService
 import com.limelight.binding.audio.MicrophoneManager
 import com.limelight.binding.input.ControllerHandler
@@ -27,6 +29,7 @@ import com.limelight.framegen.FramegenInterceptor
 import com.limelight.framegen.FramegenPerformanceEnricher
 import com.limelight.framegen.FramegenRuntimeConfig
 import com.limelight.framegen.FramegenRuntimePlanner
+import com.limelight.gamemenu.GameMenu
 import com.limelight.binding.video.MediaCodecHelper
 import com.limelight.binding.video.PerfOverlayListener
 import com.limelight.binding.video.PerformanceInfo
@@ -127,6 +130,7 @@ class Game : Activity(), SurfaceHolder.Callback,
     var virtualController: VirtualController? = null
     lateinit var panZoomHandler: PanZoomHandler
     private var audioVibrationService: AudioVibrationService? = null
+    private var appliedAudioHapticsSettings: AudioHapticsSettings? = null
 
     interface PerformanceInfoDisplay {
         fun display(performanceAttrs: Map<String, String>)
@@ -170,6 +174,7 @@ class Game : Activity(), SurfaceHolder.Callback,
     var appName: String? = null
     lateinit var app: NvApp
     private var desiredRefreshRate = 0f
+    private var selectedDisplayMode: DisplayModeManager.DisplayModeSelection? = null
     var appSettingsManager: AppSettingsManager? = null
     var computerUuid: String? = null
 
@@ -245,6 +250,7 @@ class Game : Activity(), SurfaceHolder.Callback,
 
     var usbDriverServiceManager: UsbDriverServiceManager? = null
     var externalDisplayManager: ExternalDisplayManager? = null
+    private lateinit var targetDisplayResolver: TargetDisplayResolver
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -270,7 +276,11 @@ class Game : Activity(), SurfaceHolder.Callback,
         setContentView(R.layout.activity_game)
         window.decorView.findViewById<View>(android.R.id.content).isFocusable = true
 
-        prefConfig = PreferenceConfiguration.readPreferences(this)
+        targetDisplayResolver = TargetDisplayResolver(this)
+        val initialTargetDisplay = targetDisplayResolver.resolve(
+            PreferenceConfiguration.isExternalDisplayEnabled(this)
+        )
+        prefConfig = PreferenceConfiguration.readPreferences(this, initialTargetDisplay)
         orientationManager = OrientationManager(
             this,
             prefConfig.width,
@@ -305,7 +315,10 @@ class Game : Activity(), SurfaceHolder.Callback,
         orientationManager.setPreferredOrientation()
 
         if (prefConfig.stretchVideo || DisplayModeManager.shouldIgnoreInsetsForResolution(
-                windowManager.defaultDisplay, prefConfig.width, prefConfig.height
+                currentTargetDisplay,
+                prefConfig.width,
+                prefConfig.height,
+                prefConfig.usesNativeDisplayMode
             )
         ) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
@@ -322,7 +335,8 @@ class Game : Activity(), SurfaceHolder.Callback,
         streamView.setOnKeyListener(this)
         streamView.setInputCallbacks(this)
 
-        panZoomHandler = PanZoomHandler(this, this, streamView, prefConfig)
+        val cursorOverlayView = findViewById<CursorView>(R.id.cursorOverlay)
+        panZoomHandler = PanZoomHandler(this, this, streamView, cursorOverlayView, prefConfig)
 
         val backgroundTouchView = findViewById<View>(R.id.backgroundTouchView)
         backgroundTouchView.setOnTouchListener(this)
@@ -420,11 +434,17 @@ class Game : Activity(), SurfaceHolder.Callback,
             prefConfig.audioVibrationMode,
             prefConfig.audioVibrationScene
         )
-        MoonBridge.setBassEnergyListener { intensity, lowFreqRatio ->
-            audioVibrationService?.handleBassEnergy(intensity, lowFreqRatio)
-        }
-        MoonBridge.setBassEnergyEnabled(prefConfig.enableAudioVibration)
-        MoonBridge.setBassEnergySceneMode(prefConfig.audioVibrationScene)
+        appliedAudioHapticsSettings = AudioHapticsSettings(
+            enabled = prefConfig.enableAudioVibration,
+            strength = prefConfig.audioVibrationStrength,
+            mode = prefConfig.audioVibrationMode,
+            scene = prefConfig.audioVibrationScene
+        )
+        MoonBridge.setAudioHapticsSessionHandle(
+            audioVibrationService?.nativeSessionHandle ?: 0L
+        )
+        MoonBridge.setAudioHapticsSceneMode(prefConfig.audioVibrationScene)
+        updateAudioHapticsRuntimeEnabled(true)
 
         val inputManager = getSystemService(INPUT_SERVICE) as InputManager
         inputManager.registerInputDeviceListener(keyboardInputHandler.keyboardTranslator, null)
@@ -432,7 +452,6 @@ class Game : Activity(), SurfaceHolder.Callback,
         touchInputHandler = TouchInputHandler(this)
         touchInputHandler.initTouchContexts(conn!!, streamView, prefConfig)
 
-        val cursorOverlayView = findViewById<CursorView>(R.id.cursorOverlay)
         cursorServiceManager = CursorServiceManager(
             streamView, cursorOverlayView, prefConfig, touchInputHandler.relativeTouchContextMap,
             object : CursorServiceManager.UiCallback {
@@ -520,7 +539,7 @@ class Game : Activity(), SurfaceHolder.Callback,
 
     /** Resolve the display currently used for rendering (external or built-in). */
     val currentTargetDisplay: Display
-        get() = externalDisplayManager?.getTargetDisplay() ?: windowManager.defaultDisplay
+        get() = targetDisplayResolver.currentDisplay()
 
     /** Resolve the StreamView coordinate space for motion callbacks that don't pass a view. */
     private fun getMotionEventTargetView(): StreamView = activeStreamView ?: streamView
@@ -643,6 +662,10 @@ class Game : Activity(), SurfaceHolder.Callback,
      */
     private fun createConnectionAndHandler() {
         framegenEnabledToastShown = false
+        if (::controllerHandler.isInitialized) {
+            audioVibrationService?.controllerHandler = null
+            controllerHandler.destroy()
+        }
         val host = intent.getStringExtra(EXTRA_HOST) ?: ""
         val port = intent.getIntExtra(EXTRA_PORT, NvHTTP.DEFAULT_HTTP_PORT)
         val httpsPort = intent.getIntExtra(EXTRA_HTTPS_PORT, 0)
@@ -674,9 +697,14 @@ class Game : Activity(), SurfaceHolder.Callback,
 
     /** Create or re-create ExternalDisplayManager with the standard callback. */
     private fun setupExternalDisplay() {
-        externalDisplayManager = ExternalDisplayManager(this, prefConfig, conn!!, decoderRenderer!!, pcName ?: "", appName ?: "")
-        externalDisplayManager?.callback = createExternalDisplayCallback()
-        externalDisplayManager?.initialize()
+        val manager = ExternalDisplayManager(
+            this,
+            prefConfig,
+            targetDisplayResolver
+        )
+        externalDisplayManager = manager
+        manager.callback = createExternalDisplayCallback()
+        manager.initialize(initialDisplayMode = selectedDisplayMode)
     }
 
     /** Bind or re-bind the USB driver service with the current controllerHandler. */
@@ -925,6 +953,9 @@ class Game : Activity(), SurfaceHolder.Callback,
 
     override fun onResume() {
         super.onResume()
+        if (audioVibrationService != null) {
+            updateAudioHapticsRuntimeEnabled(true)
+        }
         KeyboardAccessibilityService.setIntercepting(true)
         val service = KeyboardAccessibilityService.instance
         if (service != null) {
@@ -1121,22 +1152,18 @@ class Game : Activity(), SurfaceHolder.Callback,
             LimeLog.info("Framegen display target FPS: ${prefConfig.fps} -> ${displayConfig.fps}")
         }
 
-        val result = DisplayModeManager.selectBestDisplayMode(display, displayConfig)
+        val selection = DisplayModeManager.selectBestDisplayMode(display, displayConfig)
+        selectedDisplayMode = selection
 
-        val windowLayoutParams = window.attributes
-        if (result.preferredModeId >= 0) {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                windowLayoutParams.preferredDisplayModeId = result.preferredModeId
-            }
-            window.attributes = windowLayoutParams
-        } else if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
-            windowLayoutParams.preferredRefreshRate = result.refreshRate
-            window.attributes = windowLayoutParams
+        if (!targetDisplayResolver.isExternalDisplaySelected()) {
+            DisplayModeWindowApplier.apply(window, selection)
+        } else {
+            externalDisplayManager?.updateDisplayMode(selection)
         }
 
-        updateStreamViewSize(prefConfig.width, prefConfig.height, result.aspectRatioMatch)
-        desiredRefreshRate = result.refreshRate
-        return result.refreshRate
+        updateStreamViewSize(prefConfig.width, prefConfig.height, selection.aspectRatioMatch)
+        desiredRefreshRate = selection.refreshRate
+        return selection.refreshRate
     }
 
     @SuppressLint("InlinedApi")
@@ -1185,6 +1212,13 @@ class Game : Activity(), SurfaceHolder.Callback,
             floatBallHandler.release()
         }
 
+        if (audioVibrationService != null) {
+            updateAudioHapticsRuntimeEnabled(false)
+            MoonBridge.setAudioHapticsSessionHandle(0L)
+            audioVibrationService?.release()
+            audioVibrationService = null
+        }
+
         super.onDestroy()
 
         if (conn != null && connected) {
@@ -1193,12 +1227,6 @@ class Game : Activity(), SurfaceHolder.Callback,
 
         if (::controllerHandler.isInitialized) {
             controllerHandler.destroy()
-        }
-
-        if (audioVibrationService != null) {
-            audioVibrationService?.stop()
-            MoonBridge.setBassEnergyEnabled(false)
-            MoonBridge.setBassEnergyListener(null)
         }
 
         if (::keyboardInputHandler.isInitialized) {
@@ -1223,6 +1251,8 @@ class Game : Activity(), SurfaceHolder.Callback,
     }
 
     override fun onPause() {
+        updateAudioHapticsRuntimeEnabled(false)
+        audioVibrationService?.stop()
         if (::floatBallHandler.isInitialized) {
             floatBallHandler.hide()
         }
@@ -1238,6 +1268,65 @@ class Game : Activity(), SurfaceHolder.Callback,
             }
         }
         super.onPause()
+    }
+
+    private fun updateAudioHapticsRuntimeEnabled(foreground: Boolean) {
+        val featureEnabled = foreground && prefConfig.enableAudioVibration
+        MoonBridge.setAudioHapticsOutputEnabled(featureEnabled)
+    }
+
+    /**
+     * Applies Game Menu audio-haptics changes to the active stream.
+     *
+     * Android's system audio-coupled generator owns the device motor for the
+     * lifetime of its AudioTrack. Reconfiguring it in place would leave the UI
+     * and actual route out of sync, so those uncommon changes are persisted for
+     * the next stream instead.
+     */
+    internal fun applyAudioHapticsSettings(settings: AudioHapticsSettings): Boolean {
+        val service = audioVibrationService ?: return false
+        val canApply = AudioHapticsRuntimePolicy.canApplyImmediately(
+            systemAudioCoupledActive = service.systemAudioCoupledDeviceActive,
+            applied = currentAudioHapticsSettings(),
+            desired = settings
+        )
+        if (!canApply) return false
+
+        service.setSettings(
+            settings.enabled,
+            settings.strength,
+            settings.mode,
+            settings.scene
+        )
+        appliedAudioHapticsSettings = settings
+        MoonBridge.setAudioHapticsSceneMode(settings.scene)
+        updateAudioHapticsRuntimeEnabled(true)
+        return true
+    }
+
+    internal fun currentAudioHapticsSettings(): AudioHapticsSettings {
+        return appliedAudioHapticsSettings ?: AudioHapticsSettings(
+            enabled = prefConfig.enableAudioVibration,
+            strength = prefConfig.audioVibrationStrength,
+            mode = prefConfig.audioVibrationMode,
+            scene = prefConfig.audioVibrationScene
+        )
+    }
+
+    internal fun applyAudioHapticsStrength(strength: Int): Boolean {
+        val service = audioVibrationService ?: return false
+        if (service.systemAudioCoupledDeviceActive) return false
+
+        val bounded = strength.coerceIn(0, AudioVibrationService.MAX_STRENGTH)
+        val settings = currentAudioHapticsSettings().copy(strength = bounded)
+        service.setSettings(
+            settings.enabled,
+            settings.strength,
+            settings.mode,
+            settings.scene
+        )
+        appliedAudioHapticsSettings = settings
+        return true
     }
 
     fun changeResolution() {
@@ -1889,7 +1978,25 @@ class Game : Activity(), SurfaceHolder.Callback,
             attemptedConnection = true
             UiHelper.notifyStreamConnecting(this)
 
-            this.audioRenderer = com.limelight.binding.audio.SmartAudioRenderer(this, prefConfig.enableAudioFx, prefConfig.enableSpatializer, prefConfig.audioPassthroughBufferBytes)
+            val enableSystemAudioHaptics =
+                audioVibrationService?.wantsSystemAudioCoupledDeviceHaptics() == true
+            this.audioRenderer = com.limelight.binding.audio.SmartAudioRenderer(
+                context = this,
+                enableAudioFx = prefConfig.enableAudioFx,
+                enableSpatializer = prefConfig.enableSpatializer,
+                passthroughBufferBytes = prefConfig.audioPassthroughBufferBytes,
+                enableSystemAudioHaptics = enableSystemAudioHaptics,
+                onSystemAudioHapticsActiveChanged = { active ->
+                    audioVibrationService?.setSystemAudioCoupledDeviceActive(active)
+                },
+                onAudioPresentationClock = { framePosition, systemNanoTime, sampleRate ->
+                    audioVibrationService?.updateAudioPresentationClock(
+                        framePosition,
+                        systemNanoTime,
+                        sampleRate
+                    )
+                }
+            )
             conn?.start(this.audioRenderer!!, decoderRenderer!!, this)
 
             streamView.post { cursorServiceManager.syncCursorWithStream() }
@@ -2192,7 +2299,19 @@ class Game : Activity(), SurfaceHolder.Callback,
             }
             BackKeyMenuMode.NO_MENU_LOCKED -> {}
             BackKeyMenuMode.GAME_MENU -> {
-                activeGameMenu = GameMenu(this, app, conn!!, device)
+                val existingMenu = activeGameMenu
+                if (existingMenu?.isShowing() == true) {
+                    return
+                }
+                existingMenu?.dismiss()
+                activeGameMenu = null
+
+                val menu = GameMenu(this, app, conn!!, device) { dismissedMenu ->
+                    if (activeGameMenu === dismissedMenu) {
+                        activeGameMenu = null
+                    }
+                }
+                activeGameMenu = menu
             }
         }
     }
@@ -2216,21 +2335,32 @@ class Game : Activity(), SurfaceHolder.Callback,
     }
 
     fun togglePerformanceOverlay() {
-        if (performanceOverlayManager == null) return
+        val nextMode = when (performanceOverlayMode) {
+            PerformanceOverlayMode.HIDDEN -> PerformanceOverlayMode.FLOATING
+            PerformanceOverlayMode.FLOATING -> PerformanceOverlayMode.LOCKED
+            PerformanceOverlayMode.LOCKED -> PerformanceOverlayMode.HIDDEN
+        }
+        setPerformanceOverlayMode(nextMode)
+    }
 
-        if (!prefConfig.enablePerfOverlay) {
-            prefConfig.enablePerfOverlay = true
-            prefConfig.perfOverlayLocked = false
-            performanceOverlayManager?.applyOverlayState()
-        } else if (!prefConfig.perfOverlayLocked) {
-            prefConfig.perfOverlayLocked = true
-            performanceOverlayManager?.applyOverlayState()
-        } else {
-            prefConfig.enablePerfOverlay = false
-            prefConfig.perfOverlayLocked = false
-            performanceOverlayManager?.applyOverlayState()
+    enum class PerformanceOverlayMode {
+        HIDDEN,
+        FLOATING,
+        LOCKED
+    }
+
+    val performanceOverlayMode: PerformanceOverlayMode
+        get() = when {
+            !prefConfig.enablePerfOverlay -> PerformanceOverlayMode.HIDDEN
+            prefConfig.perfOverlayLocked -> PerformanceOverlayMode.LOCKED
+            else -> PerformanceOverlayMode.FLOATING
         }
 
+    fun setPerformanceOverlayMode(mode: PerformanceOverlayMode) {
+        if (performanceOverlayManager == null) return
+        prefConfig.enablePerfOverlay = mode != PerformanceOverlayMode.HIDDEN
+        prefConfig.perfOverlayLocked = mode == PerformanceOverlayMode.LOCKED
+        performanceOverlayManager?.applyOverlayState()
         prefConfig.writePreferences(this)
     }
 
@@ -2257,8 +2387,7 @@ class Game : Activity(), SurfaceHolder.Callback,
 
     fun toggleVirtualController() {
         if (virtualController != null && virtualController?.elements?.isNotEmpty() == true) {
-            val isVisible = virtualController?.elements?.get(0)?.visibility == View.VISIBLE
-            if (isVisible) {
+            if (isVirtualControllerVisible()) {
                 virtualController?.hide()
                 Toast.makeText(this, getString(R.string.toast_virtual_controller_hidden), Toast.LENGTH_SHORT).show()
             } else {
@@ -2269,6 +2398,9 @@ class Game : Activity(), SurfaceHolder.Callback,
             Toast.makeText(this, getString(R.string.toast_virtual_controller_not_enabled), Toast.LENGTH_SHORT).show()
         }
     }
+
+    fun isVirtualControllerVisible(): Boolean =
+        virtualController?.elements?.firstOrNull()?.visibility == View.VISIBLE
 
     fun initializeControllerManager() {
         val manager = controllerManager ?: ControllerManager(streamView.parent as FrameLayout, this)

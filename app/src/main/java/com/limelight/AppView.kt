@@ -23,14 +23,9 @@ import android.os.Looper
 import android.text.SpannableString
 import android.text.Spanned
 import android.text.style.RelativeSizeSpan
-import android.view.ContextMenu
-import android.view.ContextMenu.ContextMenuInfo
-import android.view.Menu
-import android.view.MenuItem
 import android.view.View
 import android.view.ViewGroup
 import android.widget.AbsListView
-import android.widget.AdapterView.AdapterContextMenuInfo
 import android.widget.CheckBox
 import android.widget.FrameLayout
 import android.widget.ImageView
@@ -63,6 +58,8 @@ import com.limelight.ui.AdapterRecyclerBridge
 import com.limelight.ui.ScreenCombinationModePickerView
 import com.limelight.ui.SelectionIndicatorAnimator
 import com.limelight.utils.AppSettingsManager
+import com.limelight.utils.AppActionSheet
+import com.limelight.utils.AppBackgroundMode
 import com.limelight.utils.BackgroundImageManager
 import com.limelight.utils.CacheHelper
 import com.limelight.utils.Dialog
@@ -120,8 +117,6 @@ class AppView : Activity(), AdapterFragmentCallbacks {
         private const val DISPLAY_CHECK_DELAY_MS = 800L
         private const val NOT_PAIRED_EXIT_CONFIRMATION_UPDATES = 2
         private const val VIRTUAL_DISPLAY_ID = 212333
-        private const val APPVIEW_PREFS_NAME = "AppView"
-        private const val KEY_APP_BACKGROUND_MODE = "app_background_mode"
         private const val SCREEN_COMBINATION_MODE_PREF_KEY = "list_screen_combination_mode"
     }
 
@@ -408,12 +403,12 @@ class AppView : Activity(), AdapterFragmentCallbacks {
         // 竖屏：仅保留模糊层铺满屏幕（blur 图本身经 RenderEffect / StackBlur 处理后已是装饰性背景）
         // 横屏：保留双层（模糊+清晰）原视觉
         val isPortrait = resources.configuration.orientation == Configuration.ORIENTATION_PORTRAIT
-        backgroundImageManager = if (isPortrait) {
-            appBackgroundImageClear.visibility = View.GONE
-            BackgroundImageManager(this, null, appBackgroundImageBlur!!, blurOnly = true)
-        } else {
-            BackgroundImageManager(this, appBackgroundImageBlur, appBackgroundImageClear)
-        }
+        backgroundImageManager = BackgroundImageManager(
+            this,
+            appBackgroundImageBlur!!,
+            appBackgroundImageClear,
+            artworkBlurOnly = isPortrait
+        )
 
         // Initialize app settings manager and UI components
         appSettingsManager = AppSettingsManager(this)
@@ -642,6 +637,16 @@ class AppView : Activity(), AdapterFragmentCallbacks {
                     runOnUiThread {
                         if (requestId == backgroundRequestSerial) {
                             manager.setBackgroundSmoothly(bitmap)
+                        }
+                    }
+                }
+            }
+            AppBackgroundMode.Acrylic -> {
+                val loader = appGridAdapter?.getLoader() ?: return
+                loader.loadFullBitmap(appObject.app) { bitmap ->
+                    runOnUiThread {
+                        if (requestId == backgroundRequestSerial) {
+                            manager.setAcrylicBackgroundSmoothly(bitmap)
                         }
                     }
                 }
@@ -917,21 +922,20 @@ class AppView : Activity(), AdapterFragmentCallbacks {
         appBackgroundModeGroup.check(
             when (appBackgroundMode) {
                 AppBackgroundMode.Artwork -> R.id.appBackgroundModeArtwork
+                AppBackgroundMode.Acrylic -> R.id.appBackgroundModeAcrylic
                 AppBackgroundMode.SoftColor -> R.id.appBackgroundModeSoftColor
             }
         )
         appBackgroundModeGroup.setOnCheckedChangeListener { _, checkedId ->
             val newMode = when (checkedId) {
+                R.id.appBackgroundModeAcrylic -> AppBackgroundMode.Acrylic
                 R.id.appBackgroundModeSoftColor -> AppBackgroundMode.SoftColor
                 else -> AppBackgroundMode.Artwork
             }
             if (newMode == appBackgroundMode) return@setOnCheckedChangeListener
 
             appBackgroundMode = newMode
-            getSharedPreferences(APPVIEW_PREFS_NAME, MODE_PRIVATE)
-                .edit()
-                .putString(KEY_APP_BACKGROUND_MODE, newMode.prefValue)
-                .apply()
+            AppBackgroundMode.write(this, newMode)
             resolveCurrentBackgroundCandidate()?.let {
                 requestAppBackground(it, debounce = false, force = true)
             }
@@ -939,9 +943,7 @@ class AppView : Activity(), AdapterFragmentCallbacks {
     }
 
     private fun readAppBackgroundMode(): AppBackgroundMode {
-        val value = getSharedPreferences(APPVIEW_PREFS_NAME, MODE_PRIVATE)
-            .getString(KEY_APP_BACKGROUND_MODE, null)
-        return AppBackgroundMode.fromPrefValue(value)
+        return AppBackgroundMode.read(this)
     }
 
     private fun scheduleDisplayCheck() {
@@ -989,11 +991,14 @@ class AppView : Activity(), AdapterFragmentCallbacks {
 
         uiScope.launch {
             try {
-                val displays = withContext(Dispatchers.IO) {
-                    getHostHttpClient()?.getDisplays() ?: emptyList()
+                val catalog = withContext(Dispatchers.IO) {
+                    getHostHttpClient()?.getDisplays()
                 }
-                if (displays.isNotEmpty()) {
-                    updateDisplaySelectionUI(displays)
+                val supportsVdd =
+                    (computer?.vddCapabilityVersion ?: 0) > 0 &&
+                        (catalog?.vddCapabilityVersion ?: 0) > 0
+                if (catalog != null && (catalog.displays.isNotEmpty() || supportsVdd)) {
+                    updateDisplaySelectionUI(catalog, supportsVdd)
                 } else {
                     displaySelectionInfo.visibility = View.GONE
                     constrainTopPanelHeight()
@@ -1011,7 +1016,11 @@ class AppView : Activity(), AdapterFragmentCallbacks {
      *
      * @param displays 显示器列表
      */
-    private fun updateDisplaySelectionUI(displays: List<DisplayInfo>) {
+    private fun updateDisplaySelectionUI(
+        catalog: NvHTTP.DisplayCatalog,
+        supportsVdd: Boolean
+    ) {
+        val displays = catalog.displays
         availableDisplays = displays
         displayRadioGroup.removeAllViews()
 
@@ -1026,9 +1035,24 @@ class AppView : Activity(), AdapterFragmentCallbacks {
             displayRadioGroup.addView(createDisplayRadioButton(i, displayName))
         }
 
-        displayRadioGroup.addView(createDisplayRadioButton(
-                VIRTUAL_DISPLAY_ID,
-                resources.getString(R.string.applist_menu_start_with_vdd)))
+        if (supportsVdd) {
+            val vddReady = catalog.vddState == NvHTTP.VddState.READY
+            val vddLabel = if (vddReady) {
+                resources.getString(R.string.applist_menu_start_with_vdd)
+            } else {
+                resources.getString(
+                    R.string.applist_vdd_unavailable,
+                    resources.getString(R.string.applist_menu_start_with_vdd).trim()
+                )
+            }
+            displayRadioGroup.addView(
+                createDisplayRadioButton(
+                    VIRTUAL_DISPLAY_ID,
+                    vddLabel,
+                    enabled = vddReady
+                )
+            )
+        }
 
         displaySelectionInfo.visibility = View.VISIBLE
         displayRadioGroup.clearCheck()
@@ -1043,7 +1067,11 @@ class AppView : Activity(), AdapterFragmentCallbacks {
      * @param text 按钮文本
      * @return 配置好的单选按钮
      */
-    private fun createDisplayRadioButton(id: Int, text: String): RadioButton {
+    private fun createDisplayRadioButton(
+        id: Int,
+        text: String,
+        enabled: Boolean = true
+    ): RadioButton {
         val radioButton = RadioButton(this)
         radioButton.id = id
         radioButton.layoutParams = RadioGroup.LayoutParams(
@@ -1056,6 +1084,8 @@ class AppView : Activity(), AdapterFragmentCallbacks {
         radioButton.typeface = android.graphics.Typeface.create("sans-serif-light", android.graphics.Typeface.NORMAL)
         radioButton.buttonTintList = android.content.res.ColorStateList.valueOf(0xFFFFFFFF.toInt())
         radioButton.setPadding(0, 0, 20, 0)
+        radioButton.isEnabled = enabled
+        radioButton.alpha = if (enabled) 1f else 0.55f
         return radioButton
     }
 
@@ -1396,60 +1426,52 @@ class AppView : Activity(), AdapterFragmentCallbacks {
         frameMetricsLogger = null
     }
 
-    // ==================== 上下文菜单 ====================
+    // ==================== 应用操作 Action Sheet ====================
 
-    override fun onCreateContextMenu(menu: ContextMenu, v: View, menuInfo: ContextMenuInfo?) {
-        super.onCreateContextMenu(menu, v, menuInfo)
-
-        var position = -1
-        var targetView: View? = null
-
-        if (menuInfo is AdapterContextMenuInfo) {
-            // AbsListView的情况
-            position = menuInfo.position
-            targetView = menuInfo.targetView
-        } else if (v is RecyclerView) {
-            // RecyclerView的情况，需要从当前选中的位置获取
-            if (appGridAdapter != null && selectedPosition >= 0 && selectedPosition < (appGridAdapter?.count ?: 0)) {
-                position = selectedPosition
-                val viewHolder = v.findViewHolderForAdapterPosition(selectedPosition)
-                if (viewHolder != null) {
-                    targetView = viewHolder.itemView
-                }
-            }
-        } else if (selectedPosition >= 0) {
-            position = selectedPosition
+    private fun buildAppActions(selectedApp: AppObject, targetView: View?): List<AppActionSheet.Action> = buildList {
+        fun add(
+            id: Int,
+            titleRes: Int,
+            destructive: Boolean = false,
+            checked: Boolean? = null,
+            sectionStart: Boolean = false
+        ) {
+            add(AppActionSheet.Action(
+                id = id,
+                title = getString(titleRes),
+                destructive = destructive,
+                checked = checked,
+                sectionStart = sectionStart
+            ))
         }
-
-        if (position < 0 || appGridAdapter == null || position >= (appGridAdapter?.count ?: 0)) return
-
-        val selectedApp = appGridAdapter?.getItem(position) as AppObject
-
-        menu.setHeaderTitle(selectedApp.app.appName)
 
         if (lastRunningAppId != 0) {
             if (lastRunningAppId == selectedApp.app.appId) {
-                menu.add(Menu.NONE, START_OR_RESUME_ID, 1, resources.getString(R.string.applist_menu_resume))
-                menu.add(Menu.NONE, QUIT_ID, 2, resources.getString(R.string.applist_menu_quit))
+                add(START_OR_RESUME_ID, R.string.applist_menu_resume)
             } else {
-                menu.add(Menu.NONE, START_WITH_QUIT, 1, resources.getString(R.string.applist_menu_quit_and_start))
+                add(START_WITH_QUIT, R.string.applist_menu_quit_and_start)
             }
         }
 
         // Only show the hide checkbox if this is not the currently running app or it's already hidden
         if (lastRunningAppId != selectedApp.app.appId || selectedApp.isHidden) {
+            var sectionStarted = false
             // Add "Start with Last Settings" option if last settings exist
             if (appSettingsManager != null && computer?.uuid != null &&
                 appSettingsManager?.hasLastSettings(computer?.uuid!!, selectedApp.app) == true) {
-                menu.add(Menu.NONE, START_WITH_LAST_SETTINGS_ID, 1, resources.getString(R.string.applist_menu_start_with_last_settings))
+                add(START_WITH_LAST_SETTINGS_ID, R.string.applist_menu_start_with_last_settings, sectionStart = true)
+                sectionStarted = true
             }
 
-            val hideAppItem = menu.add(Menu.NONE, HIDE_APP_ID, 2, resources.getString(R.string.applist_menu_hide_app))
-            hideAppItem.isCheckable = true
-            hideAppItem.isChecked = selectedApp.isHidden
+            add(
+                HIDE_APP_ID,
+                R.string.applist_menu_hide_app,
+                checked = selectedApp.isHidden,
+                sectionStart = !sectionStarted
+            )
         }
 
-        menu.add(Menu.NONE, VIEW_DETAILS_ID, 4, resources.getString(R.string.applist_menu_details))
+        add(VIEW_DETAILS_ID, R.string.applist_menu_details, sectionStart = true)
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             // Only add an option to create shortcut if box art is loaded
@@ -1461,34 +1483,18 @@ class AppView : Activity(), AdapterFragmentCallbacks {
                     val drawable = appImageView.drawable as? BitmapDrawable
                     if (drawable != null && drawable.bitmap != null) {
                         // We have a bitmap loaded too
-                        menu.add(Menu.NONE, CREATE_SHORTCUT_ID, 5, resources.getString(R.string.applist_menu_scut))
+                        add(CREATE_SHORTCUT_ID, R.string.applist_menu_scut)
                     }
                 }
             }
         }
-    }
-
-    override fun onContextMenuClosed(menu: Menu) {
-    }
-
-    override fun onContextItemSelected(item: MenuItem): Boolean {
-        val position: Int
-        var targetView: View? = null
-
-        val menuInfo = item.menuInfo
-        if (menuInfo is AdapterContextMenuInfo) {
-            // AbsListView的情况
-            position = menuInfo.position
-            targetView = menuInfo.targetView
-        } else {
-            // RecyclerView的情况，使用当前选中的位置
-            position = selectedPosition
+        if (lastRunningAppId == selectedApp.app.appId) {
+            add(QUIT_ID, R.string.applist_menu_quit, destructive = true, sectionStart = true)
         }
+    }
 
-        if (position < 0 || appGridAdapter == null || position >= (appGridAdapter?.count ?: 0)) return false
-
-        val app = appGridAdapter?.getItem(position) as AppObject
-        when (item.itemId) {
+    private fun handleAppAction(itemId: Int, app: AppObject, targetView: View?): Boolean {
+        when (itemId) {
             START_WITH_QUIT -> {
                 // Display a confirmation dialog first
                 UiHelper.displayQuitConfirmationDialog(this,
@@ -1534,7 +1540,7 @@ class AppView : Activity(), AdapterFragmentCallbacks {
             }
 
             HIDE_APP_ID -> {
-                if (item.isChecked) {
+                if (app.isHidden) {
                     // Transitioning hidden to shown
                     hiddenAppIds.remove(app.app.appId)
                 } else {
@@ -1582,7 +1588,7 @@ class AppView : Activity(), AdapterFragmentCallbacks {
                 return true
             }
 
-            else -> return super.onContextItemSelected(item)
+            else -> return false
         }
     }
 
@@ -1779,7 +1785,6 @@ class AppView : Activity(), AdapterFragmentCallbacks {
 
         // 应用UI配置
         UiHelper.applyStatusBarPadding(rv)
-        registerForContextMenu(rv)
     }
 
     /**
@@ -1963,7 +1968,7 @@ class AppView : Activity(), AdapterFragmentCallbacks {
         handleSelectionChange(position, app)
 
         if (lastRunningAppId != 0) {
-            showContextMenuForPosition(position)
+            showAppActionSheetForPosition(position)
         } else {
             startStreamWithLastSettingsIfEnabled(app)
         }
@@ -1978,7 +1983,7 @@ class AppView : Activity(), AdapterFragmentCallbacks {
                 keyCode == android.view.KeyEvent.KEYCODE_BUTTON_Y) {
             val app = item as AppObject
             handleSelectionChange(position, app)
-            showContextMenuForPosition(position)
+            showAppActionSheetForPosition(position)
             return true
         }
 
@@ -1988,18 +1993,30 @@ class AppView : Activity(), AdapterFragmentCallbacks {
     private fun handleItemLongClick(position: Int, item: Any): Boolean {
         val app = item as AppObject
         handleSelectionChange(position, app)
-        return showContextMenuForPosition(position)
+        return showAppActionSheetForPosition(position)
     }
 
-    private fun showContextMenuForPosition(position: Int): Boolean {
+    private fun showAppActionSheetForPosition(position: Int): Boolean {
         if (currentRecyclerView == null) return false
 
         val viewHolder = currentRecyclerView?.findViewHolderForAdapterPosition(position)
         if (viewHolder != null) {
-            openContextMenu(viewHolder.itemView)
-            return true
+            return showAppActionSheet(position, viewHolder.itemView)
         }
         return false
+    }
+
+    private fun showAppActionSheet(position: Int, targetView: View?): Boolean {
+        val adapter = appGridAdapter ?: return false
+        if (position !in 0 until adapter.count) return false
+        val app = adapter.getItem(position) as AppObject
+        AppActionSheet.show(
+            context = this,
+            title = app.app.appName,
+            actions = buildAppActions(app, targetView),
+            onAction = { handleAppAction(it.id, app, targetView) }
+        )
+        return true
     }
 
     private fun updateSelectionPosition() {
@@ -2021,19 +2038,23 @@ class AppView : Activity(), AdapterFragmentCallbacks {
         }
 
         listView.setAdapter(adapter)
-        listView.setOnItemClickListener { _, _, pos, _ ->
+        listView.setOnItemClickListener { _, view, pos, _ ->
             val app = adapter.getItem(pos) as AppObject
             handleSelectionChange(pos, app)
 
             if (lastRunningAppId != 0) {
-                openContextMenu(listView)
+                showAppActionSheet(pos, view)
             } else {
                 startStreamWithLastSettingsIfEnabled(app)
             }
         }
 
         UiHelper.applyStatusBarPadding(listView)
-        registerForContextMenu(listView)
+        listView.setOnItemLongClickListener { _, view, pos, _ ->
+            val app = adapter.getItem(pos) as AppObject
+            handleSelectionChange(pos, app)
+            showAppActionSheet(pos, view)
+        }
     }
 
     // ==================== 顶部面板 - 事件处理 ====================
@@ -2080,16 +2101,6 @@ class AppView : Activity(), AdapterFragmentCallbacks {
     }
 
     // ==================== 内部类 ====================
-
-    private enum class AppBackgroundMode(val prefValue: String) {
-        Artwork("artwork"),
-        SoftColor("soft_color");
-
-        companion object {
-            fun fromPrefValue(value: String?): AppBackgroundMode =
-                values().firstOrNull { it.prefValue == value } ?: Artwork
-        }
-    }
 
     class AppObject(val app: NvApp) {
         var isRunning = false

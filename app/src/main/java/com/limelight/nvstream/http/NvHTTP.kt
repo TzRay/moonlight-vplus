@@ -10,7 +10,6 @@ import java.io.StringReader
 import java.net.Inet4Address
 import java.net.InetAddress
 import java.net.Proxy
-import java.net.URLEncoder
 import java.security.KeyManagementException
 import java.security.KeyStore
 import java.security.NoSuchAlgorithmException
@@ -105,6 +104,30 @@ class NvHTTP(
         val index: Int,
         val name: String,
         val guid: String
+    )
+
+    enum class VddState {
+        READY,
+        DRIVER_MISSING,
+        DRIVER_UNREACHABLE,
+        UNSUPPORTED_PLATFORM,
+        UNKNOWN;
+
+        companion object {
+            fun fromWireValue(value: String?): VddState = when (value) {
+                "ready" -> READY
+                "driver_missing" -> DRIVER_MISSING
+                "driver_unreachable" -> DRIVER_UNREACHABLE
+                "unsupported_platform" -> UNSUPPORTED_PLATFORM
+                else -> UNKNOWN
+            }
+        }
+    }
+
+    data class DisplayCatalog(
+        val displays: List<DisplayInfo>,
+        val vddCapabilityVersion: Int,
+        val vddState: VddState
     )
 
     init {
@@ -297,6 +320,8 @@ class NvHTTP(
 
         details.nvidiaServer = getXmlString(serverInfo, "state", true)!!.contains("MJOLNIR")
         details.supportsDesktopSpecialApp = getXmlString(serverInfo, "DesktopSpecialAppSupport", false) == "1"
+        details.vddCapabilityVersion =
+            getXmlString(serverInfo, "VddCapabilityVersion", false)?.toIntOrNull() ?: 0
 
         try {
             details.sunshineVersion = getSunshineVersion(serverInfo)
@@ -326,10 +351,15 @@ class NvHTTP(
         }
     }
 
-    private fun getCompleteUrl(baseUrl: HttpUrl, path: String, query: String?): HttpUrl {
+    private fun getCompleteUrl(baseUrl: HttpUrl, path: String, query: String?, displayName: String? = null): HttpUrl {
         return baseUrl.newBuilder()
             .addPathSegment(path)
             .query(query)
+            .apply {
+                displayName?.takeIf { it.isNotEmpty() }?.let {
+                    addQueryParameter("display_name", it)
+                }
+            }
             .addQueryParameter("uniqueid", uniqueId)
             .addQueryParameter("clientname", clientName)
             .addQueryParameter("uuid", UUID.randomUUID().toString())
@@ -342,8 +372,8 @@ class NvHTTP(
     }
 
     @Throws(IOException::class, InterruptedException::class)
-    private fun openHttpConnection(client: OkHttpClient, baseUrl: HttpUrl, path: String, query: String?): ResponseBody {
-        val completeUrl = getCompleteUrl(baseUrl, path, query)
+    private fun openHttpConnection(client: OkHttpClient, baseUrl: HttpUrl, path: String, query: String?, displayName: String? = null): ResponseBody {
+        val completeUrl = getCompleteUrl(baseUrl, path, query, displayName)
         val request = Request.Builder().url(completeUrl).get().build()
         val response = try {
             client.newCall(request).execute()
@@ -377,20 +407,20 @@ class NvHTTP(
     }
 
     @Throws(IOException::class, InterruptedException::class)
-    private fun openHttpConnectionToString(client: OkHttpClient, baseUrl: HttpUrl, path: String, query: String?): String {
+    private fun openHttpConnectionToString(client: OkHttpClient, baseUrl: HttpUrl, path: String, query: String?, displayName: String? = null): String {
         try {
-            val resp = openHttpConnection(client, baseUrl, path, query)
+            val resp = openHttpConnection(client, baseUrl, path, query, displayName)
             val respString = resp.string()
             resp.close()
 
             if (verbose && path != "serverinfo") {
-                LimeLog.info("${getCompleteUrl(baseUrl, path, query)} -> $respString")
+                LimeLog.info("${getCompleteUrl(baseUrl, path, query, displayName)} -> $respString")
             }
 
             return respString
         } catch (e: IOException) {
             if (verbose && path != "serverinfo") {
-                LimeLog.warning("${getCompleteUrl(baseUrl, path, query)} -> ${e.message}")
+                LimeLog.warning("${getCompleteUrl(baseUrl, path, query, displayName)} -> ${e.message}")
                 e.printStackTrace()
             }
             throw e
@@ -586,33 +616,10 @@ class NvHTTP(
     }
 
     @Throws(IOException::class, InterruptedException::class)
-    fun getDisplays(): List<DisplayInfo> {
+    fun getDisplays(): DisplayCatalog {
         try {
             val jsonStr = openHttpConnectionToString(httpClientLongConnectTimeout, getHttpsUrl(true), "displays")
-            val json = JSONObject(jsonStr)
-
-            val statusCode = json.optInt("status_code", 0)
-            if (statusCode != 200) {
-                throw IOException("Failed to get displays: " + json.optString("status_message", "Unknown error"))
-            }
-
-            val displaysArray = json.optJSONArray("displays") ?: return ArrayList()
-
-            val displays = ArrayList<DisplayInfo>(displaysArray.length())
-            for (i in 0 until displaysArray.length()) {
-                val displayObj = displaysArray.getJSONObject(i)
-
-                var friendlyName = displayObj.optString("friendly_name", "")
-                if (friendlyName.isEmpty()) {
-                    friendlyName = displayObj.optString("display_name", "Display ${i + 1}")
-                }
-
-                val guid = displayObj.optString("device_id", "")
-
-                displays.add(DisplayInfo(i, friendlyName, guid))
-            }
-
-            return displays
+            return parseDisplayCatalog(jsonStr)
         } catch (e: org.json.JSONException) {
             throw IOException("Failed to parse displays response: ${e.message}", e)
         }
@@ -621,13 +628,13 @@ class NvHTTP(
     @Throws(IOException::class, InterruptedException::class)
     fun rotateDisplay(angle: Int, displayName: String?): Boolean {
         try {
-            val query = StringBuilder()
-            query.append("angle=").append(angle)
-            if (!displayName.isNullOrEmpty()) {
-                query.append("&display_name=").append(java.net.URLEncoder.encode(displayName, "UTF-8"))
-            }
-
-            val jsonStr = openHttpConnectionToString(httpClientLongConnectTimeout, getHttpsUrl(true), "rotate-display", query.toString())
+            val jsonStr = openHttpConnectionToString(
+                httpClientLongConnectTimeout,
+                getHttpsUrl(true),
+                "rotate-display",
+                "angle=$angle",
+                displayName
+            )
             val json = JSONObject(jsonStr)
 
             val statusCode = json.optInt("status_code", 0)
@@ -708,13 +715,15 @@ class NvHTTP(
             queryParams += "&customScreenMode=$customScreenMode"
         }
 
-        context.displayName?.takeIf { it.isNotEmpty() }?.let { displayName ->
-            queryParams += "&display_name=${URLEncoder.encode(displayName, "UTF-8")}"
-        }
-
         queryParams += MoonBridge.getLaunchUrlQueryParameters()
 
-        val xmlStr = openHttpConnectionToString(httpClientLongConnectNoReadTimeout, getHttpsUrl(true), verb, queryParams)
+        val xmlStr = openHttpConnectionToString(
+            httpClientLongConnectNoReadTimeout,
+            getHttpsUrl(true),
+            verb,
+            queryParams,
+            context.displayName
+        )
         return if ((verb == "launch" && getXmlString(xmlStr, "gamesession", true) != "0") ||
             (verb == "resume" && getXmlString(xmlStr, "resume", true) != "0")
         ) {
@@ -1002,7 +1011,74 @@ class NvHTTP(
 
         @Throws(XmlPullParserException::class, IOException::class)
         fun getXmlString(str: String, tagname: String, throwIfMissing: Boolean): String? {
-            return getXmlString(StringReader(str), tagname, throwIfMissing)
+            try {
+                return getXmlString(StringReader(str), tagname, throwIfMissing)
+            } catch (e: HostHttpResponseException) {
+                val sunshineErrorCode = try {
+                    getXmlTextIgnoringStatus(str, "sunshine_error_code")
+                } catch (_: Exception) {
+                    null
+                }
+                throw e.withSunshineErrorCode(sunshineErrorCode)
+            }
+        }
+
+        internal fun parseDisplayCatalog(jsonStr: String): DisplayCatalog {
+            val json = JSONObject(jsonStr)
+            val statusCode = json.optInt("status_code", 0)
+            if (statusCode != 200) {
+                throw IOException(
+                    "Failed to get displays: " +
+                        json.optString("status_message", "Unknown error")
+                )
+            }
+
+            val displaysArray = json.optJSONArray("displays")
+            val displays = ArrayList<DisplayInfo>(displaysArray?.length() ?: 0)
+            if (displaysArray != null) {
+                for (i in 0 until displaysArray.length()) {
+                    val displayObj = displaysArray.getJSONObject(i)
+                    var friendlyName = displayObj.optString("friendly_name", "")
+                    if (friendlyName.isEmpty()) {
+                        friendlyName =
+                            displayObj.optString("display_name", "Display ${i + 1}")
+                    }
+
+                    displays.add(
+                        DisplayInfo(
+                            i,
+                            friendlyName,
+                            displayObj.optString("device_id", "")
+                        )
+                    )
+                }
+            }
+
+            val vdd = json.optJSONObject("vdd")
+            return DisplayCatalog(
+                displays = displays,
+                vddCapabilityVersion = vdd?.optInt("capability_version", 0) ?: 0,
+                vddState = VddState.fromWireValue(vdd?.optString("state"))
+            )
+        }
+
+        private fun getXmlTextIgnoringStatus(str: String, tagname: String): String? {
+            val factory = XmlPullParserFactory.newInstance()
+            factory.isNamespaceAware = true
+            val xpp = factory.newPullParser()
+            xpp.setInput(StringReader(str))
+
+            var insideTarget = false
+            var eventType = xpp.eventType
+            while (eventType != XmlPullParser.END_DOCUMENT) {
+                when (eventType) {
+                    XmlPullParser.START_TAG -> insideTarget = xpp.name == tagname
+                    XmlPullParser.TEXT -> if (insideTarget) return xpp.text
+                    XmlPullParser.END_TAG -> if (xpp.name == tagname) insideTarget = false
+                }
+                eventType = xpp.next()
+            }
+            return null
         }
 
         private fun verifyResponseStatus(xpp: XmlPullParser) {

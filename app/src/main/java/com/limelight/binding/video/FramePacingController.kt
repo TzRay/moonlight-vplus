@@ -7,12 +7,12 @@ import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.Process
+import android.util.SparseLongArray
 import android.view.Choreographer
 import com.limelight.BuildConfig
 import com.limelight.LimeLog
 import com.limelight.preferences.PreferenceConfiguration
-import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.locks.LockSupport
 
 /**
@@ -28,6 +28,11 @@ internal class FramePacingController(
     private val activity: Activity,
 ) : Choreographer.FrameCallback {
 
+    companion object {
+        private const val HOST_CADENCE_MAX_FUTURE_FRAMES = 3L
+        private const val HOST_CADENCE_INVALID_LOG_INTERVAL_NS = 1_000_000_000L
+    }
+
     interface Callbacks {
         fun onFrameRendered()
         fun onDecoderException(e: IllegalStateException): Boolean
@@ -40,11 +45,12 @@ internal class FramePacingController(
     @Volatile
     private var stopping = false
 
-    // Output buffer queue for buffered pacing modes (BALANCED, EXPERIMENTAL, PRECISE_SYNC)
-    val outputBufferQueue = LinkedBlockingQueue<Int>()
+    // Output buffer queue for buffered pacing modes (BALANCED, EXPERIMENTAL, PRECISE_SYNC).
+    // One extra slot is reserved for the shutdown sentinel.
+    val outputBufferQueue = ArrayBlockingQueue<Int>(prefs.outputBufferQueueLimit + 1)
 
     // ---- PRECISE_SYNC 两步 host-cadence 呈现（step1: host-PI 去抖 → step2: snap 到本地 vsync）----
-    // 由设置项 checkbox_enable_host_cadence_precise_sync 控制（默认关）。
+    // 由隐藏设置项 checkbox_enable_host_cadence_precise_sync 控制（默认开）。
     // 关闭时 PRECISE_SYNC 完全走原有本地网格逻辑，行为零变化；
     // 开启后仅在 PRECISE_SYNC 用 host PTS 复现主机出帧节奏(step1)，再 snap 到最近 vsync 上沿(step2)，
     // 消除"本地自由网格 vs 主机节奏"错拍的周期性判抖/重复丢帧；因有 snap 兜底，cushion 取低档(0.5×MAD, floor0)，
@@ -57,7 +63,9 @@ internal class FramePacingController(
     // 故 BALANCED/EXPERIMENTAL 路径零影响。仅上述开关开启且 PRECISE_SYNC 时填充，poll/丢弃/清空时同步移除，无泄漏。
     // 关键：step1 时钟在"帧到达时"(offerOutputBuffer, 解码回调线程)采样，避免把 pacing 排队抖动注入 instOffset；
     // loop 出队时只做 step2 的 vsync snap。时钟因此仅被到达线程单线程访问，无需线程安全。
-    private val hostTargetByIndex = ConcurrentHashMap<Int, Long>()
+    private val hostTargetByIndex = SparseLongArray(prefs.outputBufferQueueLimit + 1)
+    private val hostTargetLock = Any()
+    private var lastHostCadenceInvalidLogNs = 0L
 
     // present-interval 对照埋点：两步开/关都记录同一指标(相邻呈现间隔，以 vsync 为单位)，
     // 捕捉"错拍 dup/drop"判抖，供开/关态用同一把尺对比。仅 DEBUG，release 关闭零开销。
@@ -67,6 +75,8 @@ internal class FramePacingController(
     private var lastRenderedFrameTimeNanos = 0L
     private var choreographerHandlerThread: HandlerThread? = null
     private var choreographerHandler: Handler? = null
+    private var appVsyncOffsetNs = 0L
+    private var presentationDeadlineNs = 0L
 
     // PreciseSync state
     private var surfaceFlingerThread: Thread? = null
@@ -97,18 +107,20 @@ internal class FramePacingController(
         choreographerHandlerThread != null || surfaceFlingerThread != null
 
     fun prepareForStop() {
+        if (stopping) return
         stopping = true
         surfaceFlingerActive = false
 
         surfaceFlingerThread?.interrupt()
 
+        val currentChoreographerThread = choreographerHandlerThread
         choreographerHandler?.post {
-            choreographerHandlerThread?.quit()
             Choreographer.getInstance().removeFrameCallback(this)
+            currentChoreographerThread?.quit()
         }
 
-        // Unblock any threads waiting on take()
-        outputBufferQueue.add(-1)
+        // Signal any pacing loop that happens to observe the queue during shutdown.
+        outputBufferQueue.offer(-1)
     }
 
     fun joinThreads() {
@@ -121,7 +133,7 @@ internal class FramePacingController(
 
     fun clearBuffers() {
         outputBufferQueue.clear()
-        hostTargetByIndex.clear()
+        clearHostTargets()
     }
 
     /**
@@ -133,13 +145,13 @@ internal class FramePacingController(
      *                  此处(帧到达点)即调用 step1 时钟算出目标呈现时刻，避免出队排队抖动污染 instOffset。
      */
     fun offerOutputBuffer(bufferIndex: Int, hostPtsUs: Long = -1L) {
-        if (outputBufferQueue.size >= prefs.outputBufferQueueLimit) {
+        while (outputBufferQueue.size >= prefs.outputBufferQueueLimit) {
+            val dropped = outputBufferQueue.poll() ?: break
             try {
-                val dropped = outputBufferQueue.take()
-                hostTargetByIndex.remove(dropped)
-                videoDecoder?.releaseOutputBuffer(dropped, false)
-            } catch (_: InterruptedException) {
-                return
+                takeHostTarget(dropped)
+                if (dropped >= 0) {
+                    videoDecoder?.releaseOutputBuffer(dropped, false)
+                }
             } catch (_: IllegalStateException) {
                 // Buffer index may be stale after codec recovery
             }
@@ -148,10 +160,20 @@ internal class FramePacingController(
             prefs.framePacing == PreferenceConfiguration.FRAME_PACING_PRECISE_SYNC
         ) {
             // step1: 帧到达即用 host-PI 去抖时钟算目标(时钟内部采样 nowNs=到达时刻)
-            hostTargetByIndex[bufferIndex] =
+            val targetNs =
                 preciseHostCadenceClock.presentTimeNs(hostPtsUs, effectiveFrameIntervalNs())
+            synchronized(hostTargetLock) {
+                hostTargetByIndex.put(bufferIndex, targetNs)
+            }
         }
-        outputBufferQueue.add(bufferIndex)
+        if (!outputBufferQueue.offer(bufferIndex)) {
+            takeHostTarget(bufferIndex)
+            try {
+                videoDecoder?.releaseOutputBuffer(bufferIndex, false)
+            } catch (_: IllegalStateException) {
+                // Buffer index may be stale after codec recovery
+            }
+        }
     }
 
     fun getSurfaceFlingerFrameCount(): Int = surfaceFlingerFrameCount
@@ -182,9 +204,7 @@ internal class FramePacingController(
     override fun doFrame(frameTimeNanos: Long) {
         if (stopping) return
 
-        @Suppress("DEPRECATION")
-        var adjustedTime = frameTimeNanos -
-            activity.windowManager.defaultDisplay.appVsyncOffsetNanos
+        var adjustedTime = frameTimeNanos - appVsyncOffsetNs
 
         // Don't render unless a new frame is due. This prevents microstutter when streaming
         // at a frame rate that doesn't match the display (such as 60 FPS on 120 Hz).
@@ -215,16 +235,19 @@ internal class FramePacingController(
         }
 
         // Attempt codec recovery even if we have nothing to render right now.
+        if (stopping) return
         callbacks.onCodecRecoveryCheck(MediaCodecDecoderRenderer.CR_FLAG_CHOREOGRAPHER)
 
         // Request another callback for next frame
-        Choreographer.getInstance().postFrameCallback(this)
+        if (!stopping) Choreographer.getInstance().postFrameCallback(this)
     }
 
     private fun startChoreographerThread() {
         if (prefs.framePacing != PreferenceConfiguration.FRAME_PACING_BALANCED &&
             prefs.framePacing != PreferenceConfiguration.FRAME_PACING_EXPERIMENTAL_LOW_LATENCY
         ) return
+
+        cacheDisplayTiming(includePresentationDeadline = false)
 
         val thread = HandlerThread(
             "Video - Choreographer",
@@ -246,6 +269,7 @@ internal class FramePacingController(
         if (prefs.framePacing != PreferenceConfiguration.FRAME_PACING_PRECISE_SYNC) return
 
         LimeLog.info("启动精确同步模式")
+        cacheDisplayTiming(includePresentationDeadline = true)
         surfaceFlingerActive = true
         surfaceFlingerFrameInterval = (1_000_000_000.0 / refreshRate).toLong()
         surfaceFlingerTargetTime = System.nanoTime() + surfaceFlingerFrameInterval
@@ -254,26 +278,7 @@ internal class FramePacingController(
         surfaceFlingerSkippedFrames = 0
         surfaceFlingerTimingError = 0
 
-        @Suppress("DEPRECATION")
-        var vsyncOffsetNs = 0L
-        var presentationDeadlineNs = 0L
-        try {
-            @Suppress("DEPRECATION")
-            vsyncOffsetNs = activity.windowManager.defaultDisplay.appVsyncOffsetNanos
-        } catch (e: Exception) {
-            LimeLog.warning("无法获取 Vsync 偏移: ${e.message}")
-        }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            try {
-                @Suppress("DEPRECATION")
-                presentationDeadlineNs =
-                    activity.windowManager.defaultDisplay.presentationDeadlineNanos
-            } catch (e: Exception) {
-                LimeLog.warning("无法获取 Presentation Deadline: ${e.message}")
-            }
-        }
-
-        val fVsyncOffset = vsyncOffsetNs
+        val fVsyncOffset = appVsyncOffsetNs
         val fDeadline = presentationDeadlineNs
 
         surfaceFlingerThread = Thread {
@@ -286,6 +291,33 @@ internal class FramePacingController(
             runSurfaceFlingerLoop(fVsyncOffset, fDeadline)
             LimeLog.info("精确同步模式线程结束")
         }.also { it.start() }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun cacheDisplayTiming(includePresentationDeadline: Boolean) {
+        presentationDeadlineNs = 0L
+        val display = try {
+            activity.windowManager.defaultDisplay
+        } catch (e: Exception) {
+            appVsyncOffsetNs = 0L
+            LimeLog.warning("无法获取显示设备: ${e.message}")
+            return
+        }
+
+        try {
+            appVsyncOffsetNs = display.appVsyncOffsetNanos
+        } catch (e: Exception) {
+            appVsyncOffsetNs = 0L
+            LimeLog.warning("无法获取 Vsync 偏移: ${e.message}")
+        }
+
+        if (includePresentationDeadline && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            try {
+                presentationDeadlineNs = display.presentationDeadlineNanos
+            } catch (e: Exception) {
+                LimeLog.warning("无法获取 Presentation Deadline: ${e.message}")
+            }
+        }
     }
 
     @SuppressLint("DefaultLocale")
@@ -318,7 +350,7 @@ internal class FramePacingController(
             surfaceFlingerSkippedFrames++
             return
         }
-        val hostTargetNs = hostTargetByIndex.remove(nextOutputBuffer) ?: Long.MIN_VALUE
+        val hostTargetNs = takeHostTarget(nextOutputBuffer)
         try {
             val presentationTimeNs =
                 if (useHostCadencePreciseSync && hostTargetNs != Long.MIN_VALUE && vsyncOffsetNs != 0L) {
@@ -364,11 +396,26 @@ internal class FramePacingController(
             if (timeUntilDeadline < 0) return 0
         }
         val timeUntilVsync = nextVsyncNs - currentTime
-        if (timeUntilVsync < 0 || timeUntilVsync > 1_000_000_000L) {
-            LimeLog.warning("host-cadence 时间戳无效 (距离: ${timeUntilVsync / 1_000_000}ms)，使用立即渲染")
+        val maxFutureNs = frameIntervalNs * HOST_CADENCE_MAX_FUTURE_FRAMES
+        if (timeUntilVsync < 0 || timeUntilVsync > maxFutureNs) {
+            resetInvalidHostCadence(
+                "host-cadence 时间戳无效 (距离: ${timeUntilVsync / 1_000_000}ms, " +
+                    "上限: ${maxFutureNs / 1_000_000}ms)，重置时钟并立即渲染"
+            )
             return 0
         }
         return nextVsyncNs
+    }
+
+    private fun resetInvalidHostCadence(message: String) {
+        preciseHostCadenceClock.reset()
+        clearHostTargets()
+
+        val nowNs = System.nanoTime()
+        if (nowNs - lastHostCadenceInvalidLogNs >= HOST_CADENCE_INVALID_LOG_INTERVAL_NS) {
+            lastHostCadenceInvalidLogNs = nowNs
+            LimeLog.warning(message)
+        }
     }
 
     private fun snapUpToVsync(rawNs: Long, vsyncOffsetNs: Long): Long {
@@ -487,4 +534,17 @@ internal class FramePacingController(
 
         private val PERIOD = 600L
     }
+
+    private fun takeHostTarget(bufferIndex: Int): Long = synchronized(hostTargetLock) {
+        val targetNs = hostTargetByIndex.get(bufferIndex, Long.MIN_VALUE)
+        hostTargetByIndex.delete(bufferIndex)
+        targetNs
+    }
+
+    private fun clearHostTargets() {
+        synchronized(hostTargetLock) {
+            hostTargetByIndex.clear()
+        }
+    }
+
 }

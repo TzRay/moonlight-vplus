@@ -22,6 +22,18 @@ def escapeBuildConfigString = { value ->
     value.replace("\\", "\\\\").replace("\"", "\\\"")
 }
 def enableX86TestAbi = (project.findProperty("enableX86TestAbi") ?: "false").toString().toBoolean()
+def audioHapticsAppLabel = "Moonlight V+"
+def audioHapticsSdkDir = (
+        project.findProperty("audioHapticsSdkDir")
+                ?: localProperties.getProperty("audioHapticsSdkDir")
+                ?: System.getenv("AUDIO_HAPTICS_SDK_DIR")
+                ?: ""
+).toString().trim()
+if (audioHapticsSdkDir.isEmpty()) {
+    throw new GradleException(
+            "audioHapticsSdkDir is required; point it at the Apache-2.0 audio-haptics-sdk checkout"
+    )
+}
 
 // 仅在存在 google-services.json 且满足条件时应用 Google Services 插件
 def hasGoogleServicesJson = file('google-services.json').exists()
@@ -43,14 +55,21 @@ android {
     defaultConfig {
         minSdk 22
         targetSdk 35
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
 
-        versionName "12.10.4"
-        versionCode = 392
+        versionName "12.10.4-audio-haptics-0.5.14"
+        versionCode = 393
 
         // Optional GitHub OAuth App client ID. Enable Device Flow on the OAuth app,
         // then set githubOAuthClientId in local.properties, pass -PgithubOAuthClientId=...,
         // or set GITHUB_OAUTH_CLIENT_ID in the environment.
         buildConfigField "String", "GITHUB_OAUTH_CLIENT_ID", "\"${escapeBuildConfigString(githubOAuthClientId)}\""
+
+        externalNativeBuild {
+            ndkBuild {
+                arguments "AUDIO_HAPTICS_SDK_DIR=${file(audioHapticsSdkDir).absolutePath.replace('\\', '/')}"
+            }
+        }
 
         // Generate native debug symbols to allow Google Play to symbolicate our native crashes
         ndk.debugSymbolLevel = 'FULL'
@@ -154,8 +173,8 @@ android {
     buildTypes {
         debug {
             applicationIdSuffix ".vplus_debug"
-            resValue "string", "app_label", "Moonlight V+"
-            resValue "string", "app_label_root", "Moonlight V+"
+            resValue "string", "app_label", audioHapticsAppLabel
+            resValue "string", "app_label_root", audioHapticsAppLabel
 
             minifyEnabled true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
@@ -192,7 +211,7 @@ android {
             //
             // TL;DR: Leave the following line alone!
             applicationIdSuffix ".qiin"
-            resValue "string", "app_label", "Moonlight V+"
+            resValue "string", "app_label", audioHapticsAppLabel
             resValue "string", "app_label_root", "Moonlight (Root)"
 
             minifyEnabled true
@@ -217,6 +236,7 @@ dependencies {
     // Lossless Scaling Frame Generation 桥接模块（仅 arm64-v8a 设备 + Android 10+ 实际可用）。
     // 阶段 1：仅提供占位 API；阶段 2 起接入 MediaCodec 拦截路径。
     implementation project(':framegen')
+    implementation project(':moonlight-haptics-android')
 
     implementation libs.bouncycastle.prov
     implementation libs.bouncycastle.pkix
@@ -261,4 +281,9 @@ dependencies {
 
     testImplementation libs.junit
     testImplementation libs.json
+    androidTestImplementation platform(libs.androidx.compose.bom)
+    androidTestImplementation libs.androidx.compose.ui.test.junit4
+    androidTestImplementation libs.androidx.test.ext.junit
+    androidTestImplementation libs.androidx.test.runner
+    debugImplementation libs.androidx.compose.ui.test.manifest
 }

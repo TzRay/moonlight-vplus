@@ -112,12 +112,17 @@
     <string name="applist_refresh_error_msg"> 获取列表失败 </string>
     <string name="quick_start_load_app_list_first">还没有应用缓存，正在打开应用列表先加载一次</string>
     <string name="error_desktop_special_app_unsupported">当前主机不支持桌面快速启动。请先打开应用列表加载一次，或升级 Foundation Sunshine。</string>
+    <string name="error_vdd_unsupported">当前主机不支持虚拟显示器串流。</string>
+    <string name="error_vdd_unavailable">主机虚拟显示器驱动当前不可用。请安装或修复 ZakoVDD 后重试。</string>
+    <string name="applist_vdd_unavailable">%1$s（主机当前不可用）</string>
     <string name="applist_quit_app"> 退出中 </string>
     <string name="applist_quit_success"> 成功退出串流 </string>
     <string name="applist_quit_fail"> 退出串流失败 </string>
     <string name="applist_quit_confirmation">您确定要退出当前游戏？所有未保存的数据将丢失。</string>
     <string name="applist_details_id">App ID：</string>
     <!-- In Game menu -->
+    <string name="game_menu_title">🍥🍬 V+ Game Menu</string>
+    <string name="game_menu_server_version">%1$s  服务端 %2$s</string>
     <string name="game_menu_toggle_keyboard"> 屏幕键盘 </string>
     <string name="game_menu_toggle_performance_overlay"> 性能监控图层 </string>
     <string name="perf_overlay_hidden">关闭</string>
@@ -127,6 +132,7 @@
     <string name="game_menu_toggle_host_keyboard"> 主机键盘 </string>
     <string name="game_menu_toggle_mouse_on"> 手柄模拟鼠标-打开 </string>
     <string name="game_menu_toggle_mouse_off"> 手柄模拟鼠标-关闭 </string>
+    <string name="game_menu_controller_mouse">手柄鼠标</string>
     <string name="game_menu_disconnect"> 断开连接 </string>
     <string name="game_menu_disconnect_and_quit"> 断开并退出串流 </string>
     <string name="game_menu_cancel"> 取消 </string>
@@ -443,6 +449,7 @@
     <string name="nettest_title_waiting">测试网络连接中</string>
     <string name="pcview_menu_test_network">测试网络连接</string>
     <string name="pcview_menu_open_webui">打开 Web 管理（Sunshine）</string>
+    <string name="pcview_menu_more_actions">更多操作</string>
     <string name="pcview_open_webui_unavailable">未找到可用主机地址，无法打开 Web 管理</string>
     <string name="pcview_open_webui_no_browser">未找到可用浏览器</string>
     <string name="sunshine_webui_ssl_warning_title">证书不可信</string>
@@ -499,6 +506,8 @@
     <string name="about_dialog_star">Star 项目</string>
     <string name="about_dialog_qq">加入QQ群</string>
     <string name="about_dialog_close">关闭</string>
+    <string name="about_dialog_no_browser">未找到可用的外部浏览器</string>
+    <string name="about_dialog_choose_browser">选择浏览器打开</string>
     <string name="check_for_updates">检查更新</string>
     <string name="summary_check_for_updates">检查是否有新版本可用。</string>
     <string name="category_help">帮助</string>
@@ -607,7 +616,6 @@
     <string name="game_menu_crown_function_title">♛ 王冠</string>
     <string name="game_menu_toggle_elements_visibility">显示/隐藏按键</string>
     <string name="game_menu_configure_crown_function">返回键打开王冠</string>
-    <string name="crown_control_enable_subtitle">启用王冠档案和控制入口</string>
     <string name="crown_control_visibility_subtitle">临时收起或显示屏幕按键</string>
     <string name="crown_control_touch_subtitle">暂停或恢复当前档案的触控输入</string>
     <string name="crown_control_profiles_subtitle">切换已保存的按键、触控和反馈档案</string>
@@ -705,7 +713,7 @@
     <string name="tip_cards_show">💡 串流小课堂：游戏菜单最下方可以编辑展示的功能卡片，不需要的卡片可以收起来哦～</string>
 
     <!-- 触控模式切换菜单 -->
-    <string name="game_menu_switch_touch_mode">切换触控模式</string>
+    <string name="game_menu_switch_touch_mode">触控模式</string>
     <string name="game_menu_touch_mode_enhanced">增强式多点触控</string>
     <string name="game_menu_touch_mode_classic">经典鼠标模式</string>
     <string name="game_menu_touch_mode_trackpad">触控板模式</string>
@@ -760,6 +768,8 @@
     <string name="gyro_sensitivity">灵敏度</string>
     <string name="gyro_sensitivity_format">灵敏度 %.1fx</string>
     <string name="gyro_activation_always">常开</string>
+    <string name="gyro_activation_left_trigger">LT (L2)</string>
+    <string name="gyro_activation_right_trigger">RT (R2)</string>
     <string name="gyro_mouse_mode_label">鼠标模式</string>
     <string name="gyro_controller_access_failed">无法访问控制器</string>
     <string name="gyro_no_controller_detected">未检测到手柄，陀螺仪已禁用</string>
@@ -814,6 +824,7 @@
     <string name="setting_native_mouse_enabled">原生鼠标：开启</string>
     <string name="setting_gyro_sensitivity">陀螺仪：%1$.1fx</string>
     <string name="setting_bitrate_card_enabled">码率卡片：开启</string>
+    <string name="setting_audio_haptics_card_enabled">音频振动卡片：开启</string>
     <string name="setting_gyro_card_enabled">陀螺仪卡片：开启</string>
     <string name="setting_QuickKey_card_enabled">特殊按键卡片：开启</string>
 
@@ -894,6 +905,10 @@
     <string name="host_resolution_changed">主机分辨率已变更为 %1$dx%2$d</string>
 
     <string name="game_menu_change_resolution">更改分辨率</string>
+    <string name="game_menu_resolution_current">%1$s（当前）</string>
+    <string name="game_menu_resolution_custom">%1$s（自定义）</string>
+    <string name="game_menu_resolution_custom_current">%1$s（自定义、当前）</string>
+    <string name="game_menu_resolution_restarting">分辨率已设为 %1$s，正在重启串流…</string>
     <string name="notification_content_streaming">正在串流： %1$s (%2$s)</string>
 
     <!-- 音频振动设置 -->
@@ -954,6 +969,7 @@
     <!-- AppView Top Panel -->
     <string name="appview_background_mode_title">背景</string>
     <string name="appview_background_mode_artwork">应用封面</string>
+    <string name="appview_background_mode_acrylic">亚克力</string>
     <string name="appview_background_mode_soft_color">柔和纯色</string>
     <string name="appview_display_selection_title">显示器选择</string>
     <string name="appview_display_selection_clear">清空选择</string>
@@ -1026,6 +1042,7 @@
     <string name="layout_dlg_peer_info_item_text_681b4">流量 (收/发):</string>
     <string name="layout_game_menu_super_empty_text_a7970">还没有炒鸡指令哦</string>
     <string name="layout_game_menu_super_empty_text_fac9d">快去用 Sunshine 基地版 为应用添加超级指令吧~ (๑•̀ㅂ•́)و✧</string>
+    <string name="game_menu_super_commands">超级指令</string>
     <string name="layout_item_key_value_text_0952a">分区 1</string>
     <string name="layout_item_key_value_hint_dd44f">分区名称，为空时为键值名</string>
     <string name="layout_item_page_super_menu_text_ce0e8">编辑模式</string>
@@ -1187,6 +1204,9 @@
     <string name="page_section_text_config">✏️ 文本设置</string>
     <string name="page_section_wheel_basic">🎡 基本设置</string>
     <string name="page_section_wheel_config">🎯 轮盘设置</string>
+    <string name="wheel_alignment_title">对齐方式</string>
+    <string name="wheel_alignment_center">分区中线朝上</string>
+    <string name="wheel_alignment_edge">分区边线朝上</string>
     <string name="page_section_key_values">🔑 按键值设置</string>
     <string name="page_label_combo_keys">组合按键</string>
     <string name="page_label_coord_x">X 坐标</string>
@@ -1252,12 +1272,18 @@
     <string name="toast_vibration_test_failed">震动测试失败: %s</string>
     <string name="toast_adjusting_bitrate">正在调整码率...</string>
     <string name="game_menu_tab_bitrate">码率调整 Bitrate</string>
+    <string name="game_menu_tab_audio_haptics">音频振动 Audio Haptics</string>
     <string name="game_menu_tab_gyro">体感助手 Gyro</string>
     <string name="game_menu_tab_shortcuts">特殊按键 Shortcuts</string>
-    <string name="game_menu_card_config_title">卡片配置 Visible cards</string>
+    <string name="game_menu_audio_haptics_reset">恢复音频振动默认调节</string>
+    <string name="game_menu_audio_haptics_pending_restart">已保存 · 下次串流生效</string>
+    <string name="game_menu_audio_haptics_strength_value">%1$d%%</string>
+    <string name="game_menu_audio_haptics_route_device_short">设备</string>
+    <string name="game_menu_audio_haptics_route_gamepad_short">手柄</string>
+    <string name="game_menu_audio_haptics_route_both_short">两者</string>
+    <string name="game_menu_card_config_title">卡片配置</string>
     <string name="toast_enable_mic_redirect">请在设置中开启麦克风重定向</string>
-    <string name="game_menu_disable_pan_zoom">关闭平移/缩放</string>
-    <string name="game_menu_enable_pan_zoom">开启平移/缩放</string>
+    <string name="game_menu_enable_pan_zoom">平移与缩放</string>
     <string name="toast_pan_zoom_disabled">已关闭平移/缩放</string>
     <string name="toast_pan_zoom_enabled">已开启平移/缩放</string>
     <string name="toast_super_command_error">发送超级命令时发生错误: %s</string>
@@ -1301,15 +1327,21 @@
     <string name="quick_btn_mic">麦克风</string>
     <string name="quick_btn_sleep">睡眠</string>
     <string name="quick_btn_quit">退出</string>
+    <string name="quick_btn_win">Win</string>
+    <string name="quick_btn_esc">Esc</string>
+    <string name="quick_btn_hdr">HDR</string>
+    <string name="quick_btn_tab">Tab</string>
+    <string name="quick_btn_alt_tab">Alt+Tab</string>
+    <string name="quick_btn_alt_f4">Alt+F4</string>
     <string name="quick_btn_keyboard">键盘</string>
     <string name="quick_btn_controller">手柄</string>
     <string name="quick_btn_perf">性能</string>
-    <string name="game_menu_customize_quick_buttons">自定义快捷按钮</string>
-    <string name="quick_btn_max_reached">最多只能添加 6 个快捷按钮</string>
 
     <!-- Quick button editor -->
     <string name="quick_button_editor_title">快捷按钮配置</string>
     <string name="quick_button_reset_default">恢复默认</string>
+    <string name="quick_action_edit">编辑快捷按钮</string>
+    <string name="quick_action_done">完成</string>
 
     <!-- Layout accessibility & download -->
     <string name="download_preparing">准备下载…</string>
@@ -1700,4 +1732,21 @@
     <string name="sponsor_wechat_action">使用微信支付扫码</string>
     <string name="sponsor_qr_content_description">赞助二维码</string>
     <string name="toast_update_integrity_mismatch">更新下载内容不是有效安装包，请切换网络或使用浏览器下载。</string>
+    <string name="iperf_output_title">测试输出</string>
+    <string name="iperf_output_empty_hint">测试结果和详细日志将在这里显示。</string>
+
+    <!-- 安全文档手册 -->
+    <string name="title_document_handbook">文档手册</string>
+    <string name="summary_document_handbook">查看相关文档</string>
+    <string name="handbook_back">返回</string>
+    <string name="handbook_exit">退出文档手册</string>
+    <string name="handbook_previous_page">上一页</string>
+    <string name="handbook_next_page">下一页</string>
+    <string name="handbook_document_center_title">文档中心</string>
+    <string name="handbook_loading">正在加载文档手册…</string>
+    <string name="handbook_error_network">网络不通畅，请稍后再试</string>
+    <string name="handbook_error_timeout">文档加载超时，请点击重试</string>
+    <string name="handbook_error_unavailable">文档手册暂时无法打开，请稍后再试</string>
+    <string name="handbook_retry">点击重试</string>
+    <string name="title_about_us">关于我们</string>
 </resources>

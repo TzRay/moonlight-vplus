@@ -76,6 +76,14 @@ class PreferenceConfiguration {
 
     var width = 0
     var height = 0
+    /** True when the user selected the Native resolution entry rather than a fixed preset. */
+    var isNativeResolution = false
+    /** True when the selected resolution is a user-defined custom mode. */
+    var isCustomResolution = false
+    /** Display-mode behavior used by Native and custom resolutions. */
+    val usesNativeDisplayMode: Boolean
+        get() = isNativeResolution || isCustomResolution ||
+            PreferenceConfiguration.isNativeResolution(width, height)
     var fps = 0
     var resolutionScale = 0
     var bitrate = 0
@@ -187,6 +195,7 @@ class PreferenceConfiguration {
     var gyroInvertYAxis = false
     // Card visibility
     var showBitrateCard = false
+    var showAudioHapticsCard = false
     var showGyroCard = false
     var showQuickKeyCard = false
 
@@ -257,8 +266,14 @@ class PreferenceConfiguration {
                 ScreenPosition.CENTER -> "center"
             }
 
+            val resolutionPreference = if (isNativeResolution) {
+                RES_NATIVE
+            } else {
+                "${width}x${height}"
+            }
+
             val editor = prefs.edit()
-                .putString(RESOLUTION_PREF_STRING, "${width}x${height}")
+                .putString(RESOLUTION_PREF_STRING, resolutionPreference)
                 .putString(FPS_PREF_STRING, fps.toString())
                 .putInt(BITRATE_PREF_STRING, bitrate)
                 .putString(VIDEO_FORMAT_PREF_STRING, getVideoFormatPreferenceString(videoFormat))
@@ -277,12 +292,17 @@ class PreferenceConfiguration {
                 .putBoolean(REVERSE_RESOLUTION_PREF_STRING, reverseResolution)
                 .putBoolean(ROTABLE_SCREEN_PREF_STRING, rotableScreen)
                 .putBoolean(SHOW_BITRATE_CARD_PREF_STRING, showBitrateCard)
+                .putBoolean(SHOW_AUDIO_HAPTICS_CARD_PREF_STRING, showAudioHapticsCard)
                 .putBoolean(SHOW_GYRO_CARD_PREF_STRING, showGyroCard)
                 .putBoolean(SHOW_QuickKeyCard, showQuickKeyCard)
+                .putBoolean(AUDIO_VIBRATION_ENABLE_PREF_STRING, enableAudioVibration)
+                .putInt(AUDIO_VIBRATION_STRENGTH_PREF_STRING, audioVibrationStrength)
+                .putString(AUDIO_VIBRATION_MODE_PREF_STRING, audioVibrationMode)
+                .putString(AUDIO_VIBRATION_SCENE_PREF_STRING, audioVibrationScene.toString())
                 .putString(SCREEN_POSITION_PREF_STRING, positionString)
                 .putInt(SCREEN_OFFSET_X_PREF_STRING, screenOffsetX)
                 .putInt(SCREEN_OFFSET_Y_PREF_STRING, screenOffsetY)
-                .putBoolean("use_external_display", useExternalDisplay)
+                .putBoolean(USE_EXTERNAL_DISPLAY_PREF_STRING, useExternalDisplay)
                 .putBoolean(ENABLE_MIC_PREF_STRING, enableMic)
                 .putInt(MIC_BITRATE_PREF_STRING, micBitrate)
                 .putString(MIC_ICON_COLOR_PREF_STRING, micIconColor)
@@ -322,7 +342,10 @@ class PreferenceConfiguration {
 
         return try {
             prefs.edit()
-                .putString(RESOLUTION_PREF_STRING, "${width}x${height}")
+                .putString(
+                    RESOLUTION_PREF_STRING,
+                    if (isNativeResolution) RES_NATIVE else "${width}x${height}"
+                )
                 .putString(FPS_PREF_STRING, fps.toString())
                 .putInt(BITRATE_PREF_STRING, bitrate)
                 .putBoolean(ADAPTIVE_BITRATE_PREF_STRING, enableAdaptiveBitrate)
@@ -362,6 +385,8 @@ class PreferenceConfiguration {
         val copy = PreferenceConfiguration()
         copy.width = this.width
         copy.height = this.height
+        copy.isNativeResolution = this.isNativeResolution
+        copy.isCustomResolution = this.isCustomResolution
         copy.fps = this.fps
         copy.bitrate = this.bitrate
         copy.enableAdaptiveBitrate = this.enableAdaptiveBitrate
@@ -416,7 +441,12 @@ class PreferenceConfiguration {
         copy.gyroActivationKeyCode = this.gyroActivationKeyCode
         copy.gyroInvertXAxis = this.gyroInvertXAxis
         copy.gyroInvertYAxis = this.gyroInvertYAxis
+        copy.enableAudioVibration = this.enableAudioVibration
+        copy.audioVibrationStrength = this.audioVibrationStrength
+        copy.audioVibrationMode = this.audioVibrationMode
+        copy.audioVibrationScene = this.audioVibrationScene
         copy.showBitrateCard = this.showBitrateCard
+        copy.showAudioHapticsCard = this.showAudioHapticsCard
         copy.showGyroCard = this.showGyroCard
         copy.showQuickKeyCard = this.showQuickKeyCard
         return copy
@@ -493,6 +523,7 @@ class PreferenceConfiguration {
         private const val ABSOLUTE_MOUSE_MODE_PREF_STRING = "checkbox_absolute_mouse_mode"
         // Card visibility preferences
         private const val SHOW_BITRATE_CARD_PREF_STRING = "checkbox_show_bitrate_card"
+        private const val SHOW_AUDIO_HAPTICS_CARD_PREF_STRING = "checkbox_show_audio_haptics_card"
         private const val SHOW_GYRO_CARD_PREF_STRING = "checkbox_show_gyro_card"
         @Suppress("ConstPropertyName")
         private const val SHOW_QuickKeyCard = "checkbox_show_QuickKeyCard"
@@ -552,6 +583,7 @@ class PreferenceConfiguration {
         private const val ONSCREEN_CONTROLLER_PREF_STRING = "checkbox_show_onscreen_controls"
 
         private const val REVERSE_RESOLUTION_PREF_STRING = "checkbox_reverse_resolution"
+        private const val USE_EXTERNAL_DISPLAY_PREF_STRING = "use_external_display"
         private const val ROTABLE_SCREEN_PREF_STRING = "checkbox_rotable_screen"
 
         // 画面位置常量
@@ -666,7 +698,7 @@ class PreferenceConfiguration {
         private const val DEFAULT_ENABLE_PERF_OVERLAY = false
         private const val DEFAULT_ENABLE_JITTER_MONITOR = false
         private const val DEFAULT_PERF_OVERLAY_LOCKED = false
-        private const val DEFAULT_PERF_OVERLAY_BG_OPACITY = 53
+        private const val DEFAULT_PERF_OVERLAY_BG_OPACITY = 40
         private const val DEFAULT_PERF_OVERLAY_ORIENTATION = "horizontal"
         private const val DEFAULT_PERF_OVERLAY_POSITION = "top"
         private const val DEFAULT_BIND_ALL_USB = false
@@ -681,9 +713,9 @@ class PreferenceConfiguration {
         private const val DEFAULT_AUDIO_VIBRATION = false
         private const val DEFAULT_CLIPBOARD_SYNC_TEXT = false
         private const val DEFAULT_CLIPBOARD_SYNC_IMAGE = false
-        private const val DEFAULT_AUDIO_VIBRATION_STRENGTH = 80
-        private const val DEFAULT_AUDIO_VIBRATION_MODE = "auto"
-        private const val DEFAULT_AUDIO_VIBRATION_SCENE = 0 // Game/Movie
+        const val DEFAULT_AUDIO_VIBRATION_STRENGTH = 80
+        const val DEFAULT_AUDIO_VIBRATION_MODE = "auto"
+        const val DEFAULT_AUDIO_VIBRATION_SCENE = 0 // Game/Movie
         private const val DEFAULT_FLIP_FACE_BUTTONS = false
         private const val DEFAULT_TOUCHSCREEN_TRACKPAD = true
         private const val DEFAULT_AUDIO_CONFIG = "2" // Stereo
@@ -805,6 +837,10 @@ class PreferenceConfiguration {
 
         // ---- Public static methods ----
 
+        /**
+         * Legacy dimension-only fallback for callers that do not have the selected preference.
+         * Streaming code should use [usesNativeDisplayMode] instead.
+         */
         fun isNativeResolution(width: Int, height: Int): Boolean {
             val resolutionSet = RESOLUTIONS.toHashSet()
             return !resolutionSet.contains("${width}x${height}")
@@ -1084,6 +1120,24 @@ class PreferenceConfiguration {
         @Suppress("DEPRECATION")
         @JvmStatic
         fun readPreferences(context: Context): PreferenceConfiguration {
+            return readPreferences(context, null)
+        }
+
+        @JvmStatic
+        fun isExternalDisplayEnabled(context: Context): Boolean {
+            return PreferenceManager.getDefaultSharedPreferences(context)
+                .getBoolean(USE_EXTERNAL_DISPLAY_PREF_STRING, false)
+        }
+
+        /**
+         * Reads preferences using [nativeDisplay] when Native resolution is selected.
+         *
+         * The one-argument overload remains the default for settings and background callers.
+         * Streaming code should pass the display selected for the current session.
+         */
+        @Suppress("DEPRECATION")
+        @JvmStatic
+        fun readPreferences(context: Context, nativeDisplay: Display?): PreferenceConfiguration {
             val prefs = PreferenceManager.getDefaultSharedPreferences(context)
             val config = PreferenceConfiguration()
 
@@ -1098,11 +1152,15 @@ class PreferenceConfiguration {
             }
 
             val resStr = prefs.getString(RESOLUTION_PREF_STRING, DEFAULT_RESOLUTION) ?: DEFAULT_RESOLUTION
+            config.isNativeResolution = resStr == RES_NATIVE
+            config.isCustomResolution =
+                resStr != RES_NATIVE && !RESOLUTIONS.contains(resStr)
 
             // 添加Native分辨率支持
             if (resStr == RES_NATIVE) {
                 // 获取设备原生分辨率
-                val display = (context.getSystemService(Context.WINDOW_SERVICE) as WindowManager).defaultDisplay
+                val display = nativeDisplay
+                    ?: (context.getSystemService(Context.WINDOW_SERVICE) as WindowManager).defaultDisplay
                 val size = Point()
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1) {
                     display.getRealSize(size) // 需要API 17+
@@ -1218,7 +1276,7 @@ class PreferenceConfiguration {
 
             config.videoFormat = getVideoFormatValue(context)
             config.framePacing = getFramePacingValue(context)
-            config.enableHostCadencePreciseSync = prefs.getBoolean(ENABLE_HOST_CADENCE_PRECISE_SYNC_STRING, false)
+            config.enableHostCadencePreciseSync = prefs.getBoolean(ENABLE_HOST_CADENCE_PRECISE_SYNC_STRING, true)
 
             config.analogStickForScrolling = getAnalogStickForScrollingValue(context)
 
@@ -1370,6 +1428,10 @@ class PreferenceConfiguration {
 
             // Cards visibility (defaults to true)
             config.showBitrateCard = prefs.getBoolean(SHOW_BITRATE_CARD_PREF_STRING, true)
+            config.showAudioHapticsCard = prefs.getBoolean(
+                SHOW_AUDIO_HAPTICS_CARD_PREF_STRING,
+                config.enableAudioVibration
+            )
             config.showGyroCard = prefs.getBoolean(SHOW_GYRO_CARD_PREF_STRING, true)
             // 横屏时快捷卡片默认不开启
             val defaultQuickKeyCard = config.width <= config.height
@@ -1434,7 +1496,7 @@ class PreferenceConfiguration {
             config.screenOffsetX = prefs.getInt(SCREEN_OFFSET_X_PREF_STRING, DEFAULT_SCREEN_OFFSET_X)
             config.screenOffsetY = prefs.getInt(SCREEN_OFFSET_Y_PREF_STRING, DEFAULT_SCREEN_OFFSET_Y)
 
-            config.useExternalDisplay = prefs.getBoolean("use_external_display", false)
+            config.useExternalDisplay = prefs.getBoolean(USE_EXTERNAL_DISPLAY_PREF_STRING, false)
 
             // 读取悬浮球设置
             config.enableFloatBall = prefs.getBoolean(ENABLE_FLOAT_BALL_PREF_STRING, DEFAULT_ENABLE_FLOAT_BALL)

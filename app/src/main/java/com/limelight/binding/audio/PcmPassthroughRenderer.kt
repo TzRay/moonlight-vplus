@@ -22,10 +22,16 @@ import com.limelight.nvstream.jni.MoonBridge
  */
 class PcmPassthroughRenderer(
     private val context: Context,
-    private val bufferBytes: Int = 8 * 1024
+    private val bufferBytes: Int = 8 * 1024,
+    enableSystemAudioHaptics: Boolean = false,
+    onSystemAudioHapticsActiveChanged: (Boolean) -> Unit = {}
 ) : AudioRenderer {
 
     private var track: AudioTrack? = null
+    private val systemAudioHaptics = SystemAudioHapticsSession(
+        enableSystemAudioHaptics,
+        onSystemAudioHapticsActiveChanged
+    )
 
     override fun setup(
         audioConfiguration: MoonBridge.AudioConfiguration,
@@ -53,6 +59,7 @@ class PcmPassthroughRenderer(
         val attributes = AudioAttributes.Builder()
             .setUsage(AudioAttributes.USAGE_GAME)
             .setContentType(AudioAttributes.CONTENT_TYPE_MOVIE)
+            .also { systemAudioHaptics.configureAudioAttributes(it) }
             .build()
 
         val format = AudioFormat.Builder()
@@ -87,12 +94,14 @@ class PcmPassthroughRenderer(
             }
 
             track = builder.build()
+            systemAudioHaptics.attach(track!!)
             track!!.play()
             val frameBytes = audioConfiguration.channelCount * samplesPerFrame * 2
             LimeLog.info("PcmPassthroughRenderer: PCM_S16 @${sampleRate} Hz, ${audioConfiguration.channelCount}ch (mask=$channelMaskName), bitrate=$bitrate bps, buffer=$bufferSize B, frame=$frameBytes B")
             return 0
         } catch (e: Exception) {
             LimeLog.severe("PcmPassthroughRenderer: AudioTrack create failed: ${e.message}")
+            systemAudioHaptics.detach()
             try {
                 track?.release()
             } catch (_: Exception) {}
@@ -107,6 +116,7 @@ class PcmPassthroughRenderer(
 
     override fun stop() {
         try {
+            systemAudioHaptics.detach()
             track?.pause()
             track?.flush()
         } catch (_: Exception) {}
@@ -136,6 +146,7 @@ class PcmPassthroughRenderer(
 
     override fun cleanup() {
         try {
+            systemAudioHaptics.close()
             track?.stop()
             track?.release()
         } catch (_: Exception) {}

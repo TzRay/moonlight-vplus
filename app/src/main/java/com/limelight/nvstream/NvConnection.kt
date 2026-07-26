@@ -61,6 +61,10 @@ open class NvConnection(
     private val context: ConnectionContext = ConnectionContext()
     private val isMonkey: Boolean = ActivityManager.isUserAMonkey()
 
+    @Volatile
+    var serverVersion: String? = null
+        private set
+
     init {
         context.serverAddress = host
         context.httpsPort = httpsPort
@@ -241,6 +245,7 @@ open class NvConnection(
 
         val details = h.getComputerDetails(serverInfo)
         details.serverCert = context.serverCert
+        serverVersion = details.sunshineVersion ?: context.serverAppVersion
         context.isNvidiaServerSoftware = details.nvidiaServer
         context.supportsDesktopSpecialApp = details.supportsDesktopSpecialApp
 
@@ -427,7 +432,14 @@ open class NvConnection(
                 context.connListener.stageComplete(appName)
             } catch (e: HostHttpResponseException) {
                 e.printStackTrace()
-                context.connListener.displayMessage(e.message)
+                val hostMessage = when (e.getSunshineErrorCode()) {
+                    "VDD_NOT_SUPPORTED" ->
+                        appContext.getString(R.string.error_vdd_unsupported)
+                    "VDD_DRIVER_MISSING", "VDD_DRIVER_UNREACHABLE" ->
+                        appContext.getString(R.string.error_vdd_unavailable)
+                    else -> e.message
+                }
+                context.connListener.displayMessage(hostMessage)
                 context.connListener.stageFailed(appName, 0, e.getErrorCode())
                 return@Thread
             } catch (e: XmlPullParserException) {

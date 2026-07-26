@@ -1,13 +1,13 @@
 package com.limelight.binding.input
 
-import com.limelight.GameMenu
+import com.limelight.gamemenu.GameMenu
 
 /**
  * Generic Input Device
  */
 interface GameInputDevice {
     /**
-     * @return list of device specific game menu options, e.g. configure a controller's mouse mode
+     * @return device-specific actions that should remain immediately reachable in the game menu
      */
-    fun getGameMenuOptions(): List<GameMenu.MenuOption>
+    fun getGameMenuQuickOptions(): List<GameMenu.MenuOption>
 }
