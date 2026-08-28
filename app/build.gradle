@@ -250,7 +250,6 @@ dependencies {
     implementation libs.appcompat
     implementation libs.core.splashscreen
     implementation libs.preference
-    implementation libs.keyboard.header
     implementation libs.constraintlayout
     implementation libs.gson
     implementation libs.glide

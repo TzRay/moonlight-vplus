@@ -45,7 +45,6 @@ shield-controller = { module = "com.github.cgutman:ShieldControllerExtensions", 
 appcompat = { module = "androidx.appcompat:appcompat", version.ref = "appcompat" }
 core-splashscreen = { module = "androidx.core:core-splashscreen", version.ref = "core-splashscreen" }
 preference = { module = "androidx.preference:preference", version.ref = "preference" }
-keyboard-header = { module = "com.github.ZeyuKeithFu:KeyboardHeaderLayout", version = "v1.0" }
 constraintlayout = { module = "androidx.constraintlayout:constraintlayout", version.ref = "constraintlayout" }
 gson = { module = "com.google.code.gson:gson", version.ref = "gson" }
 glide = { module = "com.github.bumptech.glide:glide", version.ref = "glide" }
