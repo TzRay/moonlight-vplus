@@ -22,15 +22,19 @@
     <color name="game_menu_button_pressed">#FFFFF1F5</color>
     <color name="game_menu_button_border">#14FF6B9D</color>
     <color name="game_menu_button_border_pressed">@color/game_menu_accent</color>
+    <!-- Controller diagnostics need a stronger neutral outline than menu chrome. -->
+    <color name="controller_diag_outline">#FF504953</color>
+    <color name="controller_diag_control_surface">#FFF2E8ED</color>
     <color name="game_menu_list_item_pressed">#FFFFF3F7</color>
     <color name="game_menu_list_item_focused">#F8F8F8</color>
     <color name="game_menu_list_item_border">#0D1D1B20</color>
     <color name="game_menu_list_item_border_pressed">@color/game_menu_accent</color>
     <color name="game_menu_dialog_background">#FFFFF8F8</color>
+    <color name="game_menu_opacity_popup_background">#E6F7F4F7</color>
     <color name="game_menu_dialog_border">#12FFFFFF</color>
     <color name="game_menu_list_item_normal">#FFFFFFFF</color>
     <color name="game_menu_danger_text">#D13B3B</color>
-    <color name="custom_key_editor_scrim">#66050A14</color>
+    <color name="custom_key_editor_scrim">#E6050A14</color>
 
     <!-- 超级菜单颜色 -->
     <color name="game_menu_super_card_background">#00000000</color>
@@ -62,6 +66,7 @@
     <color name="ui_shell_surface_focused">#1AFF6B9D</color>
     <color name="settings_drawer_background">#E6FFFFFF</color>
     <color name="settings_drawer_background_landscape">#CCFFFFFF</color>
+    <color name="appview_quick_menu_background">#E6FFFFFF</color>
     <color name="ui_shell_outline">#261D1B20</color>
     <color name="ui_shell_outline_strong">#3D1D1B20</color>
     <color name="ui_shell_text_primary">#F21F2026</color>
@@ -105,11 +110,9 @@
     <color name="iperf_output_hint">#99242830</color>
 
     <!-- About dialog keeps its own layered card treatment. -->
-    <color name="about_dialog_window_start">#F2F8F5FC</color>
-    <color name="about_dialog_window_center">#F2FEF7FB</color>
-    <color name="about_dialog_window_end">#F2FFF0F8</color>
-    <color name="about_dialog_panel_surface">#FFFFFFFF</color>
     <color name="about_dialog_panel_outline">#FFE8DDE6</color>
+    <color name="about_dialog_link_surface">#FFFFF5F8</color>
+    <color name="about_dialog_links_bar_surface">#FFFFF9FC</color>
 
     <!-- Crown side panel -->
     <color name="crown_panel_background">#F21B1B22</color>
@@ -148,4 +151,11 @@
     <color name="add_pc_formula">#1AFF6B9D</color>
     <color name="add_pc_badge_ring">#FFF8F6FA</color>
     <color name="add_pc_button_disabled">#66FF6B9D</color>
+
+    <!-- Retro-space host discovery -->
+    <color name="retro_space_moon_light">#FFF5E7D0</color>
+    <color name="retro_space_moon_highlight">#FFFFF3E4</color>
+    <color name="retro_space_moon_shadow">#FF735563</color>
+    <color name="retro_space_moon_crater">#FFB77A86</color>
+    <color name="retro_space_text">#FFFFF3E4</color>
 </resources>

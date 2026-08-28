@@ -10,7 +10,6 @@ import android.widget.Toast
 
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
-
 import com.limelight.LimeLog
 import com.limelight.R
 import com.limelight.nvstream.NvConnection
@@ -23,6 +22,7 @@ class MicrophoneManager(
 ) {
     private var microphoneStream: MicrophoneStream? = null
     private var micButton: ImageButton? = null
+    private val buttonPreferences = MicrophoneButtonPreferences(context)
 
     interface MicrophoneStateListener {
         fun onMicrophoneStateChanged(isActive: Boolean)
@@ -58,6 +58,7 @@ class MicrophoneManager(
 
         try {
             MicrophoneConfig.updateBitrateFromConfig(context)
+            MicrophoneConfig.updateVolumeProcessingFromConfig(context)
             microphoneStream = MicrophoneStream(connection!!)
 
             if (!microphoneStream!!.start()) {
@@ -132,6 +133,7 @@ class MicrophoneManager(
         LimeLog.warning("麦克风恢复失败，尝试重新初始化")
         microphoneStream!!.stop()
         MicrophoneConfig.updateBitrateFromConfig(context)
+        MicrophoneConfig.updateVolumeProcessingFromConfig(context)
 
         microphoneStream = MicrophoneStream(connection!!)
         if (microphoneStream!!.start()) {
@@ -199,8 +201,10 @@ class MicrophoneManager(
     private fun setupMicrophoneButton() {
         val button = micButton ?: return
 
-        button.visibility = if (enableMic) View.VISIBLE else View.GONE
-        if (enableMic) {
+        val showButton = enableMic && buttonPreferences.isButtonShownByDefault()
+
+        button.visibility = if (showButton) View.VISIBLE else View.GONE
+        if (showButton) {
             updateMicrophoneButtonState()
             button.setOnClickListener {
                 if (checkMicrophonePermission()) {
@@ -296,6 +300,7 @@ class MicrophoneManager(
 
         if (enable) {
             MicrophoneConfig.updateBitrateFromConfig(context)
+            MicrophoneConfig.updateVolumeProcessingFromConfig(context)
         }
 
         if (micButton != null) {

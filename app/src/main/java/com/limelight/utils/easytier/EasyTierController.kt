@@ -3,6 +3,8 @@ package com.limelight.utils.easytier
 import android.app.Activity
 import android.app.Dialog
 import android.content.Context
+import android.view.KeyEvent
+import android.view.WindowManager
 import android.widget.Toast
 import androidx.activity.ComponentDialog
 import androidx.compose.foundation.background
@@ -36,12 +38,22 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.InputMode
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.ComposeView
+import androidx.compose.ui.platform.LocalInputModeManager
 import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.compose.ui.res.colorResource
 import androidx.compose.ui.res.stringResource
@@ -49,13 +61,26 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.view.doOnLayout
 import com.easytier.jni.EasyTierManager
 import com.limelight.LimeLog
 import com.limelight.R
+import com.limelight.ui.theme.AppShapes
 import com.limelight.utils.AppDialogStyler
 
 import org.json.JSONArray
 import org.json.JSONObject
+
+private fun Modifier.handleGamepadConfirm(onClick: () -> Unit): Modifier =
+        onPreviewKeyEvent { event ->
+            val nativeEvent = event.nativeKeyEvent
+            if (nativeEvent.keyCode != KeyEvent.KEYCODE_BUTTON_A) {
+                false
+            } else {
+                if (nativeEvent.action == KeyEvent.ACTION_UP) onClick()
+                true
+            }
+        }
 
 /**
  * EasyTier功能控制器
@@ -152,7 +177,10 @@ class EasyTierController(
                 statusJson = easyTierManager?.latestNetworkInfoJson
         )
 
+        var focusRequestGeneration by mutableIntStateOf(0)
         val composeView = ComposeView(activity).apply {
+            isFocusable = true
+            isFocusableInTouchMode = true
             setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnDetachedFromWindow)
             setContent {
                 val uiState = remember { mutableStateOf(initialState) }
@@ -162,16 +190,28 @@ class EasyTierController(
 
                 EasyTierPanel(
                         state = uiState.value,
+                        focusRequestGeneration = focusRequestGeneration,
                         onAction = dispatch
                 )
             }
         }
 
-        currentDialog = ComponentDialog(activity, R.style.AppDialogStyle).apply {
+        val dialog = ComponentDialog(activity, R.style.AppDialogStyle).apply {
             setContentView(composeView)
+            // Keep this floating window's viewport stable while Compose scrolls the focused field.
+            window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_PAN)
+            setOnShowListener {
+                composeView.doOnLayout {
+                    if (isShowing) {
+                        composeView.requestFocus()
+                        focusRequestGeneration++
+                    }
+                }
+            }
         }
-        currentDialog?.show()
-        currentDialog?.let { AppDialogStyler.applyCustomContent(it, activity) }
+        currentDialog = dialog
+        dialog.show()
+        AppDialogStyler.applyCustomContent(dialog, activity)
     }
 
     private fun handleDialogAction(
@@ -210,6 +250,7 @@ class EasyTierController(
     @Composable
     private fun EasyTierPanel(
             state: EasyTierDialogUiState,
+            focusRequestGeneration: Int,
             onAction: (EasyTierDialogAction) -> Unit
     ) {
         val accent = colorResource(R.color.crown_accent)
@@ -218,6 +259,20 @@ class EasyTierController(
         val input = colorResource(R.color.crown_input_background)
         val textPrimary = colorResource(R.color.crown_text_primary)
         val textSecondary = colorResource(R.color.crown_text_secondary)
+        val initialFocusRequester = remember { FocusRequester() }
+        val inputModeManager = LocalInputModeManager.current
+        var initialFocusTargetLaidOut by remember { mutableStateOf(false) }
+        var handledFocusRequestGeneration by remember { mutableIntStateOf(0) }
+
+        LaunchedEffect(focusRequestGeneration, initialFocusTargetLaidOut) {
+            if (initialFocusTargetLaidOut &&
+                    focusRequestGeneration > handledFocusRequestGeneration) {
+                inputModeManager.requestInputMode(InputMode.Keyboard)
+                initialFocusRequester.requestFocus()
+                handledFocusRequestGeneration = focusRequestGeneration
+            }
+        }
+
         MaterialTheme(
                 colorScheme = darkColorScheme(
                         primary = accent,
@@ -232,7 +287,7 @@ class EasyTierController(
                         modifier = Modifier
                                 .widthIn(max = 560.dp)
                                 .heightIn(max = 560.dp),
-                        shape = RoundedCornerShape(10.dp),
+                        shape = AppShapes.medium,
                         color = panel,
                         tonalElevation = 0.dp,
                         shadowElevation = 12.dp
@@ -273,11 +328,20 @@ class EasyTierController(
                             Tab(
                                     selected = state.selectedTab == EasyTierTab.STATUS,
                                     onClick = { onAction(EasyTierDialogAction.SelectTab(EasyTierTab.STATUS)) },
+                                    modifier = Modifier
+                                            .focusRequester(initialFocusRequester)
+                                            .onGloballyPositioned { initialFocusTargetLaidOut = true }
+                                            .handleGamepadConfirm {
+                                                onAction(EasyTierDialogAction.SelectTab(EasyTierTab.STATUS))
+                                            },
                                     text = { Text(stringResource(R.string.easytier_tab_status)) }
                             )
                             Tab(
                                     selected = state.selectedTab == EasyTierTab.CONFIG,
                                     onClick = { onAction(EasyTierDialogAction.SelectTab(EasyTierTab.CONFIG)) },
+                                    modifier = Modifier.handleGamepadConfirm {
+                                        onAction(EasyTierDialogAction.SelectTab(EasyTierTab.CONFIG))
+                                    },
                                     text = { Text(stringResource(R.string.easytier_tab_config)) }
                             )
                         }
@@ -313,13 +377,19 @@ class EasyTierController(
                         ) {
                             TextButton(
                                     onClick = { onAction(EasyTierDialogAction.Close) },
-                                    modifier = Modifier.weight(1f)
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .handleGamepadConfirm { onAction(EasyTierDialogAction.Close) },
+                                    shape = AppShapes.medium
                             ) {
                                 Text(stringResource(R.string.dialog_button_close))
                             }
                             ComposeButton(
                                     onClick = { onAction(EasyTierDialogAction.SaveConfig) },
-                                    modifier = Modifier.weight(1.25f),
+                                    modifier = Modifier
+                                        .weight(1.25f)
+                                        .handleGamepadConfirm { onAction(EasyTierDialogAction.SaveConfig) },
+                                    shape = AppShapes.medium,
                                     colors = ButtonDefaults.buttonColors(
                                             containerColor = input,
                                             contentColor = textPrimary
@@ -330,7 +400,10 @@ class EasyTierController(
                             }
                             ComposeButton(
                                     onClick = { onAction(EasyTierDialogAction.ToggleService) },
-                                    modifier = Modifier.weight(1.25f),
+                                    modifier = Modifier
+                                        .weight(1.25f)
+                                        .handleGamepadConfirm { onAction(EasyTierDialogAction.ToggleService) },
+                                    shape = AppShapes.medium,
                                     colors = ButtonDefaults.buttonColors(
                                             containerColor = accent,
                                             contentColor = colorResource(R.color.app_dialog_text_primary)
@@ -378,7 +451,10 @@ class EasyTierController(
         ) {
             ComposeButton(
                     onClick = onRefresh,
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .handleGamepadConfirm(onRefresh),
+                    shape = AppShapes.medium,
                     colors = ButtonDefaults.buttonColors(
                             containerColor = colorResource(R.color.crown_input_background),
                             contentColor = colorResource(R.color.crown_text_primary)
@@ -482,7 +558,12 @@ class EasyTierController(
 
             TextButton(
                     onClick = { onAdvancedExpandedChange(!advancedExpanded) },
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .handleGamepadConfirm {
+                            onAdvancedExpandedChange(!advancedExpanded)
+                        },
+                    shape = AppShapes.medium
             ) {
                 Text(stringResource(
                         if (advancedExpanded) R.string.easytier_hide_advanced_flags
@@ -517,7 +598,7 @@ class EasyTierController(
     private fun EasyTierInfoCard(content: @Composable () -> Unit) {
         Card(
                 colors = CardDefaults.cardColors(containerColor = colorResource(R.color.crown_section_background)),
-                shape = RoundedCornerShape(8.dp),
+                shape = AppShapes.small,
                 modifier = Modifier.fillMaxWidth()
         ) {
             Column(
@@ -616,7 +697,7 @@ class EasyTierController(
                 },
                 minLines = minLines,
                 modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(8.dp)
+                shape = AppShapes.small
         )
     }
 
@@ -636,7 +717,7 @@ class EasyTierController(
         Row(
                 modifier = Modifier
                         .fillMaxWidth()
-                        .background(colorResource(R.color.crown_section_background), RoundedCornerShape(8.dp))
+                        .background(colorResource(R.color.crown_section_background), AppShapes.small)
                         .padding(horizontal = 12.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically
         ) {
@@ -650,7 +731,9 @@ class EasyTierController(
             Switch(
                     checked = checked,
                     onCheckedChange = onCheckedChange,
-                    modifier = Modifier.size(width = 48.dp, height = 32.dp)
+                    modifier = Modifier
+                        .size(width = 48.dp, height = 32.dp)
+                        .handleGamepadConfirm { onCheckedChange(!checked) }
             )
         }
     }

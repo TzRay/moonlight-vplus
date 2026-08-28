@@ -61,6 +61,11 @@ class StreamConfiguration private constructor() {
         private set
     /** Requested AC3/E-AC3 bitrate in bits/sec. 0 = use server default. */
     var audioBitrate: Int = 0
+
+    /** Sunshine dynamic HDR negotiation (client opt-in). All zero = legacy client. */
+    var dynamicHdrCaps: Int = MoonBridge.DYNAMIC_HDR_CAPS_NONE
+    var dolbyVisionDirectSurface: Boolean = false
+    var dynamicHdrPreference: Int = MoonBridge.DYNAMIC_HDR_PREFERENCE_AUTOMATIC
         private set
     var customScreenMode: Int = -1
         private set
@@ -109,9 +114,13 @@ class StreamConfiguration private constructor() {
 
         /**
          * Sets the HDR mode for the video stream.
-         * @param hdrMode 0 = SDR (default), 1 = HDR10/PQ (SMPTE ST 2084), 2 = HLG (Hybrid Log-Gamma, ARIB STD-B67)
+         * @param hdrMode Client HDR selection. HDR10+ is mapped to the HDR10/PQ host protocol value.
          */
-        fun setHdrMode(hdrMode: Int): Builder = apply { config.hdrMode = hdrMode }
+        fun setHdrMode(hdrMode: Int): Builder = apply {
+            config.hdrMode = HdrModePolicy.toProtocolMode(hdrMode)
+        }
+
+        // 手动亮度校准独立于 HDR 格式协商，最低亮度保留浮点精度。
         fun setHdrBrightness(
                 source: String,
                 minBrightness: Float,
@@ -132,6 +141,21 @@ class StreamConfiguration private constructor() {
         fun setControlOnly(controlOnly: Boolean): Builder = apply { config.controlOnly = controlOnly }
         fun setAudioCodec(codec: Int): Builder = apply { config.audioCodec = codec }
         fun setAudioBitrate(bitrate: Int): Builder = apply { config.audioBitrate = bitrate }
+
+        /**
+         * Opts this session into the Sunshine dynamic HDR negotiation. Callers
+         * must have probed real device capabilities; a legacy client simply
+         * never calls this and the host keeps its historical behavior.
+         */
+        fun setDynamicHdrNegotiation(
+            caps: Int,
+            dolbyVisionDirectSurface: Boolean,
+            preference: Int,
+        ): Builder = apply {
+            config.dynamicHdrCaps = caps
+            config.dolbyVisionDirectSurface = dolbyVisionDirectSurface
+            config.dynamicHdrPreference = preference
+        }
         fun setCustomScreenMode(customScreenMode: Int): Builder = apply { config.customScreenMode = customScreenMode }
 
         fun build(): StreamConfiguration = config

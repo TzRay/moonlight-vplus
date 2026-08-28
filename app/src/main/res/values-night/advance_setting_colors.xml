@@ -7,6 +7,7 @@
     <color name="ui_shell_surface_focused">#3DFFFFFF</color>
     <color name="settings_drawer_background">#CC1A1A1A</color>
     <color name="settings_drawer_background_landscape">#CC1A1A1A</color>
+    <color name="appview_quick_menu_background">#E61A1A1A</color>
     <color name="ui_shell_outline">#2EFFFFFF</color>
     <color name="ui_shell_outline_strong">#4DFFFFFF</color>
     <color name="ui_shell_text_primary">#F7F3F7</color>
@@ -32,11 +33,15 @@
     <color name="game_menu_button_pressed">#FF33363F</color>
     <color name="game_menu_button_border">#18FF8FA3</color>
     <color name="game_menu_button_border_pressed">@color/game_menu_accent</color>
+    <!-- Controller diagnostics need a stronger neutral outline than menu chrome. -->
+    <color name="controller_diag_outline">#FFD7DCE4</color>
+    <color name="controller_diag_control_surface">#FF3A3D46</color>
     <color name="game_menu_list_item_pressed">#FF33363F</color>
     <color name="game_menu_list_item_focused">#FF373A44</color>
     <color name="game_menu_list_item_border">#0CFFFFFF</color>
     <color name="game_menu_list_item_border_pressed">@color/game_menu_accent</color>
     <color name="game_menu_dialog_background">#FF1C1E24</color>
+    <color name="game_menu_opacity_popup_background">#ED23242B</color>
     <color name="game_menu_dialog_border">#12FFFFFF</color>
     <color name="game_menu_list_item_normal">#FF26282F</color>
     <color name="game_menu_danger_text">#FFFF8A8A</color>
@@ -76,11 +81,9 @@
     <color name="iperf_output_hint">#99C9D0D8</color>
 
     <!-- About dialog keeps its own layered card treatment. -->
-    <color name="about_dialog_window_start">#F229242F</color>
-    <color name="about_dialog_window_center">#F222222B</color>
-    <color name="about_dialog_window_end">#E61B1C22</color>
-    <color name="about_dialog_panel_surface">#F223242B</color>
     <color name="about_dialog_panel_outline">#33FFFFFF</color>
+    <color name="about_dialog_link_surface">#FF32262E</color>
+    <color name="about_dialog_links_bar_surface">#E61C1D22</color>
 
     <!-- Manual add computer screen -->
     <color name="add_pc_background">#FF15161B</color>

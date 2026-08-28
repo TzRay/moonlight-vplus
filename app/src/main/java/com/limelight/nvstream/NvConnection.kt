@@ -476,6 +476,11 @@ open class NvConnection(
 
             synchronized(MoonBridge::class.java) {
                 MoonBridge.setupBridge(videoDecoderRenderer, audioRenderer, connectionListener)
+                MoonBridge.setDynamicHdrNegotiation(
+                    context.streamConfig.dynamicHdrCaps,
+                    if (context.streamConfig.dolbyVisionDirectSurface) 1 else 0,
+                    context.streamConfig.dynamicHdrPreference,
+                )
                 val ret = timeConnectionStep("native connection") {
                     MoonBridge.startConnection(
                         context.serverAddress.address,
@@ -664,9 +669,8 @@ open class NvConnection(
         }
     }
 
-    fun sendControllerBatteryEvent(controllerNumber: Byte, batteryState: Byte, batteryPercentage: Byte) {
+    fun sendControllerBatteryEvent(controllerNumber: Byte, batteryState: Byte, batteryPercentage: Byte): Int =
         MoonBridge.sendControllerBatteryEvent(controllerNumber, batteryState, batteryPercentage)
-    }
 
     fun sendUtf8Text(text: String) {
         if (!isMonkey) {

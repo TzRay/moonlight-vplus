@@ -205,10 +205,15 @@ class ConnectionCallbackHandler(private val game: Game) {
 
             game.hideSystemUi(1000)
 
+            game.ds5TouchpadFeedbackView?.showActivatedHint()
+
             // 连接一开始就启动保活服务
             val prefs = PreferenceManager.getDefaultSharedPreferences(game)
             val isResumeEnabled = prefs.getBoolean("checkbox_resume_stream", false)
             if (isResumeEnabled) game.showKeepAliveNotification()
+
+            // Cursor negotiation also updates Android views and main-thread timeout state.
+            game.cursorServiceManager.onConnectionStarted()
         }
 
         // Report this shortcut being used (off the main thread to prevent ANRs)
@@ -221,10 +226,11 @@ class ConnectionCallbackHandler(private val game: Game) {
             shortcutHelper.reportGameLaunched(computer, game.app!!)
         }
 
-        // 检查是否启用了HDR并主动设置初始状态
+        // Prepare the output pipeline when HDR is expected. This is intentionally separate from
+        // the host setHdrMode callback so diagnostics don't claim HDR before the stream activates.
         val appSupportsHdr = game.intent.getBooleanExtra(Game.EXTRA_APP_HDR, false)
-        if (appSupportsHdr && game.prefConfig.enableHdr) {
-            game.setHdrMode(true, null)
+        if (appSupportsHdr && game.prefConfig.enableHdr && game.isNegotiatedHdrEnabled()) {
+            game.prepareInitialHdrOutput()
         }
 
         // 初始化麦克风管理器
@@ -270,13 +276,7 @@ class ConnectionCallbackHandler(private val game: Game) {
         // 1. 获取并保存 IP (存到全局变量)
         game.currentHostAddress = game.intent.getStringExtra(Game.EXTRA_HOST)
 
-        // 2. 调用统一的状态管理方法
-        game.cursorServiceManager.updateServiceState(
-            game.prefConfig.enableLocalCursorRendering && game.prefConfig.touchscreenTrackpad,
-            game.currentHostAddress
-        )
-
-        // 3. 启动智能码率（如设置已开启）
+        // 2. 启动智能码率（如设置已开启）
         game.startAdaptiveBitrateIfEnabled()
     }
 
@@ -318,12 +318,13 @@ class ConnectionCallbackHandler(private val game: Game) {
                 game.appSettingsManager?.saveAppLastSettings(uuid, game.app, game.prefConfig)
             }
 
+            // Restore host-composited cursor mode before native control-stream teardown.
+            game.cursorServiceManager.stopService()
+
             // Stop may take a few hundred ms to do some network I/O to tell
             // the server we're going away and clean up. Let it run in a separate
             // thread to keep things smooth for the UI.
             Thread { game.conn?.stop() }.start()
-
-            game.cursorServiceManager.stopService()
         }
     }
 }

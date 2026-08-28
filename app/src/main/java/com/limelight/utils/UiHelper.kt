@@ -250,6 +250,22 @@ object UiHelper {
             .setPositiveButton(parent.resources.getString(R.string.yes)) { _, _ -> onYes?.run() }
             .setNegativeButton(parent.resources.getString(R.string.no)) { _, _ -> onNo?.run() }
             .show()
+            .also { AppDialogStyler.installDismissKeys(it) }
+    }
+
+    fun displaySleepConfirmationDialog(
+        parent: Activity,
+        computer: ComputerDetails,
+        onYes: Runnable?,
+        onNo: Runnable?
+    ) {
+        AlertDialog.Builder(parent, R.style.AppDialogStyle)
+            .setTitle(computer.name)
+            .setMessage(parent.getString(R.string.pcview_sleep_confirmation, computer.name))
+            .setPositiveButton(parent.getString(R.string.quick_btn_sleep)) { _, _ -> onYes?.run() }
+            .setNegativeButton(parent.getString(R.string.no)) { _, _ -> onNo?.run() }
+            .show()
+            .also { AppDialogStyler.installDismissKeys(it) }
     }
 
     fun displayDeletePcConfirmationDialog(
@@ -262,6 +278,7 @@ object UiHelper {
             .setPositiveButton(parent.resources.getString(R.string.yes)) { _, _ -> onYes?.run() }
             .setNegativeButton(parent.resources.getString(R.string.no)) { _, _ -> onNo?.run() }
             .show()
+            .also { AppDialogStyler.installDismissKeys(it) }
     }
 
     fun isTvDevice(context: Context): Boolean {

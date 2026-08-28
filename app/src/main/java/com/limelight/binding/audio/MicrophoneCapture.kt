@@ -26,6 +26,9 @@ class MicrophoneCapture(
     private var gainControl: AutomaticGainControl? = null
     private var noiseSuppressor: NoiseSuppressor? = null
 
+    // 音量增益及其平衡处理器（软件音量处理）
+    private val volumeProcessor = MicrophoneVolumeProcessor()
+
     private val frameBuffer = ByteArray(MicrophoneConfig.BYTES_PER_FRAME)
     private var frameBufferPos = 0
 
@@ -65,6 +68,16 @@ class MicrophoneCapture(
                 return false
             }
 
+            // 从配置加载音量增益及其平衡参数
+            volumeProcessor.configure(
+                enabled = MicrophoneConfig.isVolumeProcessingEnabled(),
+                gainEnabled = MicrophoneConfig.isVolumeGainEnabled(),
+                gainDb = MicrophoneConfig.getVolumeGainDb(),
+                balanceEnabled = MicrophoneConfig.isVolumeBalanceEnabled(),
+                balanceTargetPercent = MicrophoneConfig.getVolumeBalanceTargetPercent(),
+                voiceEnhancementEnabled = MicrophoneConfig.isVoiceEnhancementEnabled()
+            )
+
             initializeAudioEffects()
 
             running.set(true)
@@ -99,6 +112,7 @@ class MicrophoneCapture(
                 } catch (e: Exception) {
                     LimeLog.severe("麦克风捕获出错: ${e.message}")
                 } finally {
+                    running.set(false)
                     if (audioRecord?.state == AudioRecord.STATE_INITIALIZED) {
                         try {
                             audioRecord!!.stop()
@@ -106,6 +120,7 @@ class MicrophoneCapture(
                             LimeLog.warning("停止AudioRecord时出错: ${e.message}")
                         }
                     }
+                    release()
                 }
             }, "MicrophoneCapture")
 
@@ -150,6 +165,8 @@ class MicrophoneCapture(
                     continue
                 }
 
+                // 先应用音量处理，再交给编码器。
+                volumeProcessor.processFrame(frameBuffer, 0, MicrophoneConfig.BYTES_PER_FRAME)
                 dataCallback.onMicrophoneData(frameBuffer, 0, MicrophoneConfig.BYTES_PER_FRAME)
                 frameBufferPos = 0
                 lastFrameTime = currentTime
@@ -167,14 +184,33 @@ class MicrophoneCapture(
     fun stop() {
         running.set(false)
 
-        captureThread?.let {
-            try {
-                it.join(300)
-            } catch (_: InterruptedException) { }
-        }
-        captureThread = null
+        // Stop AudioRecord first so a blocking read can return before its native resources
+        // are released. Releasing while the capture thread is still inside read() can crash
+        // on some Android audio implementations.
+        try {
+            audioRecord?.stop()
+        } catch (_: IllegalStateException) { }
 
-        release()
+        var interrupted = false
+        val thread = captureThread
+        if (thread != null && thread !== Thread.currentThread()) {
+            try {
+                thread.join(1000)
+            } catch (_: InterruptedException) {
+                interrupted = true
+            }
+        }
+
+        if (thread?.isAlive != true) {
+            captureThread = null
+            release()
+        } else {
+            LimeLog.warning("麦克风采集线程未及时退出，将在线程结束后释放AudioRecord")
+        }
+
+        if (interrupted) {
+            Thread.currentThread().interrupt()
+        }
     }
 
     private fun initializeAudioEffects() {

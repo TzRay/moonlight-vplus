@@ -14,6 +14,16 @@ class QuickActionRegistryTest {
     }
 
     @Test
+    fun onlyLocalKeyboardRunsWithGameFocus() {
+        val focusedActionIds = QuickActionRegistry.getAllActions(null)
+            .values
+            .filter(StreamAction::isWithGameFocus)
+            .map(StreamAction::id)
+
+        assertEquals(listOf("toggle_keyboard"), focusedActionIds)
+    }
+
+    @Test
     fun baseDefaultsFavorFrequentReversibleActions() {
         assertEquals(
             listOf(

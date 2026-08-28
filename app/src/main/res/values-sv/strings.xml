@@ -117,8 +117,6 @@
     <string name="title_checkbox_touchscreen_trackpad">Använd pekskärmen som en styrplatta</string>
     <string name="summary_checkbox_touchscreen_trackpad">Om den är aktiverad fungerar pekskärmen som en styrplatta. Om den är inaktiverad styr pekskärmen direkt muspekaren.</string>
     <string name="title_checkbox_multi_controller">Automatiskt upptäckande av närvarande spelkontroll</string>
-    <string name="title_checkbox_vibrate_fallback">Efterlikna stöd för rumble med vibrationer</string>
-    <string name="summary_checkbox_vibrate_fallback">Vibrerar enheten för att efterlikna rumble om din spelplatta inte har stöd för det</string>
     <string name="summary_seekbar_deadzone">Observera: Vissa spel kan kräva en större dödzon än vad Moonlight är konfigurerat för att använda.</string>
     <string name="title_seekbar_deadzone">Jämka analogstickans dödzon</string>
     <string name="suffix_seekbar_deadzone">%</string>
@@ -285,9 +283,22 @@
     <string name="screen_mode_primary_streaming_desc">Aktiverar den valda skärmen och gör den primär.</string>
     <string name="screen_mode_secondary_streaming_desc">Behåller den fysiska skärmen som primär och använder Foundation-skärmen som sekundär.</string>
     <string name="screen_mode_exclusive_streaming_desc">Använder endast den valda skärmen och inaktiverar andra skärmar.</string>
-    <string name="screen_combination_mode_label">Läge: %1$s</string>
     <string name="title_config_sync_backup_password">Lösenord för säkerhetskopieringskryptering</string>
     <string name="title_document_handbook">Dokumentation</string>
     <string name="summary_document_handbook">Visa relaterad dokumentation</string>
     <string name="title_about_us">Om oss</string>
+    <string name="title_checkbox_mic_volume_processing">Bearbetning av mikrofonvolym</string>
+    <string name="summary_checkbox_mic_volume_processing">Justera mikrofonvolymen innan den skickas till värden. Fast förstärkning och volymbalansering kan inte användas samtidigt.</string>
+    <string name="title_checkbox_mic_gain">Volymförstärkning</string>
+    <string name="summary_checkbox_mic_gain">Justera mikrofonvolymen med ett fast värde. Positiva värden förstärker den och negativa värden dämpar den.</string>
+    <string name="title_seekbar_mic_gain">Förstärkning</string>
+    <string name="summary_seekbar_mic_gain">Ange fast förstärkning. 0 dB behåller den ursprungliga volymen och ligger mitt på skjutreglaget.</string>
+    <string name="suffix_seekbar_mic_gain_db">dB</string>
+    <string name="title_checkbox_mic_balance">Volymbalansering</string>
+    <string name="summary_checkbox_mic_balance">Komprimerar starka insignaler för att minska volymvariationer och risken för klippning.</string>
+    <string name="title_seekbar_mic_balance">Utgångskompensation</string>
+    <string name="summary_seekbar_mic_balance" formatted="false">Ange kompensationsförstärkningen efter volymbalansering. 50% motsvarar +4 dB och är det rekommenderade värdet.</string>
+    <string name="suffix_seekbar_mic_balance_target" formatted="false">%</string>
+    <string name="title_checkbox_mic_voice_enhancement">Röstförbättring</string>
+    <string name="summary_checkbox_mic_voice_enhancement">Minskar lågfrekvent brus och förbättrar talets tydlighet. Tillgängligt med fast förstärkning och volymbalansering.</string>
 </resources>

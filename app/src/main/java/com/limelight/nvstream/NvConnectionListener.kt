@@ -14,6 +14,14 @@ interface NvConnectionListener {
 
     fun rumble(controllerNumber: Short, lowFreqMotor: Short, highFreqMotor: Short)
     fun rumbleTriggers(controllerNumber: Short, leftTrigger: Short, rightTrigger: Short)
+    fun setAdaptiveTriggers(
+        controllerNumber: Short,
+        eventFlags: Byte,
+        typeLeft: Byte,
+        typeRight: Byte,
+        left: ByteArray,
+        right: ByteArray
+    )
 
     fun setHdrMode(enabled: Boolean, hdrMetadata: ByteArray?)
 
@@ -21,5 +29,17 @@ interface NvConnectionListener {
 
     fun setControllerLED(controllerNumber: Short, r: Byte, g: Byte, b: Byte)
 
+    fun ds5HapticsPcm(frame: Ds5HapticsPcmFrame)
+
     fun onResolutionChanged(width: Int, height: Int)
+
+    fun onCursorUpdate(
+        flags: Int,
+        shapeId: Int,
+        width: Int,
+        height: Int,
+        hotspotX: Int,
+        hotspotY: Int,
+        bgraPixels: ByteArray?
+    )
 }

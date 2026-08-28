@@ -52,11 +52,9 @@
     <string name="category_gamepad_settings">Ustawienia gamepada</string>
     <string name="title_checkbox_multi_controller">Automatyczne wykrywanie obecności gamepada</string>
     <string name="summary_checkbox_enable_audiofx">Umożliwia działanie efektów audio podczas przesyłania strumieniowego, ale może zwiększyć opóźnienie dźwięku</string>
-    <string name="title_checkbox_vibrate_fallback">Emuluj wsparcie dudnienia za pomocą wibracji</string>
     <string name="title_seekbar_vibrate_fallback_strength">Regulacja intensywności emulowanego dudnienia</string>
     <string name="summary_seekbar_vibrate_fallback_strength">Wzmocnienie lub zmniejszenie intensywności wibracji na urządzeniu</string>
     <string name="summary_checkbox_multi_controller">Odznaczenie tej opcji wymusza, by gamepad był zawsze obecny</string>
-    <string name="summary_checkbox_vibrate_fallback">Wibruje urządzenie, aby naśladować dudnienie, jeśli gamepad go nie obsługuje</string>
     <string name="suffix_seekbar_vibrate_fallback_strength">%</string>
     <string name="title_seekbar_deadzone">Regulacja strefy martwej drążka analogowego</string>
     <string name="summary_seekbar_deadzone">Uwaga: Niektóre gry mogą wymuszać większą strefę martwą niż ta, do której skonfigurowany jest Moonlight.</string>
@@ -285,9 +283,22 @@
     <string name="screen_mode_primary_streaming_desc">Aktywuje wybrany ekran i ustawia go jako główny.</string>
     <string name="screen_mode_secondary_streaming_desc">Pozostawia fizyczny ekran jako główny i używa ekranu Foundation jako dodatkowego.</string>
     <string name="screen_mode_exclusive_streaming_desc">Używa tylko wybranego ekranu i wyłącza pozostałe ekrany.</string>
-    <string name="screen_combination_mode_label">Tryb: %1$s</string>
     <string name="title_config_sync_backup_password">Hasło szyfrowania kopii zapasowej</string>
     <string name="title_document_handbook">Dokumentacja</string>
     <string name="summary_document_handbook">Wyświetl powiązaną dokumentację</string>
     <string name="title_about_us">O nas</string>
+    <string name="title_checkbox_mic_volume_processing">Przetwarzanie głośności mikrofonu</string>
+    <string name="summary_checkbox_mic_volume_processing">Dostosuj głośność mikrofonu przed wysłaniem jej do hosta. Stałe wzmocnienie i balansowanie głośności wzajemnie się wykluczają.</string>
+    <string name="title_checkbox_mic_gain">Wzmocnienie głośności</string>
+    <string name="summary_checkbox_mic_gain">Dostosuj głośność mikrofonu o stałą wartość. Wartości dodatnie ją wzmacniają, a ujemne osłabiają.</string>
+    <string name="title_seekbar_mic_gain">Wzmocnienie</string>
+    <string name="summary_seekbar_mic_gain">Ustaw stałe wzmocnienie. 0 dB zachowuje pierwotną głośność i znajduje się na środku suwaka.</string>
+    <string name="suffix_seekbar_mic_gain_db">dB</string>
+    <string name="title_checkbox_mic_balance">Balansowanie głośności</string>
+    <string name="summary_checkbox_mic_balance">Kompresuje głośny sygnał wejściowy, aby ograniczyć wahania głośności i ryzyko przesterowania.</string>
+    <string name="title_seekbar_mic_balance">Kompensacja wyjścia</string>
+    <string name="summary_seekbar_mic_balance" formatted="false">Ustaw wzmocnienie kompensacyjne po zbalansowaniu głośności. 50% odpowiada +4 dB i jest wartością zalecaną.</string>
+    <string name="suffix_seekbar_mic_balance_target" formatted="false">%</string>
+    <string name="title_checkbox_mic_voice_enhancement">Uwydatnianie głosu</string>
+    <string name="summary_checkbox_mic_voice_enhancement">Zmniejsza szum o niskiej częstotliwości i poprawia wyrazistość mowy. Dostępne przy stałym wzmocnieniu i balansowaniu głośności.</string>
 </resources>

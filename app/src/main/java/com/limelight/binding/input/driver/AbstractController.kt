@@ -1,8 +1,8 @@
 package com.limelight.binding.input.driver
 
 abstract class AbstractController(
-    private val deviceId: Int,
-    private val listener: UsbDriverListener,
+    protected val deviceId: Int,
+    protected val listener: ControllerDriverListener,
     private val vendorId: Int,
     private val productId: Int
 ) {
@@ -44,9 +44,27 @@ abstract class AbstractController(
     abstract fun start(): Boolean
     abstract fun stop()
 
+    /** Runs [onStopped] after this controller has released all transport resources. */
+    open fun stopAndThen(onStopped: () -> Unit) {
+        stop()
+        onStopped()
+    }
+
     abstract fun rumble(lowFreqMotor: Short, highFreqMotor: Short)
 
     abstract fun rumbleTriggers(leftTrigger: Short, rightTrigger: Short)
+
+    open val supportsAdaptiveTriggers: Boolean = false
+
+    open fun setAdaptiveTriggers(
+        eventFlags: Byte,
+        typeLeft: Byte,
+        typeRight: Byte,
+        left: ByteArray,
+        right: ByteArray
+    ) = Unit
+
+    open fun setControllerLED(r: Byte, g: Byte, b: Byte) = Unit
 
     protected fun notifyDeviceRemoved() {
         listener.deviceRemoved(this)
@@ -59,4 +77,17 @@ abstract class AbstractController(
     protected fun notifyControllerMotion(motionType: Byte, x: Float, y: Float, z: Float) {
         listener.reportControllerMotion(deviceId, motionType, x, y, z)
     }
+
+    protected fun notifyBatteryState(batteryState: Byte, batteryPercentage: Byte) {
+        listener.reportControllerBattery(deviceId, batteryState, batteryPercentage)
+    }
+
+    protected fun isControllerReady(): Boolean = listener.isControllerReady(deviceId)
+
+    protected fun notifyControllerTouch(eventType: Byte, pointerId: Int, x: Float, y: Float) {
+        listener.reportControllerTouch(deviceId, eventType, pointerId, x, y)
+    }
+
+    /** Reset driver-side touch state after the host has received a cancellation. */
+    open fun resetTouchState() {}
 }

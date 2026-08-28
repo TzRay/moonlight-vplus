@@ -15,6 +15,7 @@ import com.limelight.nvstream.http.ComputerDetails
 import com.limelight.nvstream.http.NvHTTP
 import com.limelight.nvstream.jni.MoonBridge
 import com.limelight.utils.Dialog
+import com.limelight.utils.NetHelper
 import com.limelight.utils.ServerHelper
 import com.limelight.utils.SpinnerDialog
 import com.limelight.utils.UiHelper
@@ -36,23 +37,54 @@ import android.widget.EditText
 import android.widget.Toast
 import androidx.core.view.WindowCompat
 
+internal class AddComputerWorkerGenerationGate {
+    private var generation = 0L
+
+    @Synchronized
+    fun nextGeneration(): Long {
+        generation++
+        return generation
+    }
+
+    @Synchronized
+    fun invalidate() {
+        generation++
+    }
+
+    @Synchronized
+    fun isCurrent(candidate: Long): Boolean = candidate == generation
+}
+
 class AddComputerManually : Activity() {
+    companion object {
+        const val EXTRA_ADDED_COMPUTER_UUID = "com.limelight.extra.ADDED_COMPUTER_UUID"
+        private const val CONNECTING_BUTTON_ALPHA = 0.55f
+    }
+
     private lateinit var hostText: EditText
     private lateinit var portText: EditText
     private lateinit var addPcButton: Button
-    private var managerBinder: ComputerManagerService.ComputerManagerBinder? = null
+    @Volatile private var managerBinder: ComputerManagerService.ComputerManagerBinder? = null
     private val computersToAdd = LinkedBlockingQueue<String>()
+    private val addThreadLock = Any()
+    private val addWorkerGenerationGate = AddComputerWorkerGenerationGate()
     private var addThread: Thread? = null
+    private var restartAddThreadWhenStopped = false
+    @Volatile private var shuttingDown = false
+    private var serviceBindingRequested = false
+    private var addingComputer = false
 
     private val serviceConnection: ServiceConnection = object : ServiceConnection {
         override fun onServiceConnected(className: ComponentName, binder: IBinder) {
+            if (shuttingDown) return
             managerBinder = binder as ComputerManagerService.ComputerManagerBinder
             startAddThread()
         }
 
         override fun onServiceDisconnected(className: ComponentName) {
-            joinAddThread()
             managerBinder = null
+            cancelAddThread()
+            setAddingState(false)
         }
     }
 
@@ -155,14 +187,27 @@ class AddComputerManually : Activity() {
         return null
     }
 
+    private fun isAddWorkerCurrent(generation: Long): Boolean {
+        return !shuttingDown && addWorkerGenerationGate.isCurrent(generation)
+    }
+
+    private fun ensureAddWorkerCurrent(generation: Long) {
+        if (!isAddWorkerCurrent(generation) || Thread.currentThread().isInterrupted) {
+            throw InterruptedException()
+        }
+    }
+
     @Throws(InterruptedException::class)
-    private fun doAddPc(rawUserInput: String) {
+    private fun doAddPc(rawUserInput: String, generation: Long) {
+        ensureAddWorkerCurrent(generation)
         var wrongSiteLocal = false
+        var activeNetworkIsVpn = false
         var invalidInput = false
         var success: Boolean
         var portTestResult: Int
         var hostAddress: String? = null
         var isIPv6 = false
+        var addedComputerUuid: String? = null
 
         val dialog = SpinnerDialog.displayDialog(this, resources.getString(R.string.title_add_pc),
                 resources.getString(R.string.msg_add_pc), false)
@@ -183,9 +228,17 @@ class AddComputerManually : Activity() {
                 }
 
                 details.manualAddress = ComputerDetails.AddressTuple(host, port)
-                success = managerBinder!!.addComputerBlocking(details)
+                val binder = managerBinder ?: throw InterruptedException()
+                success = binder.addComputerBlocking(details)
+                ensureAddWorkerCurrent(generation)
+                if (success) {
+                    addedComputerUuid = details.uuid
+                }
                 if (!success) {
-                    wrongSiteLocal = isWrongSubnetSiteLocalAddress(host)
+                    activeNetworkIsVpn = NetHelper.isActiveNetworkVpn(this)
+                    // A VPN may route private subnets that don't match any local
+                    // interface address, so the LAN subnet heuristic is invalid.
+                    wrongSiteLocal = !activeNetworkIsVpn && isWrongSubnetSiteLocalAddress(host)
                 }
             } else {
                 success = false
@@ -200,27 +253,29 @@ class AddComputerManually : Activity() {
             invalidInput = true
         }
 
-        if (!success && !wrongSiteLocal && !invalidInput) {
-            portTestResult = MoonBridge.testClientConnectivity(ServerHelper.CONNECTION_TEST_SERVER, 443,
-                    MoonBridge.ML_PORT_FLAG_TCP_47984 or MoonBridge.ML_PORT_FLAG_TCP_47989)
-        } else {
-            portTestResult = MoonBridge.ML_TEST_RESULT_INCONCLUSIVE
+        try {
+            if (!success && !wrongSiteLocal && !invalidInput && !activeNetworkIsVpn) {
+                ensureAddWorkerCurrent(generation)
+                portTestResult = MoonBridge.testClientConnectivity(ServerHelper.CONNECTION_TEST_SERVER, 443,
+                        MoonBridge.ML_PORT_FLAG_TCP_47984 or MoonBridge.ML_PORT_FLAG_TCP_47989)
+            } else {
+                portTestResult = MoonBridge.ML_TEST_RESULT_INCONCLUSIVE
+            }
+            ensureAddWorkerCurrent(generation)
+        } finally {
+            dialog.dismiss()
         }
 
-        dialog.dismiss()
-
         if (invalidInput) {
-            setAddingState(false)
-            Dialog.displayDialog(this, resources.getString(R.string.conn_error_title), resources.getString(R.string.addpc_unknown_host), false)
+            showAddFailure(generation, resources.getString(R.string.addpc_unknown_host))
         } else if (wrongSiteLocal) {
-            setAddingState(false)
-            Dialog.displayDialog(this, resources.getString(R.string.conn_error_title), resources.getString(R.string.addpc_wrong_sitelocal), false)
+            showAddFailure(generation, resources.getString(R.string.addpc_wrong_sitelocal))
         } else if (!success) {
-            setAddingState(false)
-            var dialogText = if (portTestResult != MoonBridge.ML_TEST_RESULT_INCONCLUSIVE && portTestResult != 0) {
-                resources.getString(R.string.nettest_text_blocked)
-            } else {
-                resources.getString(R.string.addpc_fail)
+            var dialogText = when {
+                activeNetworkIsVpn -> resources.getString(R.string.addpc_fail_vpn)
+                portTestResult != MoonBridge.ML_TEST_RESULT_INCONCLUSIVE && portTestResult != 0 ->
+                    resources.getString(R.string.nettest_text_blocked)
+                else -> resources.getString(R.string.addpc_fail)
             }
 
             if (isIPv6) {
@@ -230,47 +285,93 @@ class AddComputerManually : Activity() {
                         "3. 目标主机的IPv6防火墙设置"
             }
 
-            Dialog.displayDialog(this, resources.getString(R.string.conn_error_title), dialogText, false)
+            showAddFailure(generation, dialogText)
         } else {
             this@AddComputerManually.runOnUiThread {
+                if (!isAddWorkerCurrent(generation) || isDestroyed) return@runOnUiThread
                 Toast.makeText(this@AddComputerManually, resources.getString(R.string.addpc_success), Toast.LENGTH_LONG).show()
 
                 if (!isFinishing) {
+                    setResult(
+                        RESULT_OK,
+                        Intent().putExtra(EXTRA_ADDED_COMPUTER_UUID, addedComputerUuid)
+                    )
                     this@AddComputerManually.finish()
                 }
             }
         }
     }
 
-    private fun startAddThread() {
-        addThread = Thread {
-            while (!Thread.currentThread().isInterrupted) {
-                try {
-                    val computer = computersToAdd.take()
-                    doAddPc(computer)
-                } catch (e: InterruptedException) {
-                    return@Thread
-                }
-            }
-        }.apply {
-            name = "UI - AddComputerManually"
-            start()
+    private fun showAddFailure(generation: Long, message: String) {
+        runOnUiThread {
+            if (!isAddWorkerCurrent(generation) || isDestroyed) return@runOnUiThread
+            setAddingState(false)
+            Dialog.displayDialog(
+                this,
+                resources.getString(R.string.conn_error_title),
+                message,
+                false
+            )
         }
     }
 
-    private fun joinAddThread() {
-        if (addThread != null) {
-            addThread!!.interrupt()
-
-            try {
-                addThread!!.join()
-            } catch (e: InterruptedException) {
-                e.printStackTrace()
-                Thread.currentThread().interrupt()
+    private fun startAddThread() {
+        val worker: Thread
+        val generation: Long
+        synchronized(addThreadLock) {
+            if (shuttingDown) return
+            if (addThread?.isAlive == true) {
+                restartAddThreadWhenStopped = true
+                return
             }
 
-            addThread = null
+            restartAddThreadWhenStopped = false
+            generation = addWorkerGenerationGate.nextGeneration()
+            worker = Thread {
+                try {
+                    while (!Thread.currentThread().isInterrupted &&
+                        isAddWorkerCurrent(generation)
+                    ) {
+                        val computer = computersToAdd.take()
+                        doAddPc(computer, generation)
+                    }
+                } catch (_: InterruptedException) {
+                    // Cancellation is expected during service disconnect or Activity teardown.
+                } finally {
+                    val shouldRestart = synchronized(addThreadLock) {
+                        if (addThread !== Thread.currentThread()) {
+                            false
+                        } else {
+                            addThread = null
+                            val restart = restartAddThreadWhenStopped &&
+                                !shuttingDown && managerBinder != null
+                            restartAddThreadWhenStopped = false
+                            restart
+                        }
+                    }
+                    if (shouldRestart) {
+                        startAddThread()
+                    }
+                }
+            }.apply {
+                name = "Network - AddComputerManually"
+                isDaemon = true
+            }
+            addThread = worker
         }
+        worker.start()
+    }
+
+    private fun cancelAddThread() {
+        val worker = synchronized(addThreadLock) {
+            addWorkerGenerationGate.invalidate()
+            computersToAdd.clear()
+            if (shuttingDown || managerBinder == null) {
+                restartAddThreadWhenStopped = false
+            }
+            addThread
+        }
+        worker?.interrupt()
     }
 
     override fun onStop() {
@@ -281,12 +382,14 @@ class AddComputerManually : Activity() {
     }
 
     override fun onDestroy() {
-        super.onDestroy()
-
-        if (managerBinder != null) {
-            joinAddThread()
-            unbindService(serviceConnection)
+        shuttingDown = true
+        cancelAddThread()
+        managerBinder = null
+        if (serviceBindingRequested) {
+            runCatching { unbindService(serviceConnection) }
+            serviceBindingRequested = false
         }
+        super.onDestroy()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -329,15 +432,22 @@ class AddComputerManually : Activity() {
         }
 
         addPcButton.setOnClickListener {
-            handleDoneEvent()
+            if (!addingComputer) handleDoneEvent()
         }
 
         hostText.post {
             hostText.requestFocus()
         }
 
-        bindService(Intent(this@AddComputerManually,
-                ComputerManagerService::class.java), serviceConnection, Service.BIND_AUTO_CREATE)
+        serviceBindingRequested = true
+        try {
+            bindService(Intent(this@AddComputerManually,
+                    ComputerManagerService::class.java), serviceConnection, Service.BIND_AUTO_CREATE)
+        } catch (e: RuntimeException) {
+            runCatching { unbindService(serviceConnection) }
+            serviceBindingRequested = false
+            throw e
+        }
     }
 
     private fun isNightMode(): Boolean {
@@ -374,6 +484,8 @@ class AddComputerManually : Activity() {
     }
 
     private fun handleDoneEvent(): Boolean {
+        if (addingComputer) return true
+
         val hostAddress = hostText.text.toString().trim()
         val portTextValue = portText.text.toString().trim()
 
@@ -400,13 +512,20 @@ class AddComputerManually : Activity() {
         return false
     }
 
-    private fun setAddingState(adding: Boolean) {
+    internal fun setAddingState(adding: Boolean) {
         runOnUiThread {
-            if (!::addPcButton.isInitialized) return@runOnUiThread
-            addPcButton.isEnabled = !adding
+            if (shuttingDown || isDestroyed || !::addPcButton.isInitialized) return@runOnUiThread
+            addingComputer = adding
+            // Explicit nextFocus targets still point here while a connection is pending.
+            // Keep the view focusable and reject duplicate activation in the click handler.
+            addPcButton.isEnabled = true
+            addPcButton.isFocusable = true
+            addPcButton.isFocusableInTouchMode = true
+            addPcButton.alpha = if (adding) CONNECTING_BUTTON_ALPHA else 1f
             addPcButton.text = getString(
                 if (adding) R.string.addpc_action_connecting else R.string.addpc_action_connect
             )
         }
     }
+
 }

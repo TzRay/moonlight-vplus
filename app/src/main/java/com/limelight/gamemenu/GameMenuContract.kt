@@ -11,12 +11,18 @@ internal data class GameMenuQuickAction(
     val enabled: Boolean = true
 )
 
+internal data class GameMenuOpacityAnchor(
+    val centerX: Int,
+    val bottomY: Int
+)
+
 internal data class GameMenuComposeUiState(
     val title: String,
     val options: List<GameMenu.MenuOption>,
     val superOptions: List<GameMenu.MenuOption>,
     val appName: String,
     val crownToggleText: String,
+    val gameMenuOpacity: Int,
     val deviceQuickOptions: List<GameMenu.MenuOption>,
     val quickActions: List<GameMenuQuickAction>,
     val visibleCards: GameMenuVisibleCards,
@@ -25,8 +31,51 @@ internal data class GameMenuComposeUiState(
     val gyro: GyroCardState,
     val customKeys: List<CustomKeyData>,
     val quickEditMode: Boolean = false,
-    val isSubmenu: Boolean = false
+    val isSubmenu: Boolean = false,
+    val pageLayout: GameMenuPageLayout = GameMenuPageLayout.STANDARD
 )
+
+internal enum class GameMenuPageLayout {
+    STANDARD,
+    TOUCH_MODE
+}
+
+enum class GameMenuOptionPresentation {
+    DEFAULT,
+    PRIMARY_MODE,
+    COMPATIBLE_ACTION
+}
+
+internal fun gameMenuChildDialogOption(
+    label: String,
+    action: Runnable
+) = GameMenu.MenuOption(
+    label = label,
+    isWithGameFocus = false,
+    runnable = action,
+    iconKey = null,
+    isShowIcon = false,
+    isKeepDialog = true
+)
+
+internal class GameMenuGuideDismissController {
+    private var dismissAction: (() -> Unit)? = null
+
+    fun register(action: () -> Unit) {
+        dismissAction = action
+    }
+
+    fun clear() {
+        dismissAction = null
+    }
+
+    fun dismissIfShowing(): Boolean {
+        val action = dismissAction ?: return false
+        dismissAction = null
+        action()
+        return true
+    }
+}
 
 internal data class GameMenuVisibleCards(
     val bitrate: Boolean,
@@ -36,9 +85,12 @@ internal data class GameMenuVisibleCards(
 )
 
 internal data class GameMenuCallbacks(
+    val onDismiss: () -> Unit,
+    val onHapticFeedback: (Int) -> Unit,
     val iconForOption: (String?) -> Int,
     val onBack: () -> Unit,
     val onCrownToggle: () -> Unit,
+    val onEditOpacity: (GameMenuOpacityAnchor) -> Unit,
     val onOptionClick: (GameMenu.MenuOption) -> Unit,
     val onInlineToggle: (GameMenu.InlineControl.Toggle) -> Unit,
     val onSegmentClick: (GameMenu.SegmentOption) -> Unit,

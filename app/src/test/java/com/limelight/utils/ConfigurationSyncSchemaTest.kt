@@ -4,6 +4,9 @@ import com.google.gson.JsonArray
 import com.google.gson.JsonElement
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
+import com.limelight.preferences.PreferenceConfiguration
+import com.limelight.binding.audio.MicrophoneButtonPreferences
+import com.limelight.ui.FloatBallPreferences
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -11,6 +14,99 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ConfigurationSyncSchemaTest {
+    @Test
+    fun colorRangePreferenceRemainsPortable() {
+        assertTrue(
+            ConfigurationSyncManager.isPortableDefaultPreferenceKey(
+                PreferenceConfiguration.FULL_RANGE_PREF_STRING
+            )
+        )
+    }
+
+    @Test
+    fun consolidatedSettingsKeepNewAndLegacyBackupKeysPortable() {
+        listOf(
+            PreferenceConfiguration.NATIVE_MOUSE_MODE_PRESET_PREF_STRING,
+            PreferenceConfiguration.TOUCHSCREEN_TRACKPAD_PREF_STRING,
+            PreferenceConfiguration.ENABLE_ENHANCED_TOUCH_PREF_STRING,
+            PreferenceConfiguration.MIC_VOLUME_PROCESSING_MODE_PREF_STRING,
+            PreferenceConfiguration.MIC_VOLUME_PROCESSING_PREF_STRING,
+            PreferenceConfiguration.MIC_GAIN_ENABLED_PREF_STRING,
+            PreferenceConfiguration.MIC_BALANCE_ENABLED_PREF_STRING,
+            PreferenceConfiguration.ENABLE_HOST_CADENCE_PRECISE_SYNC_STRING,
+            PreferenceConfiguration.SHOW_LOW_RESOLUTION_PRESETS_PREF_STRING,
+            "checkbox_resume_stream",
+            "checkbox_extreme_resume",
+            "checkbox_background_audio",
+            "checkbox_swap_quit_and_disconnect",
+            PreferenceConfiguration.DUALSENSE_DIRECT_BLUETOOTH_PREF_STRING,
+            "checkbox_dualsense_wireless_bridge",
+            "checkbox_vibrate_osc",
+            "checkbox_mouse_emulation",
+        ).forEach { key ->
+            assertTrue("Expected portable key: $key", ConfigurationSyncManager.isPortableDefaultPreferenceKey(key))
+        }
+
+        listOf(
+            "list_background_stream_behavior",
+            "list_quit_behavior",
+            "list_dualsense_output_mode",
+        ).forEach { key ->
+            assertFalse(
+                "Synthetic UI key must not enter the backup schema: $key",
+                ConfigurationSyncManager.isPortableDefaultPreferenceKey(key),
+            )
+        }
+    }
+
+    @Test
+    fun gameRumbleModePreferenceIsPortable() {
+        assertTrue(
+            ConfigurationSyncManager.isPortableDefaultPreferenceKey(
+                PreferenceConfiguration.GAME_RUMBLE_MODE_PREF_STRING
+            )
+        )
+        assertFalse(
+            ConfigurationSyncManager.isPortableDefaultPreferenceKey(
+                PreferenceConfiguration.SCREEN_DS5_TOUCHPAD_PREF_STRING
+            )
+        )
+    }
+
+    @Test
+    fun microphoneButtonSettingsArePortable() {
+        listOf(
+            MicrophoneButtonPreferences.KEY_SHOW_BUTTON,
+            MicrophoneButtonPreferences.KEY_PRESET_POSITION
+        ).forEach { key ->
+            assertTrue(ConfigurationSyncManager.isPortableDefaultPreferenceKey(key))
+        }
+    }
+
+    @Test
+    fun floatBallPresetIsPortable() {
+        assertTrue(
+            ConfigurationSyncManager.isPortableDefaultPreferenceKey(
+                FloatBallPreferences.KEY_PRESET_POSITION
+            )
+        )
+        assertFalse(
+            ConfigurationSyncManager.isPortableSharedPreferenceKey(
+                "FloatBallPrefs",
+                "normalizedX"
+            )
+        )
+    }
+
+    @Test
+    fun gameMenuOpacityIsPortable() {
+        assertTrue(
+            ConfigurationSyncManager.isPortableDefaultPreferenceKey(
+                PreferenceConfiguration.GAME_MENU_OPACITY_PREF_STRING
+            )
+        )
+    }
+
     @Test
     fun schemaV1FixtureHasExpectedSectionsAndTypedValues() {
         validateSchemaFixture(

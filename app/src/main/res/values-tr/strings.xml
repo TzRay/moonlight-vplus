@@ -63,7 +63,6 @@
 \nİnternet üzerinden yayın yapmaya çalışıyorsanız, Moonlight İnternet Barındırma Aracını bilgisayarınıza yükleyin ve bilgisayarınızın internet bağlantısını kontrol etmek için birlikte verilen İnternet Akış Test Cihazını çalıştırın.</string>
     <string name="title_checkbox_multi_controller">Otomatik oyun kumandası varlığı algılama</string>
     <string name="summary_checkbox_multi_controller">Bu seçeneğin işaretinin kaldırılması bir oyun kumandasının her zaman mevcut olmasını zorlar</string>
-    <string name="summary_checkbox_vibrate_fallback">Oyun kumandanız desteklemiyorsa, gürültüyü taklit etmek için cihazınızı titreştirir</string>
     <string name="title_seekbar_deadzone">Analog çubuk ölü bölgesini ayarlama</string>
     <string name="summary_checkbox_xb1_driver">Yerel Xbox oyun kumandası desteği olmayan cihazlar için yerleşik USB sürücüsünü etkinleştirir</string>
     <string name="title_checkbox_mouse_emulation">Oyun kumandası üzerinden fare emülasyonu</string>
@@ -169,7 +168,6 @@
 \nSon olarak, cihazınız veya bilgisayarınız doğal çözünürlükte akışı desteklemiyor olabilir. Eğer cihazınızda çalışmıyorsa, ne yazık ki şansınız yok demektir.</string>
     <string name="summary_seekbar_bitrate">Daha iyi görüntü kalitesi için artırın. Daha yavaş bağlantılarda performansı artırmak için azaltın.</string>
     <string name="title_checkbox_stretch_video">Videoyu tam ekrana genişlet</string>
-    <string name="title_checkbox_vibrate_fallback">Titreşim ile gürültü desteğini taklit etme</string>
     <string name="summary_checkbox_usb_bind_all">Yerel Xbox oyun kumandası desteği mevcut olsa bile desteklenen tüm oyun kumandaları için Moonlight\'ın USB sürücüsünü kullan</string>
     <string name="summary_checkbox_flip_face_buttons">Oyun kumandaları ve ekran kontrolleri için A/B ve X/Y yüz düğmelerini değiştirir</string>
     <string name="summary_checkbox_absolute_mouse_mode">Bu fare hızlandırmanın uzak masaüstü kullanımı için daha doğal davranmasını sağlayabilir, ancak birçok oyunla uyumsuzdur.</string>
@@ -188,10 +186,23 @@
     <string name="screen_mode_primary_streaming_desc">Seçili ekranı etkinleştirir ve birincil olarak ayarlar.</string>
     <string name="screen_mode_secondary_streaming_desc">Fiziksel ekranı birincil tutar ve Foundation ekranını ikincil olarak kullanır.</string>
     <string name="screen_mode_exclusive_streaming_desc">Yalnızca seçili ekranı kullanır ve diğer ekranları devre dışı bırakır.</string>
-    <string name="screen_combination_mode_label">Mod: %1$s</string>
     <string name="title_config_sync_backup_password">Yedek şifreleme parolası</string>
     <string name="category_help">Yardım</string>
     <string name="title_document_handbook">Belgeler</string>
     <string name="summary_document_handbook">İlgili belgeleri görüntüle</string>
     <string name="title_about_us">Hakkımızda</string>
+    <string name="title_checkbox_mic_volume_processing">Mikrofon ses düzeyi işleme</string>
+    <string name="summary_checkbox_mic_volume_processing">Mikrofon ses düzeyini ana bilgisayara göndermeden önce ayarlayın. Sabit kazanç ve ses düzeyi dengeleme aynı anda kullanılamaz.</string>
+    <string name="title_checkbox_mic_gain">Ses düzeyi kazancı</string>
+    <string name="summary_checkbox_mic_gain">Mikrofon ses düzeyini sabit bir miktarda ayarlayın. Pozitif değerler sesi yükseltir, negatif değerler azaltır.</string>
+    <string name="title_seekbar_mic_gain">Kazanç</string>
+    <string name="summary_seekbar_mic_gain">Sabit kazancı ayarlayın. 0 dB özgün ses düzeyini korur ve kaydırıcının ortasındadır.</string>
+    <string name="suffix_seekbar_mic_gain_db">dB</string>
+    <string name="title_checkbox_mic_balance">Ses düzeyi dengeleme</string>
+    <string name="summary_checkbox_mic_balance">Yüksek girişleri sıkıştırarak ses düzeyi dalgalanmalarını ve kırpılma riskini azaltır.</string>
+    <string name="title_seekbar_mic_balance">Çıkış telafisi</string>
+    <string name="summary_seekbar_mic_balance" formatted="false">Ses düzeyi dengelemeden sonraki telafi kazancını ayarlayın. 50%, +4 dB değerine karşılık gelir ve önerilen değerdir.</string>
+    <string name="suffix_seekbar_mic_balance_target" formatted="false">%</string>
+    <string name="title_checkbox_mic_voice_enhancement">Ses iyileştirme</string>
+    <string name="summary_checkbox_mic_voice_enhancement">Düşük frekanslı gürültüyü azaltır ve konuşma netliğini artırır. Sabit kazanç ve ses düzeyi dengeleme modlarında kullanılabilir.</string>
 </resources>

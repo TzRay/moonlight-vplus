@@ -1,0 +1,188 @@
+package com.limelight.gamemenu
+
+import android.view.KeyEvent
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class GameMenuKeyEventTest {
+    @Test
+    fun nativeDirectionRepeatIsIgnoredOnlyAfterInitialDownIsHeld() {
+        assertTrue(
+            shouldIgnoreGameMenuDirectionalRepeat(
+                action = KeyEvent.ACTION_DOWN,
+                repeatCount = 1,
+                alreadyHeld = true
+            )
+        )
+        assertTrue(
+            !shouldIgnoreGameMenuDirectionalRepeat(
+                action = KeyEvent.ACTION_DOWN,
+                repeatCount = 0,
+                alreadyHeld = true
+            )
+        )
+        assertTrue(
+            !shouldIgnoreGameMenuDirectionalRepeat(
+                action = KeyEvent.ACTION_DOWN,
+                repeatCount = 1,
+                alreadyHeld = false
+            )
+        )
+    }
+
+    @Test
+    fun standardGamepadAIsMappedToFocusedUiConfirmation() {
+        assertEquals(
+            KeyEvent.KEYCODE_DPAD_CENTER,
+            mapGameMenuConfirmKeyCode(KeyEvent.KEYCODE_BUTTON_A)
+        )
+    }
+
+    @Test
+    fun unrelatedKeysAreNotChanged() {
+        assertEquals(
+            KeyEvent.KEYCODE_DPAD_LEFT,
+            mapGameMenuConfirmKeyCode(KeyEvent.KEYCODE_DPAD_LEFT)
+        )
+    }
+
+    @Test
+    fun controllerAndRemoteNavigationKeysRequestMenuFocus() {
+        assertTrue(isGameMenuNavigationKey(KeyEvent.KEYCODE_DPAD_DOWN))
+        assertTrue(isGameMenuNavigationKey(KeyEvent.KEYCODE_DPAD_CENTER))
+        assertTrue(isGameMenuNavigationKey(KeyEvent.KEYCODE_BUTTON_A))
+        assertTrue(isGameMenuNavigationKey(KeyEvent.KEYCODE_ENTER))
+        assertTrue(!isGameMenuNavigationKey(KeyEvent.KEYCODE_BUTTON_B))
+        assertTrue(isGameMenuNavigationKey(GAME_MENU_KEYCODE_DPAD_UP_LEFT))
+        assertEquals(
+            KeyEvent.KEYCODE_DPAD_UP,
+            mapGameMenuConfirmKeyCode(GAME_MENU_KEYCODE_DPAD_UP_RIGHT)
+        )
+        assertEquals(
+            KeyEvent.KEYCODE_DPAD_DOWN,
+            mapGameMenuConfirmKeyCode(GAME_MENU_KEYCODE_DPAD_DOWN_LEFT)
+        )
+    }
+
+    @Test
+    fun guideDismissControllerConsumesOnlyTheActiveGuideOnce() {
+        val controller = GameMenuGuideDismissController()
+        var dismissCount = 0
+
+        controller.register { dismissCount++ }
+
+        assertTrue(controller.dismissIfShowing())
+        assertEquals(1, dismissCount)
+        assertTrue(!controller.dismissIfShowing())
+        assertEquals(1, dismissCount)
+    }
+
+    @Test
+    fun menuFocusWaitsUntilContentIsLaidOut() {
+        assertTrue(
+            !shouldRequestGameMenuFocus(
+                hardwareFocusRequestToken = 1,
+                guideActive = false,
+                hasOptions = true,
+                menuContentLaidOut = false,
+                menuHasFocus = false
+            )
+        )
+        assertTrue(
+            shouldRequestGameMenuFocus(
+                hardwareFocusRequestToken = 1,
+                guideActive = false,
+                hasOptions = true,
+                menuContentLaidOut = true,
+                menuHasFocus = false
+            )
+        )
+    }
+
+    @Test
+    fun hardwareNavigationDoesNotResetAnExistingMenuFocus() {
+        assertTrue(
+            !shouldRequestGameMenuFocus(
+                hardwareFocusRequestToken = 2,
+                guideActive = false,
+                hasOptions = true,
+                menuContentLaidOut = true,
+                menuHasFocus = true
+            )
+        )
+    }
+
+    @Test
+    fun hardwareRefreshDoesNotResetAnExistingGuideFocus() {
+        assertTrue(
+            !shouldRequestFeatureGuideFocus(
+                actionLaidOut = true,
+                initialFocusRequested = true,
+                guideHasFocus = true
+            )
+        )
+    }
+
+    @Test
+    fun submenuBackOptionIsClickableAndKeepsDialogOpen() {
+        var navigatedBack = false
+        val option = createGameMenuBackOption("Back") {
+            navigatedBack = true
+        }
+
+        assertTrue(option.isKeepDialog)
+        assertTrue(option.runnable != null)
+        option.runnable?.run()
+        assertTrue(navigatedBack)
+    }
+
+    @Test
+    fun childDialogFocusRestoreWaitsForParentLayoutAndGuideDismissal() {
+        assertTrue(
+            !shouldRestoreGameMenuFocus(
+                restoreFocusRequestToken = 1,
+                handledRestoreFocusRequestToken = 0,
+                guideActive = false,
+                menuContentLaidOut = false
+            )
+        )
+        assertTrue(
+            !shouldRestoreGameMenuFocus(
+                restoreFocusRequestToken = 1,
+                handledRestoreFocusRequestToken = 0,
+                guideActive = true,
+                menuContentLaidOut = true
+            )
+        )
+        assertTrue(
+            shouldRestoreGameMenuFocus(
+                restoreFocusRequestToken = 1,
+                handledRestoreFocusRequestToken = 0,
+                guideActive = false,
+                menuContentLaidOut = true
+            )
+        )
+        assertTrue(
+            !shouldRestoreGameMenuFocus(
+                restoreFocusRequestToken = 1,
+                handledRestoreFocusRequestToken = 1,
+                guideActive = false,
+                menuContentLaidOut = true
+            )
+        )
+    }
+
+    @Test
+    fun unevenKeyboardRowsChooseNearestHorizontalTarget() {
+        assertEquals(1, nearestFocusIndex(80, listOf(0, 100, 240)))
+        assertEquals(2, nearestFocusIndex(220, listOf(0, 100, 240)))
+    }
+
+    @Test
+    fun controllerOnlyCustomKeyUsesSelectedCombinationAsName() {
+        assertEquals("Ctrl + A", resolveCustomKeyName("", " Ctrl + A "))
+        assertEquals("My shortcut", resolveCustomKeyName(" My shortcut ", "Ctrl + A"))
+    }
+
+}

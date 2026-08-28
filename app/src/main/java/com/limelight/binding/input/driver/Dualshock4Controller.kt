@@ -14,7 +14,7 @@ class Dualshock4Controller(
     connection: UsbDeviceConnection,
     deviceId: Int,
     listener: UsbDriverListener
-) : AbstractDualSenseController(device, connection, deviceId, listener) {
+) : AbstractPlayStationUsbController(device, connection, deviceId, listener) {
 
     private fun normalizeThumbStickAxis(value: Int): Float {
         return (2.0f * value / 255.0f) - 1.0f
@@ -156,10 +156,17 @@ class Dualshock4Controller(
             Log.w("Dualshock4Controller", "Cannot send command: invalid parameters")
             return
         }
-        Log.d("Dualshock4Controller", "sendCommand")
-        val res = connection.bulkTransfer(outEndpt, data, data.size, 1000)
-        if (res != data.size) {
-            Log.w("Dualshock4Controller", "Command transfer failed: expected ${data.size}, got $res")
+        synchronized(outputLock) {
+            // Re-check under the lock: stop() sets this after sending its final
+            // clear, so no stale report may follow it.
+            if (outputClosed) {
+                return
+            }
+            Log.d("Dualshock4Controller", "sendCommand")
+            val res = connection.bulkTransfer(outEndpt, data, data.size, 1000)
+            if (res != data.size) {
+                Log.w("Dualshock4Controller", "Command transfer failed: expected ${data.size}, got $res")
+            }
         }
     }
 

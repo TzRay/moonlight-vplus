@@ -18,9 +18,11 @@ import android.widget.Toast
 import com.limelight.gamemenu.GameMenu
 import com.limelight.R
 import com.limelight.binding.input.driver.AbstractController
+import com.limelight.binding.input.driver.wireless.dualsense.DirectDualSenseBluetoothOutput
 import com.limelight.nvstream.input.ControllerPacket
 import com.limelight.nvstream.jni.MoonBridge
 import com.limelight.preferences.PreferenceConfiguration
+import java.util.concurrent.ConcurrentHashMap
 
 // =================================================================================
 // GenericControllerContext
@@ -41,9 +43,13 @@ open class GenericControllerContext(
 
     var assignedControllerNumber: Boolean = false
     var reservedControllerNumber: Boolean = false
+    internal val controllerArrival = ControllerArrivalTracker()
     var controllerNumber: Short = 0
 
     var inputMap: Int = 0
+    internal val performanceOverlayShortcutState = ControllerButtonChordState(
+        ControllerHandler.PERFORMANCE_OVERLAY_COMBO_FLAGS
+    )
     var leftTrigger: Byte = 0x00
     var rightTrigger: Byte = 0x00
     var rightStickX: Short = 0x0000
@@ -69,16 +75,18 @@ open class GenericControllerContext(
                 return
             }
 
-            // Send mouse events from analog sticks
-            if (handler.prefConfig.analogStickForScrolling == PreferenceConfiguration.AnalogStickForScrolling.RIGHT) {
-                handler.sendEmulatedMouseMove(leftStickX, leftStickY)
-                handler.sendEmulatedMouseScroll(rightStickX, rightStickY)
-            } else if (handler.prefConfig.analogStickForScrolling == PreferenceConfiguration.AnalogStickForScrolling.LEFT) {
-                handler.sendEmulatedMouseMove(rightStickX, rightStickY)
-                handler.sendEmulatedMouseScroll(leftStickX, leftStickY)
-            } else {
-                handler.sendEmulatedMouseMove(leftStickX, leftStickY)
-                handler.sendEmulatedMouseMove(rightStickX, rightStickY)
+            if (!isLocalInputCaptureActive()) {
+                // Send mouse events from analog sticks
+                if (handler.prefConfig.analogStickForScrolling == PreferenceConfiguration.AnalogStickForScrolling.RIGHT) {
+                    handler.sendEmulatedMouseMove(leftStickX, leftStickY)
+                    handler.sendEmulatedMouseScroll(rightStickX, rightStickY)
+                } else if (handler.prefConfig.analogStickForScrolling == PreferenceConfiguration.AnalogStickForScrolling.LEFT) {
+                    handler.sendEmulatedMouseMove(rightStickX, rightStickY)
+                    handler.sendEmulatedMouseScroll(leftStickX, leftStickY)
+                } else {
+                    handler.sendEmulatedMouseMove(leftStickX, leftStickY)
+                    handler.sendEmulatedMouseMove(rightStickX, rightStickY)
+                }
             }
 
             // Requeue the callback
@@ -121,7 +129,9 @@ open class GenericControllerContext(
         handler.mainThreadHandler.removeCallbacks(mouseEmulationRunnable)
     }
 
-    open fun sendControllerArrival() {}
+    open fun sendControllerArrival(): Int = 0
+
+    open fun isLocalInputCaptureActive(): Boolean = false
 }
 
 // =================================================================================
@@ -129,6 +139,12 @@ open class GenericControllerContext(
 // =================================================================================
 
 class InputDeviceContext(handler: ControllerHandler) : GenericControllerContext(handler) {
+    internal val startGesture = StartGestureReducer()
+    internal val startLongPressRunnable = Runnable {
+        handler.onSystemStartLongPress(this)
+    }
+
+    override fun isLocalInputCaptureActive(): Boolean = startGesture.isLocalInputCaptureActive()
     var name: String? = null
     var vibratorManager: VibratorManager? = null
     var vibrator: android.os.Vibrator? = null
@@ -145,6 +161,7 @@ class InputDeviceContext(handler: ControllerHandler) : GenericControllerContext(
     var accelReportRateHz: Short = 0
 
     var inputDevice: InputDevice? = null
+    internal var directDualSenseBluetoothOutput: DirectDualSenseBluetoothOutput? = null
 
     var hasRgbLed: Boolean = false
     var lightsSession: LightsManager.LightsSession? = null
@@ -225,6 +242,8 @@ class InputDeviceContext(handler: ControllerHandler) : GenericControllerContext(
     override fun destroy() {
         super.destroy()
 
+        handler.resetSystemStartGesture(this)
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && vibratorManager != null) {
             vibratorManager!!.cancel()
         } else if (vibrator != null) {
@@ -244,12 +263,15 @@ class InputDeviceContext(handler: ControllerHandler) : GenericControllerContext(
             lightsSession?.close()
         }
 
+        directDualSenseBluetoothOutput?.close()
+        directDualSenseBluetoothOutput = null
+
         handler.backgroundThreadHandler.removeCallbacks(batteryStateUpdateRunnable)
     }
 
     @TargetApi(31)
-    override fun sendControllerArrival() {
-        val inputDev = inputDevice ?: return
+    override fun sendControllerArrival(): Int {
+        val inputDev = inputDevice ?: return -1
         val type: Byte = when (inputDev.vendorId) {
             0x045e -> MoonBridge.LI_CTYPE_XBOX // Microsoft
             0x054c -> MoonBridge.LI_CTYPE_PS   // Sony
@@ -287,7 +309,13 @@ class InputDeviceContext(handler: ControllerHandler) : GenericControllerContext(
 
         // Most of the advanced InputDevice capabilities came in Android S
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            if (quadVibrators) {
+            if (directDualSenseBluetoothOutput != null) {
+                capabilities = (capabilities.toInt() or
+                    MoonBridge.LI_CCAP_RUMBLE.toInt() or
+                    MoonBridge.LI_CCAP_TRIGGER_RUMBLE.toInt() or
+                    MoonBridge.LI_CCAP_RGB_LED.toInt() or
+                    MoonBridge.LI_CCAP_PREFER_DS5.toInt()).toShort()
+            } else if (quadVibrators) {
                 capabilities = (capabilities.toInt() or MoonBridge.LI_CCAP_RUMBLE.toInt() or MoonBridge.LI_CCAP_TRIGGER_RUMBLE.toInt()).toShort()
             } else if (vibratorManager != null || vibrator != null) {
                 capabilities = (capabilities.toInt() or MoonBridge.LI_CCAP_RUMBLE.toInt()).toShort()
@@ -323,14 +351,10 @@ class InputDeviceContext(handler: ControllerHandler) : GenericControllerContext(
             capabilities = (capabilities.toInt() or MoonBridge.LI_CCAP_GYRO.toInt()).toShort()
         }
 
+        val emulatingMotionSensors = type != MoonBridge.LI_CTYPE_PS && sensorManager != null
         val reportedType: Byte
-        if (type != MoonBridge.LI_CTYPE_PS && sensorManager != null) {
+        if (emulatingMotionSensors) {
             // Override the detected controller type if we're emulating motion sensors on an Xbox controller
-            Toast.makeText(
-                handler.activityContext,
-                handler.activityContext.resources.getText(R.string.toast_controller_type_changed),
-                Toast.LENGTH_LONG
-            ).show()
             reportedType = MoonBridge.LI_CTYPE_UNKNOWN
 
             // Remember that we should enable the clickpad emulation combo (Select+LB) for this device
@@ -359,13 +383,24 @@ class InputDeviceContext(handler: ControllerHandler) : GenericControllerContext(
             }
         }
 
-        handler.conn.sendControllerArrivalEvent(
-            controllerNumber.toByte(), handler.getActiveControllerMask(),
-            reportedType, supportedButtonFlags, capabilities
+        val result = handler.sendControllerArrivalEvent(
+            controllerNumber.toByte(), reportedType, supportedButtonFlags, capabilities
         )
+        if (result != 0) {
+            return result
+        }
+
+        if (emulatingMotionSensors) {
+            Toast.makeText(
+                handler.activityContext,
+                handler.activityContext.resources.getText(R.string.toast_controller_type_changed),
+                Toast.LENGTH_LONG
+            ).show()
+        }
 
         // After reporting arrival to the host, send initial battery state and begin monitoring
         handler.backgroundThreadHandler.post(batteryStateUpdateRunnable)
+        return result
     }
 
     fun migrateContext(oldContext: InputDeviceContext) {
@@ -389,6 +424,9 @@ class InputDeviceContext(handler: ControllerHandler) : GenericControllerContext(
         // Copy over existing controller number state
         this.assignedControllerNumber = oldContext.assignedControllerNumber
         this.reservedControllerNumber = oldContext.reservedControllerNumber
+        if (oldContext.controllerArrival.isReported) {
+            this.controllerArrival.markReported()
+        }
         this.controllerNumber = oldContext.controllerNumber
 
         // We may have set this device to use the built-in sensor manager. If so, do that again.
@@ -402,8 +440,11 @@ class InputDeviceContext(handler: ControllerHandler) : GenericControllerContext(
         // Re-enable sensors on the new context
         enableSensors()
 
-        // Refresh battery state and start the battery state polling again
-        handler.backgroundThreadHandler.post(batteryStateUpdateRunnable)
+        // Resume battery polling only if the host already knows this controller.
+        // A pending arrival starts polling after its first successful retry.
+        if (controllerArrival.isReported) {
+            handler.backgroundThreadHandler.post(batteryStateUpdateRunnable)
+        }
     }
 
     fun disableSensors() {
@@ -435,22 +476,47 @@ class InputDeviceContext(handler: ControllerHandler) : GenericControllerContext(
 }
 
 // =================================================================================
-// UsbDeviceContext
+// DriverControllerContext
 // =================================================================================
 
-class UsbDeviceContext(handler: ControllerHandler) : GenericControllerContext(handler) {
+class DriverControllerContext(handler: ControllerHandler) : GenericControllerContext(handler) {
     var device: AbstractController? = null
-
-    override fun destroy() {
-        super.destroy()
-        // Nothing for now
+    internal var lastReportedBatteryState: Byte? = null
+    internal var lastReportedBatteryPercentage: Byte? = null
+    internal val menuKeyDownTimes = ConcurrentHashMap<Int, Long>()
+    // Use a map instead of ConcurrentHashMap.newKeySet(), which requires API 24.
+    internal val forwardedTouchPointerIds = ConcurrentHashMap<Int, Boolean>()
+    internal var touchCaptureActive: Boolean = false
+    internal val menuAxisSnapshotState = MenuAxisSnapshotState()
+    internal val shortcutState = DriverControllerShortcutStateMachine()
+    internal val shortcutLongPressRunnable = Runnable {
+        handler.onDriverShortcutLongPress(this)
     }
 
-    override fun sendControllerArrival() {
-        val dev = device ?: return
-        handler.conn.sendControllerArrivalEvent(
-            controllerNumber.toByte(), handler.getActiveControllerMask(),
-            dev.type, dev.supportedButtonFlags, dev.capabilities
+    override fun isLocalInputCaptureActive(): Boolean = shortcutState.isLocalInputCaptureActive()
+
+    override fun destroy() {
+        menuKeyDownTimes.clear()
+        forwardedTouchPointerIds.clear()
+        touchCaptureActive = false
+        handler.releaseDriverShortcutState(this)
+        menuAxisSnapshotState.reset()
+        super.destroy()
+    }
+
+    override fun onGameMenuDismissed() {
+        menuKeyDownTimes.clear()
+        shortcutState.onGameMenuUnavailable()
+        menuAxisSnapshotState.reset()
+        if (!shortcutState.isLocalInputCaptureActive()) {
+            handler.onDriverLocalCaptureEnded(this)
+        }
+    }
+
+    override fun sendControllerArrival(): Int {
+        val dev = device ?: return -1
+        return handler.sendControllerArrivalEvent(
+            controllerNumber.toByte(), dev.type, dev.supportedButtonFlags, dev.capabilities
         )
     }
 }

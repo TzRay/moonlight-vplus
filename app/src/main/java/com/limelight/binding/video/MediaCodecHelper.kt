@@ -7,7 +7,6 @@ import android.content.pm.ConfigurationInfo
 import android.media.MediaCodec
 import android.media.MediaCodecInfo
 import android.media.MediaCodecInfo.CodecCapabilities
-import android.media.MediaCodecInfo.CodecProfileLevel
 import android.media.MediaCodecList
 import android.media.MediaFormat
 import android.os.Build
@@ -42,6 +41,16 @@ object MediaCodecHelper {
     private val exynosDecoderPrefixes = listOf("omx.exynos", "c2.exynos")
     private val amlogicDecoderPrefixes = listOf("omx.amlogic", "c2.amlogic")
     private val tegraDecoderPrefixes = listOf("omx.nvidia", "c2.nvidia")
+
+    internal fun isMediaTekCodecName(name: String): Boolean =
+        mtkDecoderPrefixes.any { name.startsWith(it, ignoreCase = true) }
+
+    @JvmStatic
+    fun hasMediaTekDecoder(): Boolean = runCatching {
+        MediaCodecList(MediaCodecList.ALL_CODECS).codecInfos.any { codecInfo ->
+            !codecInfo.isEncoder && isMediaTekCodecName(codecInfo.name)
+        }
+    }.getOrDefault(false)
 
     // ==================== Known Vendor Low Latency Options ====================
     // Representative vendor low-latency keys for each SoC vendor.
@@ -335,9 +344,20 @@ object MediaCodecHelper {
     // When adding new vendor params here, also add the most representative key to
     // knownVendorLowLatencyOptions above.
 
-    private fun applyQualcommVendorParams(videoFormat: MediaFormat, tryNumber: Int) {
+    private fun applyQualcommVendorParams(
+        videoFormat: MediaFormat,
+        tryNumber: Int,
+        hdr10PlusModeSelected: Boolean,
+    ) {
         // https://cs.android.com/android/platform/superproject/+/master:hardware/qcom/sdm845/media/mm-video-v4l2/vidc/vdec/src/omx_vdec_extensions.hpp
-        if (tryNumber < 4) {
+        // Picture order is compatible with HDR10+ once output fencing is disabled.
+        val outputFenceEnabled = !hdr10PlusModeSelected
+        if (QualcommLowLatencyPolicy.shouldEnablePictureOrder(
+                tryNumber,
+                hdr10PlusModeSelected,
+                outputFenceEnabled,
+            )
+        ) {
             videoFormat.setInteger("vendor.qti-ext-dec-picture-order.enable", 1)
         }
         if (tryNumber < 5) {
@@ -345,13 +365,14 @@ object MediaCodecHelper {
 
             // CONFIRMED WORKING: Snapdragon Elite, SD8 gen 3, SD8 gen 2
             videoFormat.setInteger("vendor.qti-ext-output-sw-fence-enable.value", 1)
-            videoFormat.setInteger("vendor.qti-ext-output-fence.enable", 1)
-            videoFormat.setInteger("vendor.qti-ext-output-fence.fence_type", 1) // 0=none, 1=sw, 2=hw, 3=hybrid
+            if (outputFenceEnabled) {
+                videoFormat.setInteger("vendor.qti-ext-output-fence.enable", 1)
+                videoFormat.setInteger("vendor.qti-ext-output-fence.fence_type", 1)
+            }
 
             videoFormat.setInteger("vendor.qti-ext-dec-info-misr.disable", 1)
             videoFormat.setInteger("vendor.qti-ext-dec-instant-decode.enable", 1)
             videoFormat.setInteger("vendor.qti-ext-dec-error-correction.conceal", 1)
-            videoFormat.setInteger("vendor.qti-ext-extradata-enable.types", 0)
         }
     }
 
@@ -476,7 +497,22 @@ object MediaCodecHelper {
         videoFormat: MediaFormat,
         decoderInfo: MediaCodecInfo,
         tryNumber: Int,
-        allowMtkMaxOperatingRate: Boolean
+        allowMtkMaxOperatingRate: Boolean,
+    ): Boolean = setDecoderLowLatencyOptions(
+        videoFormat,
+        decoderInfo,
+        tryNumber,
+        allowMtkMaxOperatingRate,
+        hdr10PlusModeSelected = false,
+    )
+
+    @JvmStatic
+    fun setDecoderLowLatencyOptions(
+        videoFormat: MediaFormat,
+        decoderInfo: MediaCodecInfo,
+        tryNumber: Int,
+        allowMtkMaxOperatingRate: Boolean,
+        hdr10PlusModeSelected: Boolean,
     ): Boolean {
         // Options are tried in order of most to least risky. The decoder will use
         // the first MediaFormat that doesn't fail in configure().
@@ -520,8 +556,12 @@ object MediaCodecHelper {
             val decoderName = decoderInfo.name
 
             when {
-                isDecoderInList(qualcommDecoderPrefixes, decoderName) -> {
-                    applyQualcommVendorParams(videoFormat, tryNumber)
+                isDecoderInList(qualcommDecoderPrefixes, decoderName) -> if (tryNumber < 5) {
+                    applyQualcommVendorParams(
+                        videoFormat,
+                        tryNumber,
+                        hdr10PlusModeSelected,
+                    )
                     setNewOption = true
                 }
                 isDecoderInList(mtkDecoderPrefixes, decoderName) -> if (tryNumber < 4) {

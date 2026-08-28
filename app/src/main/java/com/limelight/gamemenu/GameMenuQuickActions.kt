@@ -54,7 +54,6 @@ import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
-import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
@@ -84,9 +83,10 @@ internal fun QuickActionRow(
     onToggleEdit: () -> Unit,
     onAdd: () -> Unit,
     onRemove: (String) -> Unit,
-    onMove: (String, String) -> Unit
+    onMove: (String, String) -> Unit,
+    modifier: Modifier = Modifier
 ) {
-    val view = LocalView.current
+    val hapticFeedback = LocalGameMenuHapticFeedback.current
     val itemBounds = remember { mutableMapOf<String, Rect>() }
     var draggingId by remember { mutableStateOf<String?>(null) }
     var dragOffset by remember { mutableStateOf(Offset.Zero) }
@@ -104,7 +104,7 @@ internal fun QuickActionRow(
     }
 
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Row(
@@ -159,7 +159,7 @@ internal fun QuickActionRow(
                                 draggingId = action.id
                                 dragOffset = Offset.Zero
                                 dropTargetId = null
-                                view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                                hapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
 
                                 var completed = false
                                 while (true) {
@@ -241,7 +241,7 @@ private fun QuickActionChip(
     modifier: Modifier = Modifier,
     dragHandleModifier: Modifier = Modifier
 ) {
-    val view = LocalView.current
+    val hapticFeedback = LocalGameMenuHapticFeedback.current
     val contentAlpha = if (action.enabled) 1f else 0.45f
     ActionPill(
         backgroundColor = colorResource(R.color.game_menu_card_background).copy(alpha = contentAlpha),
@@ -249,7 +249,7 @@ private fun QuickActionChip(
         onClick = if (editMode) null else onClick,
         onLongClick = if (editMode) null else {
             {
-                view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                hapticFeedback(HapticFeedbackConstants.LONG_PRESS)
                 onEnterEdit()
             }
         },
@@ -323,7 +323,7 @@ private fun QuickActionDragHandle(modifier: Modifier = Modifier) {
 
 @Composable
 private fun QuickActionRemoveButton(onRemove: () -> Unit) {
-    val view = LocalView.current
+    val hapticFeedback = LocalGameMenuHapticFeedback.current
     val deleteLabel = stringResource(R.string.dialog_button_delete)
     Box(
         modifier = Modifier
@@ -331,7 +331,7 @@ private fun QuickActionRemoveButton(onRemove: () -> Unit) {
             .clip(CircleShape)
             .semantics { contentDescription = deleteLabel }
             .clickable {
-                view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                hapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
                 onRemove()
             },
         contentAlignment = Alignment.Center
@@ -377,19 +377,19 @@ internal fun ActionPill(
     dashedBorder: Boolean = false,
     content: @Composable RowScope.() -> Unit
 ) {
-    val view = LocalView.current
+    val hapticFeedback = LocalGameMenuHapticFeedback.current
     val interactionModifier = when {
         onLongClick != null -> Modifier.combinedClickable(
             onClick = onClick?.let { click ->
                 {
-                    view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                    hapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
                     click()
                 }
             } ?: {},
             onLongClick = onLongClick
         )
         onClick != null -> Modifier.clickable {
-                view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                hapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
                 onClick()
         }
         else -> Modifier.focusable()

@@ -8,14 +8,28 @@ import android.graphics.drawable.ColorDrawable
 import android.util.TypedValue
 import android.view.View
 import android.view.ViewGroup
+import android.view.KeyEvent
 import android.widget.CheckedTextView
 import android.widget.ListView
 import android.widget.TextView
 import androidx.core.content.ContextCompat
 import com.limelight.R
+import com.limelight.ui.UiDismissKeyHandler
 
 object AppDialogStyler {
+    /** Install only on user-dismissible UI. Loading and splash surfaces opt out. */
+    fun installDismissKeys(
+        dialog: Dialog,
+        onDismiss: () -> Unit = dialog::cancel,
+        dismissOnBack: Boolean = false
+    ) {
+        dialog.setOnKeyListener { _, keyCode, event ->
+            UiDismissKeyHandler.handle(event.action, keyCode, onDismiss, dismissOnBack)
+        }
+    }
+
     fun apply(dialog: Dialog, context: Context) {
+        installDismissKeys(dialog)
         dialog.window?.setBackgroundDrawableResource(R.drawable.app_dialog_bg_cute)
         applyChrome(dialog, context)
     }
@@ -26,6 +40,7 @@ object AppDialogStyler {
     }
 
     fun applyCustomContent(dialog: Dialog, context: Context) {
+        installDismissKeys(dialog)
         dialog.window?.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
         applyChrome(dialog, context)
     }
@@ -90,58 +105,6 @@ object AppDialogStyler {
         }
     }
 
-    fun applyAboutDialog(dialog: Dialog, context: Context) {
-        dialog.window?.setBackgroundDrawableResource(R.drawable.dialog_about_window_bg)
-        val accentColor = ContextCompat.getColor(context, R.color.app_dialog_accent_color)
-        listOf(
-            DialogInterface.BUTTON_POSITIVE,
-            DialogInterface.BUTTON_NEGATIVE,
-            DialogInterface.BUTTON_NEUTRAL
-        ).forEach { buttonId -> findButton(dialog, buttonId)?.setTextColor(accentColor) }
-        compactAboutDialogActions(dialog, context)
-    }
-
-    private fun compactAboutDialogActions(dialog: Dialog, context: Context) {
-        val buttonPanelId = context.resources.getIdentifier("buttonPanel", "id", "android")
-        val buttonPanel = dialog.findViewById<ViewGroup>(buttonPanelId) ?: return
-
-        // Apply width changes before ButtonBarLayout's first measure. Once the
-        // platform stacks the buttons, some versions keep that state until the
-        // available width changes.
-        val actionHeight = dpToPx(context, 48)
-        val actionHorizontalPadding = dpToPx(context, 8)
-        (buttonPanel.layoutParams as? ViewGroup.MarginLayoutParams)?.let { layoutParams ->
-            layoutParams.bottomMargin = 0
-            buttonPanel.layoutParams = layoutParams
-        }
-
-        val buttons = listOf(
-            DialogInterface.BUTTON_POSITIVE,
-            DialogInterface.BUTTON_NEGATIVE,
-            DialogInterface.BUTTON_NEUTRAL
-        ).mapNotNull { buttonId -> findButton(dialog, buttonId) }
-
-        (buttons.firstOrNull()?.parent as? ViewGroup)?.apply {
-            setPaddingRelative(actionHorizontalPadding, 0, actionHorizontalPadding, 0)
-        }
-        buttons.forEach { button ->
-            button.apply {
-                minHeight = actionHeight
-                minimumHeight = actionHeight
-                minWidth = 0
-                minimumWidth = 0
-                setPaddingRelative(
-                    actionHorizontalPadding,
-                    0,
-                    actionHorizontalPadding,
-                    0
-                )
-            }
-        }
-
-        buttonPanel.requestLayout()
-    }
-
     fun styleChoiceListContainer(listView: ListView?, context: Context) {
         listView ?: return
         listView.setBackgroundColor(Color.TRANSPARENT)
@@ -157,6 +120,28 @@ object AppDialogStyler {
     fun styleSystemChoiceList(listView: ListView?, context: Context) {
         listView ?: return
         styleChoiceListContainer(listView, context)
+        listView.isFocusable = true
+        listView.isFocusableInTouchMode = true
+        listView.setOnKeyListener { _, keyCode, event ->
+            if (keyCode != KeyEvent.KEYCODE_BUTTON_A) {
+                false
+            } else {
+                if (event.action == KeyEvent.ACTION_UP) {
+                    val position = listView.selectedItemPosition
+                        .takeIf { it != ListView.INVALID_POSITION }
+                        ?: listView.checkedItemPosition
+                    if (position != ListView.INVALID_POSITION) {
+                        val child = listView.getChildAt(position - listView.firstVisiblePosition)
+                        listView.performItemClick(
+                            child,
+                            position,
+                            listView.adapter.getItemId(position)
+                        )
+                    }
+                }
+                true
+            }
+        }
         listView.setOnHierarchyChangeListener(object : ViewGroup.OnHierarchyChangeListener {
             override fun onChildViewAdded(parent: View?, child: View?) {
                 child?.let { styleListRow(it, context) }
@@ -169,6 +154,11 @@ object AppDialogStyler {
                 styleListRow(listView.getChildAt(index), context)
             }
             clearTextShadows(listView)
+            listView.requestFocusFromTouch()
+            val checkedPosition = listView.checkedItemPosition
+            if (checkedPosition != ListView.INVALID_POSITION) {
+                listView.setSelection(checkedPosition)
+            }
         }
     }
 

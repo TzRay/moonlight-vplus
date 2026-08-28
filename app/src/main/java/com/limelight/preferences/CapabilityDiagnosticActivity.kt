@@ -67,6 +67,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.limelight.R
+import com.limelight.ui.theme.AppShapes
 import com.limelight.utils.HdrCapabilityHelper
 import com.limelight.utils.UiHelper
 
@@ -362,7 +363,7 @@ class CapabilityDiagnosticActivity : ComponentActivity() {
         )
     }
 
-    @SuppressLint("NewApi")
+    @SuppressLint("NewApi", "InlinedApi")
     private fun buildOneCodecCard(
             icon: String,
             codecName: String,
@@ -406,15 +407,30 @@ class CapabilityDiagnosticActivity : ComponentActivity() {
                         plainTextReport.append("      ").append(pn).append("\n")
                     }
                     if (mime == "video/hevc") {
-                        if (pl.profile == MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10) main10 = true
+                        if (pl.profile == MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10 ||
+                                pl.profile == MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10HDR10 ||
+                                pl.profile == MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10HDR10Plus) main10 = true
                         if (pl.profile == MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10HDR10) hdr10 = true
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
-                                pl.profile == MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10HDR10Plus) hdr10p = true
+                                pl.profile == MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10HDR10Plus) {
+                            hdr10p = true
+                            hdr10 = true
+                        }
+                    } else if (mime == "video/av01") {
+                        if (pl.profile == MediaCodecInfo.CodecProfileLevel.AV1ProfileMain10 ||
+                                pl.profile == MediaCodecInfo.CodecProfileLevel.AV1ProfileMain10HDR10 ||
+                                pl.profile == MediaCodecInfo.CodecProfileLevel.AV1ProfileMain10HDR10Plus) main10 = true
+                        if (pl.profile == MediaCodecInfo.CodecProfileLevel.AV1ProfileMain10HDR10) hdr10 = true
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+                                pl.profile == MediaCodecInfo.CodecProfileLevel.AV1ProfileMain10HDR10Plus) {
+                            hdr10p = true
+                            hdr10 = true
+                        }
                     }
                 }
                 if (tags.isNotEmpty()) card.tags(tags)
 
-                if (mime == "video/hevc") {
+                if (mime == "video/hevc" || mime == "video/av01") {
                     card.miniStatus(
                             listOf(
                                     MiniStatus("10bit", main10),
@@ -514,6 +530,7 @@ class CapabilityDiagnosticActivity : ComponentActivity() {
         }
     }
 
+    @SuppressLint("InlinedApi")
     private fun getProfileName(mime: String, profile: Int): String? {
         if (mime == "video/hevc") {
             return when (profile) {
@@ -540,15 +557,23 @@ class CapabilityDiagnosticActivity : ComponentActivity() {
             }
         } else if (mime == "video/av01") {
             return when (profile) {
-                1 -> "Main"
-                2 -> "High"
-                4 -> "Pro"
-                else -> null
+                MediaCodecInfo.CodecProfileLevel.AV1ProfileMain8 -> "Main8"
+                MediaCodecInfo.CodecProfileLevel.AV1ProfileMain10 -> "Main10"
+                MediaCodecInfo.CodecProfileLevel.AV1ProfileMain10HDR10 -> "HDR10"
+                else -> {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+                            profile == MediaCodecInfo.CodecProfileLevel.AV1ProfileMain10HDR10Plus) {
+                        "HDR10+"
+                    } else {
+                        null
+                    }
+                }
             }
         }
         return null
     }
 
+    @SuppressLint("InlinedApi")
     private fun isInterestingProfile(mime: String, profile: Int): Boolean {
         if (mime == "video/hevc") {
             return profile == MediaCodecInfo.CodecProfileLevel.HEVCProfileMain ||
@@ -561,6 +586,12 @@ class CapabilityDiagnosticActivity : ComponentActivity() {
                     profile == MediaCodecInfo.CodecProfileLevel.AVCProfileMain ||
                     profile == MediaCodecInfo.CodecProfileLevel.AVCProfileHigh ||
                     profile == MediaCodecInfo.CodecProfileLevel.AVCProfileHigh10
+        } else if (mime == "video/av01") {
+            return profile == MediaCodecInfo.CodecProfileLevel.AV1ProfileMain8 ||
+                    profile == MediaCodecInfo.CodecProfileLevel.AV1ProfileMain10 ||
+                    profile == MediaCodecInfo.CodecProfileLevel.AV1ProfileMain10HDR10 ||
+                    (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+                            profile == MediaCodecInfo.CodecProfileLevel.AV1ProfileMain10HDR10Plus)
         }
         return true
     }
@@ -697,7 +728,7 @@ class CapabilityDiagnosticActivity : ComponentActivity() {
     private fun DiagnosticCardView(card: DiagnosticCard) {
         Card(
                 colors = CardDefaults.cardColors(containerColor = Color(0xFF242436)),
-                shape = RoundedCornerShape(12.dp),
+                shape = AppShapes.medium,
                 elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
                 modifier = Modifier.fillMaxWidth()
         ) {
@@ -715,7 +746,7 @@ class CapabilityDiagnosticActivity : ComponentActivity() {
                             fontSize = 13.sp,
                             fontWeight = FontWeight.Bold,
                             modifier = Modifier
-                                    .clip(RoundedCornerShape(6.dp))
+                                    .clip(AppShapes.small)
                                     .background(colorResource(R.color.crown_accent).copy(alpha = 0.18f))
                                     .padding(horizontal = 8.dp, vertical = 4.dp)
                     )
@@ -766,7 +797,7 @@ class CapabilityDiagnosticActivity : ComponentActivity() {
                         fontSize = 12.sp,
                         modifier = Modifier
                                 .fillMaxWidth()
-                                .clip(RoundedCornerShape(8.dp))
+                                .clip(AppShapes.small)
                                 .background(row.tone.background)
                                 .padding(horizontal = 10.dp, vertical = 6.dp)
                 )

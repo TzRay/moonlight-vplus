@@ -12,7 +12,6 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
@@ -30,7 +29,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Slider
@@ -48,6 +46,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.input.key.Key
@@ -55,8 +54,8 @@ import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
-import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.res.colorResource
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringArrayResource
@@ -73,7 +72,9 @@ import androidx.compose.ui.window.PopupProperties
 import com.limelight.CustomKeyData
 import com.limelight.R
 import com.limelight.binding.audio.AudioVibrationService
+import com.limelight.ui.theme.AppShapes
 import java.util.Locale
+import kotlin.math.abs
 
 
 @Composable
@@ -118,13 +119,13 @@ internal fun GameMenuCard(
     modifier: Modifier = Modifier,
     content: @Composable ColumnScope.() -> Unit
 ) {
-    val view = LocalView.current
+    val hapticFeedback = LocalGameMenuHapticFeedback.current
     val longClickModifier = if (onLongClick != null) {
         Modifier
             .combinedClickable(
                 onClick = {},
                 onLongClick = {
-                    view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                    hapticFeedback(HapticFeedbackConstants.LONG_PRESS)
                     onLongClick()
                 }
             )
@@ -224,7 +225,7 @@ private fun BitrateCard(
     onSliderGesture: (Boolean) -> Unit,
     onConfigure: () -> Unit
 ) {
-    val view = LocalView.current
+    val hapticFeedback = LocalGameMenuHapticFeedback.current
     var tipVisible by remember { mutableStateOf(false) }
     val currentLabel = stringResource(
         R.string.game_menu_bitrate_current,
@@ -259,7 +260,7 @@ private fun BitrateCard(
             value = state.progress,
             onValueChange = { value ->
                 if (callbacks.onBitrateProgress(value)) {
-                    view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+                    hapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
                 }
             },
             onValueChangeFinished = callbacks.onBitrateApply,
@@ -275,7 +276,7 @@ private fun BitrateCard(
                     valueRange = 0f..BitrateCardController.MAX_PROGRESS.toFloat(),
                     onValueChange = { value ->
                         if (callbacks.onBitrateProgress(value)) {
-                            view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+                            hapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
                         }
                     },
                     onValueChangeFinished = callbacks.onBitrateApply
@@ -334,7 +335,7 @@ private fun BitrateHelpButton(
             ) {
                 Surface(
                     color = colorResource(R.color.game_menu_card_background),
-                    shape = GameMenuCardShape,
+                    shape = AppShapes.overlay,
                     border = BorderStroke(GameMenuDimens.surfaceStroke, accent.copy(alpha = 0.22f)),
                     modifier = Modifier.widthIn(max = 260.dp)
                 ) {
@@ -364,7 +365,7 @@ private fun AudioHapticsCard(
     onSliderGesture: (Boolean) -> Unit,
     onConfigure: () -> Unit
 ) {
-    val view = LocalView.current
+    val hapticFeedback = LocalGameMenuHapticFeedback.current
     val title = stringResource(R.string.game_menu_tab_audio_haptics)
     val modeNames = stringArrayResource(R.array.audio_vibration_mode_names)
     val modeValues = stringArrayResource(R.array.audio_vibration_mode_values)
@@ -430,7 +431,7 @@ private fun AudioHapticsCard(
                 value = state.strength.toFloat(),
                 onValueChange = { value ->
                     if (callbacks.onAudioHapticsStrength(value)) {
-                        view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+                        hapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
                     }
                 },
                 onValueChangeFinished = callbacks.onAudioHapticsStrengthFinished,
@@ -446,7 +447,7 @@ private fun AudioHapticsCard(
                         valueRange = 0f..AudioVibrationService.MAX_STRENGTH.toFloat(),
                         onValueChange = { value ->
                             if (callbacks.onAudioHapticsStrength(value)) {
-                                view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+                                hapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
                             }
                         },
                         onValueChangeFinished = callbacks.onAudioHapticsStrengthFinished
@@ -479,7 +480,7 @@ private fun AudioHapticsCard(
 
 @Composable
 private fun AudioHapticsResetButton(onReset: () -> Unit) {
-    val view = LocalView.current
+    val hapticFeedback = LocalGameMenuHapticFeedback.current
     val description = stringResource(R.string.game_menu_audio_haptics_reset)
     val shape = CircleShape
     Box(
@@ -490,7 +491,7 @@ private fun AudioHapticsResetButton(onReset: () -> Unit) {
             .gamepadFocusOutline(shape)
             .semantics { contentDescription = description }
             .clickable {
-                view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                hapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
                 onReset()
             },
         contentAlignment = Alignment.Center
@@ -510,7 +511,7 @@ private fun AudioHapticsChoiceRow(
     choices: List<AudioHapticsChoice>,
     onChoice: (String) -> Unit
 ) {
-    val view = LocalView.current
+    val hapticFeedback = LocalGameMenuHapticFeedback.current
     val accent = colorResource(R.color.game_menu_accent)
     Row(
         modifier = Modifier
@@ -534,7 +535,7 @@ private fun AudioHapticsChoiceRow(
             horizontalArrangement = Arrangement.spacedBy(2.dp)
         ) {
             choices.forEach { choice ->
-                val shape = RoundedCornerShape(7.dp)
+                val shape = AppShapes.small
                 Box(
                     modifier = Modifier
                         .weight(1f)
@@ -550,7 +551,7 @@ private fun AudioHapticsChoiceRow(
                             selected = choice.selected,
                             role = Role.RadioButton,
                             onClick = {
-                                view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                                hapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
                                 onChoice(choice.value)
                             }
                         )
@@ -664,16 +665,54 @@ private fun GyroCard(
     }
 }
 
-private fun Modifier.lockParentScrollDuringGesture(
+internal enum class SliderGestureDirection {
+    Undecided,
+    Horizontal,
+    Vertical
+}
+
+internal fun classifySliderGesture(
+    dragOffset: Offset,
+    touchSlop: Float
+): SliderGestureDirection {
+    if (dragOffset.getDistance() < touchSlop) return SliderGestureDirection.Undecided
+    return if (abs(dragOffset.x) > abs(dragOffset.y)) {
+        SliderGestureDirection.Horizontal
+    } else {
+        SliderGestureDirection.Vertical
+    }
+}
+
+internal fun Modifier.lockParentScrollDuringGesture(
     onGestureActive: (Boolean) -> Unit
 ): Modifier = pointerInput(Unit) {
     awaitEachGesture {
-        awaitFirstDown(requireUnconsumed = false)
-        onGestureActive(true)
+        val down = awaitFirstDown(
+            requireUnconsumed = false,
+            pass = PointerEventPass.Initial
+        )
+        var horizontalGesture = false
         try {
-            waitForUpOrCancellation()
+            while (true) {
+                val change = awaitPointerEvent(PointerEventPass.Initial).changes
+                    .firstOrNull { it.id == down.id }
+                    ?: break
+                if (!change.pressed) break
+
+                if (!horizontalGesture) {
+                    val dragOffset = change.position - down.position
+                    when (classifySliderGesture(dragOffset, viewConfiguration.touchSlop)) {
+                        SliderGestureDirection.Undecided -> continue
+                        SliderGestureDirection.Vertical -> break
+                        SliderGestureDirection.Horizontal -> {
+                            horizontalGesture = true
+                            onGestureActive(true)
+                        }
+                    }
+                }
+            }
         } finally {
-            onGestureActive(false)
+            if (horizontalGesture) onGestureActive(false)
         }
     }
 }
@@ -762,7 +801,7 @@ private fun ShortcutCard(
     onKey: (CustomKeyData) -> Unit,
     onConfigure: () -> Unit
 ) {
-    val view = LocalView.current
+    val hapticFeedback = LocalGameMenuHapticFeedback.current
     GameMenuCard(
         title = stringResource(R.string.game_menu_tab_shortcuts),
         onLongClick = onConfigure
@@ -778,7 +817,7 @@ private fun ShortcutCard(
                     .clip(GameMenuControlShape)
                     .gamepadFocusOutline(GameMenuControlShape)
                     .clickable {
-                        view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                        hapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
                         onKey(key)
                     }
                     .padding(

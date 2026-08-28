@@ -12,10 +12,13 @@ import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
 import androidx.preference.PreferenceManager
+import com.limelight.binding.audio.MicrophoneButtonPreferences
+import com.limelight.ui.FloatBallPreferences
 import com.limelight.binding.input.advance_setting.config.PageConfigController
 import com.limelight.binding.input.advance_setting.sqlite.SuperConfigDatabaseHelper
 import com.limelight.computers.ComputerDatabaseManager
 import com.limelight.preferences.BackgroundSource
+import com.limelight.preferences.PreferenceConfiguration
 import com.limelight.nvstream.http.ComputerDetails
 import org.json.JSONArray
 import org.json.JSONException
@@ -3080,6 +3083,8 @@ class ConfigurationSyncManager(private val context: Context) {
             "checkbox_clipboard_sync_text",
             "checkbox_control_only",
             "checkbox_disable_warnings",
+            "checkbox_dualsense_direct_bluetooth",
+            "checkbox_dualsense_wireless_bridge",
             "checkbox_enable_audio_passthrough",
             "checkbox_enable_audiofx",
             "checkbox_enable_analytics",
@@ -3088,6 +3093,7 @@ class ConfigurationSyncManager(private val context: Context) {
             "checkbox_enable_float_ball",
             "checkbox_enable_hdr",
             "checkbox_enable_hdr_high_brightness",
+            "checkbox_enable_host_cadence_precise_sync",
             "checkbox_hdr_brightness_override",
             "checkbox_enable_keyboard_toggle_in_native_touch",
             "checkbox_enable_mic",
@@ -3112,6 +3118,10 @@ class ConfigurationSyncManager(private val context: Context) {
             "checkbox_half_height_osc_portrait",
             "checkbox_host_audio",
             "checkbox_lock_screen_after_disconnect",
+            "checkbox_mic_balance",
+            "checkbox_mic_gain",
+            "checkbox_mic_voice_enhancement",
+            "checkbox_mic_volume_processing",
             "checkbox_mouse_emulation",
             "checkbox_mouse_middle",
             "checkbox_mouse_nav_buttons",
@@ -3126,6 +3136,8 @@ class ConfigurationSyncManager(private val context: Context) {
             "checkbox_show_bitrate_card",
             "checkbox_show_guide_button",
             "checkbox_show_gyro_card",
+            MicrophoneButtonPreferences.KEY_SHOW_BUTTON,
+            PreferenceConfiguration.SHOW_LOW_RESOLUTION_PRESETS_PREF_STRING,
             "checkbox_show_onscreen_controls",
             "checkbox_show_onscreen_keyboard",
             "checkbox_small_icon_mode",
@@ -3152,6 +3164,7 @@ class ConfigurationSyncManager(private val context: Context) {
             "list_esc_menu_key",
             "list_float_ball_double_click_action",
             "list_float_ball_long_click_action",
+            FloatBallPreferences.KEY_PRESET_POSITION,
             "list_float_ball_single_click_action",
             "list_float_ball_swipe_down_action",
             "list_float_ball_swipe_left_action",
@@ -3159,9 +3172,12 @@ class ConfigurationSyncManager(private val context: Context) {
             "list_float_ball_swipe_up_action",
             "list_fps",
             "list_framegen_quality_preset",
+            "list_game_rumble_mode",
             "list_hdr_mode",
             "list_languages",
+            MicrophoneButtonPreferences.KEY_PRESET_POSITION,
             "list_mic_icon_color",
+            "list_mic_volume_processing_mode",
             "list_native_mouse_mode_preset",
             "list_perf_overlay_orientation",
             "list_perf_overlay_position",
@@ -3180,9 +3196,12 @@ class ConfigurationSyncManager(private val context: Context) {
             "seekbar_float_ball_auto_hide_delay",
             "seekbar_framegen_internal_width",
             "seekbar_framegen_slow_threshold_ms",
+            PreferenceConfiguration.GAME_MENU_OPACITY_PREF_STRING,
             "seekbar_hdr_peak_brightness_nits",
             "seekbar_keyboard_toggle_fingers_native_touch",
+            "seekbar_mic_balance_target",
             "seekbar_mic_bitrate_kbps",
+            "seekbar_mic_gain_db",
             "seekbar_osc_opacity",
             "seekbar_output_buffer_queue_limit",
             "seekbar_perf_overlay_bg_opacity",

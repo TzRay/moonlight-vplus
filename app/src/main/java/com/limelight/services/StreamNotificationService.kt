@@ -9,76 +9,47 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
-import android.os.Handler
 import android.os.IBinder
-import android.os.Looper
 import android.os.PowerManager
 import androidx.core.app.NotificationCompat
+import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import com.limelight.Game
 import com.limelight.LimeLog
 import com.limelight.R
-import androidx.core.content.edit
 
 class StreamNotificationService : Service() {
 
     private var wakeLock: PowerManager.WakeLock? = null
-    private var keepAliveHandler: Handler? = null
-    private var heartbeatRunnable: Runnable? = null
+    private var isForegroundStarted = false
 
     override fun onCreate() {
         super.onCreate()
-        createNotificationChannel()
-        initWakeLock()
+        if (!createNotificationChannel() ||
+            !promoteToForeground(buildNotification(DEFAULT_PC_NAME, DEFAULT_APP_NAME))
+        ) {
+            stopSelf()
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        var pcName = "Unknown"
-        var appName = "Desktop"
-        if (intent != null) {
-            pcName = intent.getStringExtra(EXTRA_PC_NAME) ?: "Unknown"
-            appName = intent.getStringExtra(EXTRA_APP_NAME) ?: "Desktop"
+        // START_STICKY restarts are delivered with a null intent. They must still
+        // satisfy the startForegroundService() contract before doing other work.
+        if (!isForegroundStarted && !createNotificationChannel()) {
+            stopSelfResult(startId)
+            return START_NOT_STICKY
         }
 
-        getSharedPreferences("StreamState", MODE_PRIVATE)
-            .edit {
-                putString("last_pc_name", pcName)
-                    .putString("last_app_name", appName)
-            }
-
+        val pcName = intent?.getStringExtra(EXTRA_PC_NAME) ?: DEFAULT_PC_NAME
+        val appName = intent?.getStringExtra(EXTRA_APP_NAME) ?: DEFAULT_APP_NAME
         val notification = buildNotification(pcName, appName)
 
-        try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
-            } else {
-                startForeground(NOTIFICATION_ID, notification)
-            }
-        } catch (e: Exception) {
-            e.printStackTrace()
-            stopSelf()
+        if (!promoteToForeground(notification)) {
+            stopSelfResult(startId)
             return START_NOT_STICKY
         }
 
-        if (intent != null && ACTION_STOP == intent.action) {
-            @Suppress("DEPRECATION")
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                stopForeground(STOP_FOREGROUND_REMOVE)
-            } else {
-                stopForeground(true)
-            }
-            releaseWakeLock()
-            stopSelf()
-            return START_NOT_STICKY
-        }
-
-        if (intent == null) {
-            releaseWakeLock()
-            stopSelf()
-            return START_NOT_STICKY
-        }
-
-        startHeartbeat()
+        initWakeLock()
         return START_STICKY
     }
 
@@ -86,17 +57,22 @@ class StreamNotificationService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
-        stopHeartbeat()
+        isForegroundStarted = false
         releaseWakeLock()
     }
 
-    private fun createNotificationChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val manager = getSystemService(NotificationManager::class.java) ?: return
+    private fun createNotificationChannel(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+            return true
+        }
+
+        return try {
+            val manager = getSystemService(NotificationManager::class.java)
+                ?: throw IllegalStateException("NotificationManager is unavailable")
             val channel = NotificationChannel(
                 CHANNEL_ID,
                 getString(R.string.notification_channel_name),
-                NotificationManager.IMPORTANCE_HIGH
+                NotificationManager.IMPORTANCE_LOW
             ).apply {
                 description = getString(R.string.notification_channel_desc)
                 setShowBadge(false)
@@ -105,7 +81,38 @@ class StreamNotificationService : Service() {
                 enableLights(false)
             }
             manager.createNotificationChannel(channel)
-            LimeLog.info("StreamNotificationService: Notification channel created with HIGH importance")
+            LimeLog.info("StreamNotificationService: Notification channel created with LOW importance")
+            true
+        } catch (e: RuntimeException) {
+            LimeLog.severe(
+                "StreamNotificationService: Failed to create notification channel: " +
+                    "${e.javaClass.simpleName}: ${e.message}"
+            )
+            false
+        }
+    }
+
+    private fun promoteToForeground(notification: Notification): Boolean {
+        return try {
+            val foregroundServiceType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
+            } else {
+                0
+            }
+            ServiceCompat.startForeground(
+                this,
+                NOTIFICATION_ID,
+                notification,
+                foregroundServiceType
+            )
+            isForegroundStarted = true
+            true
+        } catch (e: RuntimeException) {
+            LimeLog.severe(
+                "StreamNotificationService: Failed to enter foreground: " +
+                    "${e.javaClass.simpleName}: ${e.message}"
+            )
+            false
         }
     }
 
@@ -123,8 +130,8 @@ class StreamNotificationService : Service() {
         val title = "Moonlight-V+"
         val content = getString(
             R.string.notification_content_streaming,
-            appName ?: "Desktop",
-            pcName ?: "Unknown"
+            appName ?: DEFAULT_APP_NAME,
+            pcName ?: DEFAULT_PC_NAME
         )
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
@@ -132,8 +139,9 @@ class StreamNotificationService : Service() {
             .setContentTitle(title)
             .setContentText(content)
             .setStyle(NotificationCompat.BigTextStyle().bigText(content))
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
             .setOngoing(true)
+            .setOnlyAlertOnce(true)
             .setContentIntent(contentIntent)
             .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
             .setShowWhen(true)
@@ -142,6 +150,10 @@ class StreamNotificationService : Service() {
     }
 
     private fun initWakeLock() {
+        if (wakeLock?.isHeld == true) {
+            return
+        }
+
         try {
             val pm = getSystemService(POWER_SERVICE) as? PowerManager
             if (pm != null) {
@@ -168,52 +180,13 @@ class StreamNotificationService : Service() {
         }
     }
 
-    private fun startHeartbeat() {
-        val handler = keepAliveHandler ?: Handler(Looper.getMainLooper()).also { keepAliveHandler = it }
-        handler.removeCallbacksAndMessages(null)
-
-        heartbeatRunnable = object : Runnable {
-            override fun run() {
-                try {
-                    val wl = wakeLock
-                    if (wl != null && !wl.isHeld) {
-                        wl.acquire(24 * 60 * 60 * 1000L)
-                        LimeLog.info("StreamNotificationService: Re-acquired WakeLock during heartbeat")
-                    }
-
-                    val nm = getSystemService(NOTIFICATION_SERVICE) as? NotificationManager
-                    if (nm != null) {
-                        val prefs = getSharedPreferences("StreamState", MODE_PRIVATE)
-                        val pc = prefs.getString("last_pc_name", "Unknown")
-                        val app = prefs.getString("last_app_name", "Desktop")
-                        nm.notify(NOTIFICATION_ID, buildNotification(pc, app))
-                    }
-
-                    LimeLog.warning("StreamNotificationService: Heartbeat pulse")
-                } catch (e: Exception) {
-                    LimeLog.warning("Heartbeat error: ${e.message}")
-                }
-
-                keepAliveHandler?.postDelayed(this, HEART_BEAT_INTERVAL_MS)
-            }
-        }
-
-        handler.postDelayed(heartbeatRunnable!!, HEART_BEAT_INTERVAL_MS)
-        LimeLog.info("StreamNotificationService: Heartbeat started with 8s interval")
-    }
-
-    private fun stopHeartbeat() {
-        keepAliveHandler?.removeCallbacksAndMessages(null)
-        LimeLog.info("StreamNotificationService: Heartbeat stopped")
-    }
-
     companion object {
         private const val CHANNEL_ID = "stream_keep_alive"
         private const val NOTIFICATION_ID = 1001
         private const val EXTRA_PC_NAME = "extra_pc_name"
         private const val EXTRA_APP_NAME = "extra_app_name"
-        private const val HEART_BEAT_INTERVAL_MS = 8000L
-        private const val ACTION_STOP = "ACTION_STOP"
+        private const val DEFAULT_PC_NAME = "Unknown"
+        private const val DEFAULT_APP_NAME = "Desktop"
 
         fun start(context: Context, pcName: String?, appName: String?) {
             val intent = Intent(context, StreamNotificationService::class.java).apply {
@@ -228,11 +201,10 @@ class StreamNotificationService : Service() {
         }
 
         fun stop(context: Context) {
-            val intent = Intent(context, StreamNotificationService::class.java).apply {
-                action = ACTION_STOP
-            }
             try {
-                context.startService(intent)
+                // This is safe when the service isn't running and cannot enqueue a
+                // stop command behind an unpromoted foreground-service start.
+                context.stopService(Intent(context, StreamNotificationService::class.java))
             } catch (_: Exception) {
                 // 如果服务本来就没跑，正好不需要停
             }

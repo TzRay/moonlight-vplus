@@ -20,7 +20,8 @@ data class StreamAction(
     val iconDisabledRes: Int = 0,
     val labelRes: Int = 0,
     val tintableIcon: Boolean = false,
-    val iconText: String? = null
+    val iconText: String? = null,
+    val isWithGameFocus: Boolean = false
 )
 
 data class CustomKeyData(val name: String, val keys: ShortArray)
@@ -81,6 +82,7 @@ object StreamActionRegistry {
     private val QUICK_ACTION_IDS = listOf(
         "send_win",
         "send_esc",
+        "open_keyboard",
         "toggle_hdr",
         "toggle_mic",
         "send_sleep",
@@ -90,11 +92,12 @@ object StreamActionRegistry {
         "send_alt_f4",
         "toggle_keyboard",
         "toggle_controller",
-        "toggle_perf"
+        "toggle_perf",
+        "toggle_remote_mouse"
     )
 
     val BUILTIN = linkedMapOf(
-        "open_keyboard" to StreamAction("open_keyboard", "KB", R.drawable.ic_keyboard_cute, 0, R.string.quick_btn_keyboard),
+        "open_keyboard" to StreamAction("open_keyboard", "PC Keys", R.drawable.ic_send_keys_cute, 0, R.string.quick_btn_pc_keys),
         "open_menu" to StreamAction("open_menu", "Menu", R.drawable.ic_menu_item_default),
         "toggle_visibility" to StreamAction("toggle_visibility", "Hide", R.drawable.ic_btn_quit, tintableIcon = true),
         "send_win" to StreamAction("send_win", "Win", R.drawable.ic_btn_win, labelRes = R.string.quick_btn_win, tintableIcon = true),
@@ -114,9 +117,18 @@ object StreamActionRegistry {
         "send_tab" to StreamAction("send_tab", "Tab", 0, labelRes = R.string.quick_btn_tab, iconText = "HK"),
         "send_alt_tab" to StreamAction("send_alt_tab", "Alt+Tab", 0, labelRes = R.string.quick_btn_alt_tab, iconText = "HK"),
         "send_alt_f4" to StreamAction("send_alt_f4", "Alt+F4", 0, labelRes = R.string.quick_btn_alt_f4, iconText = "HK"),
-        "toggle_keyboard" to StreamAction("toggle_keyboard", "KB", R.drawable.ic_keyboard_cute, 0, R.string.quick_btn_keyboard),
+        "toggle_keyboard" to StreamAction(
+            "toggle_keyboard",
+            "KB",
+            R.drawable.ic_keyboard_cute,
+            labelRes = R.string.quick_btn_local_keyboard,
+            isWithGameFocus = true
+        ),
         "toggle_controller" to StreamAction("toggle_controller", "Pad", R.drawable.ic_controller_cute, 0, R.string.quick_btn_controller),
         "toggle_perf" to StreamAction("toggle_perf", "Perf", R.drawable.ic_performance_cute, 0, R.string.quick_btn_perf),
+        "toggle_remote_mouse" to StreamAction(
+            "toggle_remote_mouse", "Mouse", R.drawable.ic_mouse_cute, 0, R.string.quick_btn_remote_mouse
+        ),
     )
 
     fun getBuiltin(id: String): StreamAction? = BUILTIN[id]
@@ -174,7 +186,7 @@ class StreamActionExecutor(
                 KeyboardTranslator.VK_B.toShortKey()
             ))
             "toggle_mic" -> {
-                game.toggleMicrophoneButton()
+                game.handleMicrophoneMenuAction()
                 true
             }
             "send_sleep" -> {
@@ -207,11 +219,23 @@ class StreamActionExecutor(
                 game.togglePerformanceOverlay()
                 true
             }
+            "toggle_remote_mouse" -> {
+                val sent = sendKeys(shortArrayOf(
+                    KeyboardTranslator.VK_LCONTROL.toShortKey(),
+                    KeyboardTranslator.VK_MENU.toShortKey(),
+                    KeyboardTranslator.VK_LSHIFT.toShortKey(),
+                    KeyboardTranslator.VK_N.toShortKey()
+                ))
+                if (sent) {
+                    Toast.makeText(game, game.getString(R.string.toast_remote_mouse_toast), Toast.LENGTH_SHORT).show()
+                }
+                sent
+            }
             else -> executeCustomAction(actionId)
         }
     }
 
-    fun sendKeys(keys: ShortArray): Boolean {
+    fun sendKeys(keys: ShortArray, afterRelease: (() -> Unit)? = null): Boolean {
         val conn = connProvider() ?: return false
         if (keys.isEmpty()) return false
 
@@ -229,12 +253,31 @@ class StreamActionExecutor(
                 mod = (mod.toInt() and KeyModifier.getModifier(key).toInt().inv()).toByte()
                 conn.sendKeyboardInput(key, KeyboardPacket.KEY_UP, mod, 0)
             }
+            afterRelease?.invoke()
         }, KEY_UP_DELAY)
 
         return true
     }
 
     fun disconnectAndQuit() {
+        try {
+            if (game.prefConfig.lockScreenAfterDisconnect) {
+                val lockKeysSent = sendKeys(
+                    shortArrayOf(
+                        KeyboardTranslator.VK_LWIN.toShortKey(),
+                        KeyboardTranslator.VK_L.toShortKey()
+                    ),
+                    ::finishDisconnectAndQuit
+                )
+                if (lockKeysSent) return
+            }
+            finishDisconnectAndQuit()
+        } catch (e: Exception) {
+            Toast.makeText(game, game.getString(R.string.toast_disconnect_error, e.message), Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun finishDisconnectAndQuit() {
         try {
             game.disconnect()
             connProvider()?.doStopAndQuit()
