@@ -145,9 +145,35 @@ jobs:
           path: |
             app/build/outputs/apk/nonRoot/debug/*.apk
 
-      # ===== Release (Signed) Build (tags and manual runs) =====
-      - name: Decode keystore for Release
+      # ===== Release (Signed) Build (tags and configured manual runs) =====
+      - name: Check Release signing configuration
+        id: release-signing
         if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+        shell: bash
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ] && [ -n "$KEYSTORE_PASSWORD" ] && \
+             [ -n "$KEY_ALIAS" ] && [ -n "$KEY_PASSWORD" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+            echo "Release signing is configured"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "Release signing is not configured; manual runs will keep the installable Debug artifact"
+          fi
+
+      - name: Require Release signing for tags
+        if: startsWith(github.ref, 'refs/tags/') && steps.release-signing.outputs.enabled != 'true'
+        shell: bash
+        run: |
+          echo "ERROR: Release signing secrets are required for tag builds"
+          exit 1
+
+      - name: Decode keystore for Release
+        if: steps.release-signing.outputs.enabled == 'true'
         shell: bash
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
@@ -156,7 +182,7 @@ jobs:
           ls -l my-release.keystore
 
       - name: Build signed NonRoot Release APK
-        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+        if: steps.release-signing.outputs.enabled == 'true'
         env:
           KEYSTORE_PATH: ${{ github.workspace }}/my-release.keystore
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
@@ -165,7 +191,7 @@ jobs:
         run: ./gradlew :app:assembleNonRootRelease --no-daemon --stacktrace
 
       - name: Rename Release APK to Moonlight.V+.<version>.apk
-        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+        if: steps.release-signing.outputs.enabled == 'true'
         shell: bash
         run: |
           set -e
@@ -296,7 +322,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload Release APK and mapping
-        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+        if: steps.release-signing.outputs.enabled == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: app-nonroot-release-signed
