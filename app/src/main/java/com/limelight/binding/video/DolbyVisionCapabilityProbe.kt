@@ -61,8 +61,15 @@ internal class DolbyVisionCapabilityProbe(
                 continue
             }
 
+            val requiredLevel = DolbyVisionStreamPolicy.levelFor(width, height, frameRate)
+            if (requiredLevel == null) {
+                LimeLog.warning("Dolby Vision stream exceeds the supported Profile 8.1 level table")
+                return result
+            }
+
             val probeFormat = MediaFormat.createVideoFormat(MIME_DOLBY_VISION, width, height)
             probeFormat.setInteger(MediaFormat.KEY_PROFILE, DV_PROFILE_DVHE_ST)
+            probeFormat.setInteger(MediaFormat.KEY_LEVEL, requiredLevel)
             probeFormat.setInteger(MediaFormat.KEY_FRAME_RATE, frameRate)
             probeFormat.setInteger(MediaFormat.KEY_COLOR_STANDARD, MediaFormat.COLOR_STANDARD_BT2020)
             probeFormat.setInteger(MediaFormat.KEY_COLOR_TRANSFER, MediaFormat.COLOR_TRANSFER_ST2084)

@@ -766,7 +766,10 @@ class MediaCodecDecoderRenderer(
                     videoFormat.setInteger("color-transfer-request", MediaFormat.COLOR_TRANSFER_HLG)
                 } else {
                     videoFormat.setInteger(MediaFormat.KEY_COLOR_TRANSFER, MediaFormat.COLOR_TRANSFER_ST2084)
-                    videoFormat.setInteger("color-transfer-request", MediaFormat.COLOR_TRANSFER_ST2084)
+                    // Dolby Vision 的输出属性由 decoder 和逐帧 RPU 决定，应用不得强制覆盖。
+                    if (mimeType != "video/dolby-vision") {
+                        videoFormat.setInteger("color-transfer-request", MediaFormat.COLOR_TRANSFER_ST2084)
+                    }
                 }
             } else {
                 // SDR mode: set color format keys since they won't change
@@ -843,7 +846,9 @@ class MediaCodecDecoderRenderer(
 
                 hdrStaticInfo.rewind()
                 format.setByteBuffer(MediaFormat.KEY_HDR_STATIC_INFO, hdrStaticInfo)
-            } else if ((getActiveVideoFormat() and MoonBridge.VIDEO_FORMAT_MASK_10BIT) != 0) {
+            } else if ((getActiveVideoFormat() and MoonBridge.VIDEO_FORMAT_MASK_10BIT) != 0 &&
+                format.getString(MediaFormat.KEY_MIME) != "video/dolby-vision"
+            ) {
                 // HLG streams from Sunshine typically have no SMPTE 2086 static metadata.
                 // Without metadata, the display pipeline doesn't know the content's target
                 // luminance range, causing conservative tone mapping that makes HDR look dark.
@@ -899,7 +904,9 @@ class MediaCodecDecoderRenderer(
 
         // Set DataSpace on the output Surface for HDR content.
         // Equivalent to HarmonyOS OH_NativeWindow_SetColorSpace().
+        hdrDataSpace = 0
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P &&
+            format.getString(MediaFormat.KEY_MIME) != "video/dolby-vision" &&
             (getActiveVideoFormat() and MoonBridge.VIDEO_FORMAT_MASK_10BIT) != 0
         ) {
             hdrDataSpace = ColorRangePolicy.hdrDataSpace(
@@ -999,61 +1006,35 @@ class MediaCodecDecoderRenderer(
 
         hdr10PlusOutputObserver.beginCodecConfiguration(false)
 
-        // Signaling ladder for engaging the native DV display path. Each entry
-        // is tried (with the low-latency option sweep) before falling back:
-        //  1. dvcC record + OPPO color-mode vendor key — the OPPO/Qualcomm
-        //     c2.qti.dv.decoder declares <Feature name="oplus-dolby-vision-
-        //     color-mode"/> in media_codecs_dolby_vision.xml, so the non-secure
-        //     path can switch the DV mapping on; it reports the mode in the
-        //     output format as feature-oplus-dolby-vision-color-mode.
-        //  2. color-mode vendor key alone.
-        //  3. Plain Annex-B (approach 1): decodes, but devices that need the
-        //     signaling above present the compatibility BL as HDR10.
-        // The dvcC payload describes exactly what our RPU carries: profile 8,
-        // level 30, rpu_present=1, el_present=0, bl_present=1, compat id 1.
-        val dvcC = ByteBuffer.wrap(
-            byteArrayOf(0x01, 0x00, 0x10, 0xF5.toByte(), 0x10))
-        val colorModeKey = "feature-oplus-dolby-vision-color-mode"
-        val attempts: List<Pair<String, (MediaFormat) -> Unit>> = listOf(
-            "dvcC+colorMode" to { f ->
-                f.setByteBuffer("csd-0", dvcC)
-                f.setInteger(colorModeKey, 1)
-            },
-            "colorMode" to { f -> f.setInteger(colorModeKey, 1) },
-            "plain" to { },
-        )
-
-        for ((label, applyExtras) in attempts) {
-            var tryNumber = 0
-            while (true) {
-                LimeLog.info("Decoder configuration try: profile=DvheSt+$label options=$tryNumber")
-
-                val attemptFormat = createBaseMediaFormat(mimeType)
-                attemptFormat.setInteger(MediaFormat.KEY_PROFILE, DV_PROFILE_DVHE_ST)
-                applyExtras(attemptFormat)
-
-                val newFormat = MediaCodecHelper.setDecoderLowLatencyOptions(
-                    attemptFormat,
-                    dvDecoder,
-                    tryNumber,
-                    prefs.forceMtkMaxOperatingRate,
-                    hdr10PlusModeSelected = false,
-                )
-
-                val isLastTry = !newFormat || tryNumber >= MAX_DECODER_CONFIGURATION_TRIES - 1
-                if (tryConfigureDecoder(dvDecoder, attemptFormat, false)) {
-                    LimeLog.info("Dolby Vision decoder routing active: ${dvDecoder.name} (signaling=$label)")
-                    return 0
-                }
-
-                if (isLastTry) {
-                    break
-                }
-                tryNumber++
+        val requiredLevel = DolbyVisionStreamPolicy.levelFor(initialWidth, initialHeight, refreshRate)
+            ?: run {
+                LimeLog.warning("Dolby Vision stream exceeds the supported Profile 8.1 level table")
+                return -5
             }
-            LimeLog.warning("Dolby Vision signaling '$label' rejected by decoder; trying next")
+
+        val format = createBaseMediaFormat(mimeType).apply {
+            setInteger(MediaFormat.KEY_PROFILE, DV_PROFILE_DVHE_ST)
+            setInteger(MediaFormat.KEY_LEVEL, requiredLevel)
         }
-        return -5
+
+        // 仅在 codec 明确声明标准低延迟能力时启用，DV 路径不发送厂商私有参数。
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            runCatching {
+                if (dvDecoder.getCapabilitiesForType(mimeType)
+                        .isFeatureSupported(MediaCodecInfo.CodecCapabilities.FEATURE_LowLatency)
+                ) {
+                    format.setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
+                }
+            }.onFailure {
+                LimeLog.warning("Failed to query standard Dolby Vision low-latency support: ${it.message}")
+            }
+        }
+
+        LimeLog.info("Decoder configuration: profile=DvheSt level=$requiredLevel standard-signaling")
+        if (!tryConfigureDecoder(dvDecoder, format, false)) return -5
+
+        LimeLog.info("Dolby Vision decoder routing active: ${dvDecoder.name}")
+        return 0
     }
 
     fun initializeDecoder(throwOnCodecError: Boolean): Int {
@@ -2210,6 +2191,21 @@ class MediaCodecDecoderRenderer(
                 ppsBuffers.add(naluBuffer)
                 return MoonBridge.DR_OK
             } else if ((videoFormat and (MoonBridge.VIDEO_FORMAT_MASK_H264 or MoonBridge.VIDEO_FORMAT_MASK_H265)) != 0) {
+                if (isDolbyVisionRoutingActive(configuredFormat?.getString(MediaFormat.KEY_MIME).orEmpty())) {
+                    val hasCompleteCsd = vpsBuffers.isNotEmpty() && spsBuffers.isNotEmpty() && ppsBuffers.isNotEmpty()
+                    val hasRpu = DolbyVisionStreamPolicy.containsRpuNalUnit(decodeUnitData, decodeUnitLength)
+                    if (!hasCompleteCsd || !hasRpu) {
+                        LimeLog.warning(
+                            "Rejecting incomplete Dolby Vision IDR: " +
+                                "VPS=${vpsBuffers.size} SPS=${spsBuffers.size} PPS=${ppsBuffers.size} RPU=$hasRpu"
+                        )
+                        vpsBuffers.clear()
+                        spsBuffers.clear()
+                        ppsBuffers.clear()
+                        return MoonBridge.DR_NEED_IDR
+                    }
+                }
+
                 // If this is the first CSD blob or we aren't supporting fused IDR frames, we will
                 // submit the CSD blob in a separate input buffer for each IDR frame.
                 if (!submittedCsd || !fusedIdrFrame) {
