@@ -2,6 +2,7 @@ package com.limelight.nvstream.jni;
 
 import com.limelight.nvstream.Ds5HapticsPcmFrame;
 import com.limelight.nvstream.NvConnectionListener;
+import com.limelight.nvstream.RemoteTextContext;
 import com.limelight.nvstream.av.audio.AudioRenderer;
 import com.limelight.nvstream.av.video.VideoDecoderRenderer;
 
@@ -55,6 +56,7 @@ public class MoonBridge {
     public static final int HDR_MODE_HLG = 2;      // HLG (Hybrid Log-Gamma, ARIB STD-B67)
     public static final int HDR_MODE_HDR10_PLUS = 3; // HDR10/PQ with ST 2094-40 dynamic metadata
     public static final int HDR_MODE_DOLBY_VISION = 4; // HDR10/PQ base with Dolby Vision Profile 8.1 RPU (client-only selection)
+    public static final int HDR_MODE_DOLBY_VISION_84 = 5; // HLG base with Dolby Vision Profile 8.4 RPU (client-only selection)
 
     // Dynamic HDR capability bits for setDynamicHdrNegotiation() and the
     // x-ss-video[0].dynamicHdrCaps SDP attribute (Sunshine extension).
@@ -63,6 +65,7 @@ public class MoonBridge {
     public static final int DYNAMIC_HDR_CAPS_VIVID_PQ = 1 << 1;
     public static final int DYNAMIC_HDR_CAPS_VIVID_HLG = 1 << 2;
     public static final int DYNAMIC_HDR_CAPS_DOLBY_VISION_81 = 1 << 3;
+    public static final int DYNAMIC_HDR_CAPS_DOLBY_VISION_84 = 1 << 4;
 
     // dynamicHdrPreference values (0 automatic / 1 Dolby Vision / 2 HDR10+ / 3 HDR10 only)
     public static final int DYNAMIC_HDR_PREFERENCE_AUTOMATIC = 0;
@@ -74,6 +77,7 @@ public class MoonBridge {
     public static final int NEGOTIATED_DYNAMIC_HDR_NONE = 0;
     public static final int NEGOTIATED_DYNAMIC_HDR_HDR10_PLUS = 1;
     public static final int NEGOTIATED_DYNAMIC_HDR_DOLBY_VISION_PROFILE_81 = 4;
+    public static final int NEGOTIATED_DYNAMIC_HDR_DOLBY_VISION_PROFILE_84 = 5;
 
     public static final int CAPABILITY_DIRECT_SUBMIT = 1;
     public static final int CAPABILITY_REFERENCE_FRAME_INVALIDATION_AVC = 2;
@@ -214,7 +218,7 @@ public class MoonBridge {
 
     private static AudioRenderer audioRenderer;
     private static VideoDecoderRenderer videoRenderer;
-    private static NvConnectionListener connectionListener;
+    private static volatile NvConnectionListener connectionListener;
 
     static {
         System.loadLibrary("moonlight-core");
@@ -484,6 +488,17 @@ public class MoonBridge {
         }
     }
 
+    public static void bridgeClRemoteTextContext(int[] values, long activationId, long inputToken) {
+        NvConnectionListener listener = connectionListener;
+        if (listener == null || values == null || values.length != 16) return;
+        listener.onRemoteTextContext(new RemoteTextContext(
+                values[0], values[1], activationId, inputToken,
+                values[2], values[3], values[4], values[5],
+                values[6], values[7], values[8], values[9],
+                values[10], values[11], values[12], values[13],
+                values[14], values[15]));
+    }
+
     /**
      * Encode a v1 clipboard frame and send it to the host. Returns 0 on success;
      * negative on failure (-1 invalid args, -2 unsupported by host, -3 transport).
@@ -513,6 +528,12 @@ public class MoonBridge {
         MoonBridge.videoRenderer = videoRenderer;
         MoonBridge.audioRenderer = audioRenderer;
         MoonBridge.connectionListener = connectionListener;
+    }
+
+    public static synchronized void detachConnectionListener(NvConnectionListener listener) {
+        if (MoonBridge.connectionListener == listener) {
+            MoonBridge.connectionListener = null;
+        }
     }
 
     public static void cleanupBridge() {
@@ -619,6 +640,9 @@ public class MoonBridge {
 
     // The RTT is in the top 32 bits, and the RTT variance is in the bottom 32 bits
     public static native long getEstimatedRttInfo();
+
+    /** Returns wire-level bytes received by the active video RTP stream. */
+    public static native long getRtpVideoBytesReceived();
 
     public static native String getLaunchUrlQueryParameters();
 

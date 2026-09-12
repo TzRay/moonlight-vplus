@@ -277,6 +277,22 @@ object MediaCodecHelper {
         }
     }
 
+    private fun isGenericDolbyVisionDecoder(decoderName: String): Boolean =
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+            decoderName.startsWith("c2.dolby.vision", ignoreCase = true)
+
+    private fun isQualcommDecoder(decoderName: String): Boolean =
+        isDecoderInList(qualcommDecoderPrefixes, decoderName) ||
+            (isGenericDolbyVisionDecoder(decoderName) &&
+                (Build.SOC_MANUFACTURER.equals("Qualcomm", ignoreCase = true) ||
+                    Build.SOC_MANUFACTURER.equals("QTI", ignoreCase = true)))
+
+    private fun isMediaTekDecoder(decoderName: String): Boolean =
+        isDecoderInList(mtkDecoderPrefixes, decoderName) ||
+            (isGenericDolbyVisionDecoder(decoderName) &&
+                (Build.SOC_MANUFACTURER.equals("MediaTek", ignoreCase = true) ||
+                    Build.SOC_MANUFACTURER.equals("MTK", ignoreCase = true)))
+
     // ==================== Low Latency Capability Probing ====================
 
     private fun decoderSupportsAndroidRLowLatency(decoderInfo: MediaCodecInfo, mimeType: String): Boolean {
@@ -330,7 +346,7 @@ object MediaCodecHelper {
         // Operate at maximum rate to lower latency on Qualcomm platforms.
         // Crashes on Snapdragon 765G (Adreno 620) and non-Qualcomm devices.
         return Build.VERSION.SDK_INT >= Build.VERSION_CODES.M &&
-            (isDecoderInList(qualcommDecoderPrefixes, decoderName) || isSnapdragonGSeries) &&
+            (isQualcommDecoder(decoderName) || isSnapdragonGSeries) &&
             !isAdreno620
     }
 
@@ -498,11 +514,15 @@ object MediaCodecHelper {
         decoderInfo: MediaCodecInfo,
         tryNumber: Int,
         allowMtkMaxOperatingRate: Boolean,
+        mimeType: String?,
+        hevcLowLatencyMode: Int,
     ): Boolean = setDecoderLowLatencyOptions(
         videoFormat,
         decoderInfo,
         tryNumber,
         allowMtkMaxOperatingRate,
+        mimeType,
+        hevcLowLatencyMode,
         hdr10PlusModeSelected = false,
     )
 
@@ -512,8 +532,20 @@ object MediaCodecHelper {
         decoderInfo: MediaCodecInfo,
         tryNumber: Int,
         allowMtkMaxOperatingRate: Boolean,
+        mimeType: String?,
+        hevcLowLatencyMode: Int,
         hdr10PlusModeSelected: Boolean,
     ): Boolean {
+        // Skipping returns false at try 0, so the caller's option-sweep loop runs
+        // a single bare-format configure attempt (see HevcLowLatencyPolicy).
+        if (HevcLowLatencyPolicy.shouldSkipLowLatencyOptions(mimeType, decoderInfo.name, hevcLowLatencyMode)) {
+            LimeLog.info(
+                "Skipping low-latency decoder options for $mimeType on ${decoderInfo.name} " +
+                    "(mode=$hevcLowLatencyMode)"
+            )
+            return false
+        }
+
         // Options are tried in order of most to least risky. The decoder will use
         // the first MediaFormat that doesn't fail in configure().
         var setNewOption = false
@@ -556,7 +588,7 @@ object MediaCodecHelper {
             val decoderName = decoderInfo.name
 
             when {
-                isDecoderInList(qualcommDecoderPrefixes, decoderName) -> if (tryNumber < 5) {
+                isQualcommDecoder(decoderName) -> if (tryNumber < 5) {
                     applyQualcommVendorParams(
                         videoFormat,
                         tryNumber,
@@ -564,7 +596,7 @@ object MediaCodecHelper {
                     )
                     setNewOption = true
                 }
-                isDecoderInList(mtkDecoderPrefixes, decoderName) -> if (tryNumber < 4) {
+                isMediaTekDecoder(decoderName) -> if (tryNumber < 4) {
                     applyMtkVendorParams(videoFormat, tryNumber, allowMtkMaxOperatingRate)
                     setNewOption = true
                 }

@@ -75,6 +75,7 @@ import com.limelight.PcView
 import com.limelight.R
 import com.limelight.ExternalDisplayManager
 import com.limelight.TargetDisplayResolver
+import com.limelight.binding.input.InputDeviceSensorPolicy
 import com.limelight.binding.input.advance_setting.config.PageConfigController
 import com.limelight.binding.audio.MicrophoneButtonPreferences
 import com.limelight.binding.audio.MicrophoneButtonPositionStore
@@ -161,6 +162,7 @@ class StreamSettings : AppCompatActivity() {
                 "category_screen_position" -> R.drawable.phc_video_camera
                 "category_display_behavior" -> R.drawable.phc_perf_resolution
                 "category_audio_settings" -> R.drawable.phc_audio
+                "category_microphone_settings" -> R.drawable.ic_mic_gm
                 "category_gamepad_settings" -> R.drawable.phc_gamepad
                 "category_input_settings" -> R.drawable.phc_keyboard
                 "category_onscreen_controls" -> R.drawable.phc_game_controller
@@ -1006,6 +1008,7 @@ class StreamSettings : AppCompatActivity() {
         @Volatile
         private var developerForegroundPollRunning = false
         private var developerDeviceCodeDialog: AlertDialog? = null
+        private var customResolutionsDialog: android.app.Dialog? = null
 
         /**
          * 获取目标显示器（优先使用外接显示器）
@@ -1104,46 +1107,16 @@ class StreamSettings : AppCompatActivity() {
         }
 
         private fun addCustomResolutionsEntries() {
-            val storage = requireActivity().getSharedPreferences(CustomResolutionsConsts.CUSTOM_RESOLUTIONS_FILE,
-                MODE_PRIVATE
-            )
-            val stored = storage.getStringSet(CustomResolutionsConsts.CUSTOM_RESOLUTIONS_KEY, null)
             val pref = findPreference<ListPreference>(PreferenceConfiguration.RESOLUTION_PREF_STRING)!!
-
             val preferencesList = listOf(*pref.entryValues)
 
-            if (stored.isNullOrEmpty()) {
-                return
-            }
-
-            val lengthComparator = Comparator<String> { s1, s2 ->
-                val s1Size = s1.split("x")
-                val s2Size = s2.split("x")
-
-                val w1 = s1Size[0].toInt()
-                val w2 = s2Size[0].toInt()
-
-                val h1 = s1Size[1].toInt()
-                val h2 = s2Size[1].toInt()
-
-                if (w1 == w2) {
-                    h1.compareTo(h2)
-                } else {
-                    w1.compareTo(w2)
-                }
-            }
-
-            val list = ArrayList(stored)
-            Collections.sort(list, lengthComparator)
-
-            for (storedResolution in list) {
+            for (resolution in CustomResolutionsStore.load(requireActivity())) {
+                val storedResolution = resolution.toString()
                 if (preferencesList.contains(storedResolution)) {
                     continue
                 }
-                val resolution = storedResolution.split("x")
-                val width = resolution[0].toInt()
-                val height = resolution[1].toInt()
-                val aspectRatio = AspectRatioConverter.getAspectRatio(width, height)
+
+                val aspectRatio = AspectRatioConverter.getAspectRatio(resolution.width, resolution.height)
                 var displayText = "Custom "
 
                 if (aspectRatio != null) {
@@ -2930,6 +2903,8 @@ class StreamSettings : AppCompatActivity() {
             cancelExpandFocusRestore()
             unregisterConfigSyncPreferenceListener()
             configSyncSnapshotHandler.removeCallbacks(configSyncSnapshotRunnable)
+            customResolutionsDialog?.dismiss()
+            customResolutionsDialog = null
             // 注销 adapter observer，避免泄漏
             val obs = adapterDataObserver
             if (obs != null) {
@@ -3293,9 +3268,9 @@ class StreamSettings : AppCompatActivity() {
                 category.removePreference(findPreference("checkbox_absolute_mouse_mode")!!)
             }
 
-            // Hide gamepad motion sensor option when running on OSes before Android 12.
-            // Support for motion, LED, battery, and other extensions were introduced in S.
-            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+            // InputDeviceSensorManager is unsafe on Android 12 and 12L. Keep the device-sensor
+            // fallback visible because it uses the regular SensorManager instead.
+            if (!InputDeviceSensorPolicy.isSupported(Build.VERSION.SDK_INT)) {
                 val category = findPreference<PreferenceCategory>("category_gamepad_settings")!!
                 category.removePreference(findPreference("checkbox_gamepad_motion_sensors")!!)
             }
@@ -3663,6 +3638,11 @@ class StreamSettings : AppCompatActivity() {
                         if (foundDolbyVision) {
                             entries += getString(R.string.hdr_mode_dolby_vision)
                             entryValues += "4"
+                            // 8.4 rides the HLG base layer into the same DV
+                            // display pipeline; availability is decoder- and
+                            // display-gated identically to 8.1.
+                            entries += getString(R.string.hdr_mode_dolby_vision_84)
+                            entryValues += "5"
                         }
 
                         hdrModePref.entries = entries.toTypedArray()
@@ -3845,10 +3825,11 @@ class StreamSettings : AppCompatActivity() {
                     f.show(parentFragmentManager, "SeekBarPreference")
                 }
                 is CustomResolutionsPreference -> {
-                    val f = CustomResolutionsPreferenceDialogFragment.newInstance(preference.key)
-                    @Suppress("DEPRECATION")
-                    f.setTargetFragment(this, 0)
-                    f.show(parentFragmentManager, "CustomResolutionsPreference")
+                    customResolutionsDialog?.dismiss()
+                    customResolutionsDialog = CustomResolutionsDialog.show(requireContext()) {
+                        customResolutionsDialog = null
+                        (activity as? StreamSettings)?.reloadSettings()
+                    }
                 }
                 is ConfirmDeleteOscPreference -> {
                     val f = ConfirmDeleteOscDialogFragment.newInstance(preference.key)

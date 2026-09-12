@@ -4,7 +4,7 @@ import android.annotation.SuppressLint
 import android.media.MediaCodecInfo
 
 /**
- * Dolby Vision Profile 8.1 的流级约束。
+ * Dolby Vision Profile 8.1 / 8.4 的流级约束。
  *
  * Level 必须按解码像素率选择，不能使用 HEVC level 或任意硬编码值代替。
  */
@@ -39,7 +39,7 @@ internal object DolbyVisionStreamPolicy {
             ?.codecLevel
     }
 
-    /** Profile 8.1 的首个随机访问帧必须包含有效 RPU NAL。 */
+    /** Profile 8.1 / 8.4 的首个随机访问帧必须包含有效 RPU NAL。 */
     fun containsRpuNalUnit(data: ByteArray, length: Int): Boolean {
         val limit = length.coerceAtMost(data.size)
         var searchOffset = 0

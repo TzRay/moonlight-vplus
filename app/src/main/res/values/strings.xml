@@ -275,15 +275,32 @@
     <string name="title_native_fps_dialog">Native FPS Warning</string>
     <string name="title_custom_resolutions">Custom resolutions</string>
     <string name="summary_custom_resolutions">Add or remove resolutions offered by the stream resolution list</string>
-    <string name="custom_resolution_input_title">Enter Custom Resolution</string>
-    <string name="width_label">Width:</string>
-    <string name="height_label">Height:</string>
     <string name="width_hint">e.g. 1920</string>
     <string name="height_hint">e.g. 1080</string>
-    <string name="add_resolution">Add Resolution</string>
-    <string name="invalid_resolution_format">Invalid resolution format, please use width x height format</string>
     <string name="resolution_already_exists">This resolution already exists</string>
-    <string name="resolution_added_successfully">Resolution added successfully</string>
+    <string name="custom_resolution_add_short">Add</string>
+    <string name="custom_resolution_info_contentdesc">Usage note</string>
+    <string name="custom_resolution_info_tooltip">Do not use this feature unless necessary — it is only meant for special cases that require avoiding the standard resolution list.</string>
+    <string name="custom_resolution_field_width">Width</string>
+    <string name="custom_resolution_field_height">Height</string>
+    <string name="custom_resolution_readout_hint">Aspect ratio appears as you type</string>
+    <!-- Arg is locale-scaled (see resolutionPixelsText): zh receives 万 (px/10000), others receive MP (px/1000000). Keep the unit consistent with the scale. -->
+    <string name="custom_resolution_pixels_format">%1$.1f MP</string>
+    <string name="custom_resolution_error_empty_width">Enter a width</string>
+    <string name="custom_resolution_error_empty_height">Enter a height</string>
+    <string name="custom_resolution_error_range_width">Width must be between 320 and 7680</string>
+    <string name="custom_resolution_error_range_height">Height must be between 240 and 4320</string>
+    <string name="custom_resolution_error_even_width">Width must be an even number</string>
+    <string name="custom_resolution_error_even_height">Height must be an even number</string>
+    <string name="custom_resolution_empty_title">No custom resolutions yet</string>
+    <string name="custom_resolution_empty_hint">Enter width and height above, or tap a preset</string>
+    <string name="custom_resolution_tag_8k">8K</string>
+    <string name="custom_resolution_tag_4k">4K</string>
+    <string name="custom_resolution_tag_2k">2K</string>
+    <string name="custom_resolution_tag_1080p">1080p</string>
+    <string name="custom_resolution_tag_ultrawide">Ultrawide</string>
+    <string name="custom_resolution_tag_portrait">Portrait</string>
+    <string name="custom_resolution_delete_contentdesc">Delete %1$d×%2$d</string>
 
     <string name="category_audio_settings">Audio</string>
     <string name="category_microphone_settings">Microphone</string>
@@ -349,6 +366,7 @@
     <string name="title_seekbar_deadzone">Analog stick deadzone</string>
     <string name="summary_seekbar_deadzone">Ignore stick movement inside this radius. Some games apply an additional, larger deadzone.</string>
     <string name="suffix_seekbar_deadzone">%</string>
+    <string name="toast_zero_deadzone_warning" formatted="false">0% deadzone sends every non-zero stick movement. Controller drift may cause unintended movement.</string>
     <string name="title_checkbox_xb1_driver">Xbox 360/One USB gamepad driver</string>
     <string name="summary_checkbox_xb1_driver">Enables a built-in USB driver for devices without native Xbox controller support</string>
     <string name="title_dualsense_direct_bluetooth">DualSense system Bluetooth output (experimental)</string>
@@ -468,6 +486,8 @@
     <string name="category_input_settings">Input</string>
     <string name="title_checkbox_touchscreen_trackpad">Use the touchscreen as a trackpad</string>
     <string name="summary_checkbox_touchscreen_trackpad">If enabled, the touchscreen acts like a trackpad. If disabled, multi-point touch will be enabled.</string>
+    <string name="title_checkbox_touch_keyboard_auto_invoke">Auto-invoke the PC touch keyboard</string>
+    <string name="summary_checkbox_touch_keyboard_auto_invoke">When enabled, the streamed PC shows its touch keyboard when a text field gains focus (Sunshine hosts with the virtual touchscreen).</string>
 
     <string name="title_checkbox_sync_touch_event_with_display">Align touch delivery with display refresh</string>
     <string name="summary_checkbox_sync_touch_event_with_display">Batch touch updates to the local display refresh cadence. This may improve consistency but can add input delay.</string>
@@ -511,15 +531,15 @@
     <string name="dialog_title_fixed_x_velocity">Set fixed X (horizontal) velocity in pixels. Set 0 to disable fixed x velocity.</string>
     <string name="suffix_fixed_x_velocity">pixels</string>
 
-    <string name="category_on_screen_controls_settings">On-screen controls</string>
+    <string name="category_on_screen_controls_settings">On-screen virtual gamepad buttons</string>
     <string name="title_checkbox_show_onscreen_controls">Show on-screen controls</string>
     <string name="summary_checkbox_show_onscreen_controls">Show virtual controller overlay on touchscreen</string>
     <string name="title_checkbox_vibrate_osc">Enable vibration</string>
     <string name="summary_checkbox_vibrate_osc">Vibrates your device to emulate rumble for the on-screen controls</string>
     <string name="title_only_l3r3">Only show L3 and R3</string>
     <string name="summary_only_l3r3">Hide all virtual buttons except L3 and R3</string>
-    <string name="title_show_guide_button">Show Guide Button</string>
-    <string name="summary_show_guide_button">Show the guide button on screen</string>
+    <string name="title_show_guide_button">Show controller Guide/Home button</string>
+    <string name="summary_show_guide_button">Show the native controller Guide/Home button on the virtual gamepad. This is not the Win+G keyboard shortcut.</string>
     <string name="title_reset_osc">Clear saved on-screen controls layout</string>
     <string name="summary_reset_osc">Resets all on-screen controls to their default size and position</string>
     <string name="dialog_title_reset_osc">Reset Layout</string>
@@ -630,7 +650,7 @@
     <string name="summary_checkbox_resume_stream">Automatically resume the stream when returning to Moonlight from the background</string>
 
     <string name="category_host_settings">Host</string>
-    <string name="title_checkbox_enable_sops">Match game settings to the stream</string>
+    <string name="title_checkbox_enable_sops">Optimize game settings</string>
     <string name="summary_checkbox_enable_sops">Allow compatible host software to adjust supported games for the requested stream resolution and quality. Changes are made on the host.</string>
     <string name="title_checkbox_host_audio">Play audio on PC</string>
     <string name="summary_checkbox_host_audio">Play audio from the computer and this device</string>
@@ -675,7 +695,7 @@
     <string name="summary_hdr_peak_brightness_nits">Higher values make Sunshine target a brighter HDR display. Reconnect the stream after changing this.</string>
     <string name="suffix_hdr_peak_brightness_nits">nits</string>
     <string name="title_hdr_mode">HDR format</string>
-    <string name="summary_hdr_mode">Choose HDR10 (PQ), HDR10+, HLG, or Dolby Vision 8.1 (experimental). HDR10+ requires Dynamic Metadata Analysis to be enabled in Sunshine.</string>
+    <string name="summary_hdr_mode">Choose HDR10 (PQ), HDR10+, HLG, Dolby Vision 8.1 (experimental), or Dolby Vision 8.4 HLG (use if 8.1 shows no picture). HDR10+ requires Dynamic Metadata Analysis to be enabled in Sunshine.</string>
     <string name="hdr_mode_hdr10">HDR10 (PQ)</string>
     <string name="hdr_mode_hdr10_plus">HDR10+ (requires Dynamic Metadata Analysis)</string>
     <string name="hdr_mode_hlg">HLG (Hybrid Log-Gamma)</string>
@@ -690,7 +710,8 @@
     <string name="summary_hdr_manual_value">Current value: %1$d nits</string>
     <string name="summary_hdr_manual_min_value">Current value: %1$s nits</string>
     <string name="toast_invalid_hdr_brightness_value">Enter a valid brightness value.</string>
-    <string name="hdr_mode_dolby_vision">Dolby Vision 8.1 (Experimental)</string>
+    <string name="hdr_mode_dolby_vision">Dolby Vision 8.1 (use this first)</string>
+    <string name="hdr_mode_dolby_vision_84">Dolby Vision 8.4 HLG (use if 8.1 shows no picture)</string>
     <string name="title_full_range">Force full color range (Experimental)</string>
     <string name="summary_full_range">Requests full-range video from the host and decodes it as full range. Leave this off unless limited/full range mismatch makes the picture look washed out or crushes shadow and highlight detail. This is separate from HDR.</string>
     <string name="title_enable_perf_overlay">Show performance stats while streaming</string>
@@ -998,8 +1019,8 @@
     <string name="toast_elements_hidden">Buttons hidden</string>
     <string name="toast_back_key_menu_switch_1">Exited Crown configuration</string>
     <string name="toast_back_key_menu_switch_2">Entered Crown configuration</string>
-    <string name="game_menu_edit_mode">Button Layout</string>
-    <string name="game_menu_configure_settings">Crown Profiles</string>
+    <string name="game_menu_edit_mode">Edit Button Layout</string>
+    <string name="game_menu_configure_settings">Switch Config</string>
     
     <!-- External display -->
     <string name="title_use_external_display">Send stream to external display</string>
@@ -1106,7 +1127,29 @@
     <string name="game_menu_touch_mode_ds5_summary">Screen becomes a DualSense touchpad; tap or firm press to click</string>
     <string name="game_menu_touch_mode_primary_group">Primary input mode (choose one)</string>
     <string name="game_menu_touch_mode_compatible_group">Compatible options</string>
-    <string name="game_menu_touch_mode_preview_title">Current mode</string>
+    <string name="game_menu_touch_pointer_speed">Pointer-zone speed</string>
+    <string name="game_menu_touch_pointer_speed_value">%1$d%%</string>
+    <string name="game_menu_touch_pointer_pixels_value">%1$d pixels</string>
+    <string name="game_menu_touch_pointer_speed_summary">Only affects the pointer-control zone in split direct touch. New gestures use the updated speed.</string>
+    <string name="game_menu_touch_pointer_zone_position">Pointer zone position</string>
+    <string name="game_menu_touch_pointer_saved_presets">Saved presets</string>
+    <string name="game_menu_touch_pointer_save_preset">Create preset</string>
+    <string name="game_menu_touch_pointer_manage_presets">Manage presets</string>
+    <string name="game_menu_touch_pointer_no_presets">No saved presets</string>
+    <string name="game_menu_touch_pointer_preset_limit">Up to 12 presets can be saved</string>
+    <string name="game_menu_touch_pointer_presets_deleted">Deleted %1$d preset(s)</string>
+    <string name="game_menu_touch_pointer_default_preset_name">Preset%1$d</string>
+    <string name="game_menu_touch_pointer_create_preset">Create preset</string>
+    <string name="game_menu_touch_pointer_edit_preset">Edit preset</string>
+    <string name="game_menu_touch_pointer_delete_presets">Delete presets</string>
+    <string name="game_menu_touch_pointer_preset_name">Preset name</string>
+    <string name="game_menu_touch_pointer_preset_name_hint">Preset name</string>
+    <string name="game_menu_touch_pointer_preset_name_error">Enter 1–%1$d printable characters</string>
+    <string name="game_menu_touch_pointer_preset_fields">Replace these fields</string>
+    <string name="game_menu_touch_pointer_preset_field_count">%1$d fields</string>
+    <string name="game_menu_touch_pointer_preset_no_fields">Select at least one field</string>
+    <string name="game_menu_touch_pointer_side_left">Left</string>
+    <string name="game_menu_touch_pointer_side_right">Right</string>
     <string name="toast_ds5_touchpad_unsupported">Host doesn\'t support DS5 touchpad; touches fall back to the previous mode</string>
     <string name="game_menu_current_selection">Current: %1$s</string>
     <string name="game_menu_trackpad_double_click_drag">Double-tap and hold to drag</string>
@@ -1141,6 +1184,27 @@
     <string name="dialog_button_cancel">CANCEL</string>
     <string name="dialog_button_clear">CLEAR</string>
     <string name="dialog_virtual_keyboard_hint">Select keys to create a combination</string>
+    <string name="keyboard_picker_main">Main</string>
+    <string name="keyboard_picker_nav">Navigation</string>
+    <string name="keyboard_picker_num">Numpad</string>
+    <string name="keyboard_picker_main_description">Main keyboard keys</string>
+    <string name="keyboard_picker_nav_description">Function and navigation keys</string>
+    <string name="keyboard_picker_num_description">Numeric keypad</string>
+    <string name="keyboard_key_right_win" translatable="false">R-Win</string>
+    <string name="keyboard_key_menu" translatable="false">Menu</string>
+    <string name="crown_key_mouse_left_short">L</string>
+    <string name="crown_key_mouse_middle_short">M</string>
+    <string name="crown_key_mouse_right_short">R</string>
+    <string name="crown_key_scroll_up_short">WU</string>
+    <string name="crown_key_scroll_down_short">WD</string>
+    <string name="crown_key_dpad_up_short">Up</string>
+    <string name="crown_key_dpad_down_short">Down</string>
+    <string name="crown_key_dpad_left_short">Left</string>
+    <string name="crown_key_dpad_right_short">Right</string>
+    <string name="crown_key_start_short">Start</string>
+    <string name="crown_key_guide_short">Guide</string>
+    <string name="crown_key_back_short">Back</string>
+    <string name="crown_key_guide_description">Native controller Guide/Home button</string>
 
     <!-- 删除自定义按键对话框 -->
     <string name="dialog_title_select_keys_to_delete">Select Custom Keys to Delete</string>
@@ -1309,6 +1373,11 @@
     <string name="suffix_seekbar_output_buffer_queue_limit">frames</string>
     <string name="title_force_mtk_max_operating_rate">Force MediaTek decoder maximum rate (Experimental)</string>
     <string name="summary_force_mtk_max_operating_rate">Compatibility override for MediaTek decoders only. It may reduce latency on some devices, but can cause severe delay on others. Leave off unless testing a known MediaTek decoder issue.</string>
+    <string name="title_hevc_low_latency_mode">HEVC low-latency decoding</string>
+    <string name="summary_hevc_low_latency_mode">Amlogic-based TV boxes can turn HEVC video into a slideshow when decoder low-latency mode is enabled. Auto skips low-latency options on Amlogic HEVC decoders (adds 1–2 frames of latency on those devices only). Off disables them for all HEVC and Dolby Vision streams; On restores the previous behavior.</string>
+    <string name="hevc_low_latency_auto">Auto</string>
+    <string name="hevc_low_latency_on">On</string>
+    <string name="hevc_low_latency_off">Off</string>
 
     <!-- Frame Generation -->
     <string name="title_developer_unlock">Unlock developer features</string>

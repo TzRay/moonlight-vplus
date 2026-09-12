@@ -19,7 +19,8 @@ internal object ColorRangePolicy {
 
     fun hdrDataSpace(hdrMode: Int, colorRange: Int): Int {
         val fullRange = isFullRange(colorRange)
-        return if (hdrMode == MoonBridge.HDR_MODE_HLG) {
+        // DV 8.4 回退到 HEVC 时仍是 HLG 基础层，不能套用 PQ 输出色彩空间。
+        return if (HdrModePolicy.toProtocolMode(hdrMode) == MoonBridge.HDR_MODE_HLG) {
             if (fullRange) {
                 MoonBridge.DATASPACE_BT2020_HLG_FULL
             } else {

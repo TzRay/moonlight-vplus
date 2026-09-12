@@ -11,3 +11,13 @@
 	*** dialogSnapshot*(...);
 }
 -keep class com.limelight.utils.AboutDialogLauncher$DialogSnapshot { *; }
+
+# Instrumentation invokes these target-APK symbols after the debug APK is minified.
+-keep class com.limelight.gamemenu.TouchPointerSensitivity** { *; }
+-keep class com.limelight.gamemenu.TouchPointerPreset** { *; }
+-keep class com.limelight.gamemenu.GameMenuCardsKt { *; }
+# USB panel instrumentation renders state and exercises controller navigation.
+-keep class com.limelight.UsbDevicePanelKt { *; }
+-keep class com.limelight.UsbPanelDevice { *; }
+-keep class com.limelight.UsbDeviceType** { *; }
+-keep class com.limelight.utils.AppActionSheet** { *; }

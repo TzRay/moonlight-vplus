@@ -7,6 +7,21 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ColorRangePolicyTest {
+    /** 合并后 DV 8.4 的 HEVC 回退必须保留 HLG，且不能改变用户选择的量化范围。 */
+    @Test
+    fun dolbyVisionFallbackKeepsItsBaseLayerTransferAndRange() {
+        for (range in listOf(MoonBridge.COLOR_RANGE_LIMITED, MoonBridge.COLOR_RANGE_FULL)) {
+            assertEquals(
+                ColorRangePolicy.hdrDataSpace(MoonBridge.HDR_MODE_HLG, range),
+                ColorRangePolicy.hdrDataSpace(MoonBridge.HDR_MODE_DOLBY_VISION_84, range),
+            )
+            assertEquals(
+                ColorRangePolicy.hdrDataSpace(MoonBridge.HDR_MODE_HDR10, range),
+                ColorRangePolicy.hdrDataSpace(MoonBridge.HDR_MODE_DOLBY_VISION, range),
+            )
+        }
+    }
+
     @Test
     fun defaultPreferenceKeepsEveryTransferModeLimited() {
         val colorRange = ColorRangePolicy.fromPreference(fullRange = false)
