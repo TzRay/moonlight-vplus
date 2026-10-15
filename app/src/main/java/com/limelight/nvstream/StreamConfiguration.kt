@@ -18,6 +18,8 @@ class StreamConfiguration private constructor() {
     var clientRefreshRateX100: Int = 0
         private set
     var bitrate: Int = 10000
+    var fecPercentage: Int = -2
+        private set
     private var hostResolutionScaleX100: Int = 100
     var sops: Boolean = true
         private set
@@ -63,6 +65,10 @@ class StreamConfiguration private constructor() {
         private set
     /** Requested AC3/E-AC3 bitrate in bits/sec. 0 = use server default. */
     var audioBitrate: Int = 0
+    var hostGamepad: String? = null
+        private set
+    var authoredPcmHaptics: Boolean = false
+        private set
 
     /** Sunshine dynamic HDR negotiation (client opt-in). All zero = legacy client. */
     var dynamicHdrCaps: Int = MoonBridge.DYNAMIC_HDR_CAPS_NONE
@@ -92,6 +98,10 @@ class StreamConfiguration private constructor() {
         fun setRefreshRate(refreshRate: Int): Builder = apply { config.refreshRate = refreshRate }
         fun setLaunchRefreshRate(refreshRate: Int): Builder = apply { config.launchRefreshRate = refreshRate }
         fun setBitrate(bitrate: Int): Builder = apply { config.bitrate = bitrate }
+        fun setFecPercentage(percentage: Int): Builder = apply {
+            require(percentage in -2..100)
+            config.fecPercentage = percentage
+        }
         fun setResolutionScale(scale: Int): Builder = apply { config.hostResolutionScaleX100 = scale }
         fun setEnableSops(enable: Boolean): Builder = apply { config.sops = enable }
         fun enableAdaptiveResolution(enable: Boolean): Builder = apply { config.enableAdaptiveResolution = enable }
@@ -144,6 +154,13 @@ class StreamConfiguration private constructor() {
         fun setEnableMic(enable: Boolean): Builder = apply { config.enableMic = enable }
         fun setControlOnly(controlOnly: Boolean): Builder = apply { config.controlOnly = controlOnly }
         fun setAudioCodec(codec: Int): Builder = apply { config.audioCodec = codec }
+        fun setHostGamepad(value: String?): Builder = apply {
+            require(value == null || value in setOf("auto", "x360", "ds4", "ds5"))
+            config.hostGamepad = value
+        }
+
+        fun setAuthoredPcmHaptics(enabled: Boolean): Builder = apply { config.authoredPcmHaptics = enabled }
+
         fun setAudioBitrate(bitrate: Int): Builder = apply { config.audioBitrate = bitrate }
 
         /**

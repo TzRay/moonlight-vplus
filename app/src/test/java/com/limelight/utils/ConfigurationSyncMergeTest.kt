@@ -5,6 +5,7 @@ import com.google.gson.JsonElement
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
 import com.google.gson.JsonPrimitive
+import com.limelight.binding.input.MouseAxisCorrection
 import com.limelight.preferences.TouchPointerPresetPreferences
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -13,6 +14,31 @@ import org.junit.Assert.fail
 import org.junit.Test
 
 class ConfigurationSyncMergeTest {
+    @Test
+    fun mergePreservesMouseAxisCorrectionWhenAnotherPackageHasNoSetting() {
+        for (correction in MouseAxisCorrection.entries) {
+            val configured = syncPackage(
+                deviceId = "device-a",
+                defaultValues = values(
+                    "list_mouse_axis_correction" to typedValue(
+                        "string", JsonPrimitive(correction.preferenceValue), 1000L, "device-a"
+                    )
+                )
+            )
+            val unconfigured = syncPackage(deviceId = "device-b")
+
+            val merged = preferenceValues(
+                ConfigurationSyncManager.mergeSyncPackagesForTest(listOf(configured, unconfigured)),
+                "defaultPreferences"
+            )
+
+            assertTrue(merged.has("list_mouse_axis_correction"))
+            val encoded = merged["list_mouse_axis_correction"].asJsonObject
+            assertEquals("string", encoded["type"].asString)
+            assertEquals(correction.preferenceValue, encoded["value"].asString)
+        }
+    }
+
     @Test
     fun mergeUnionsDedicatedTouchPointerPresetsById() {
         val presetA = "00000000-0000-0000-0000-000000000001"
@@ -421,6 +447,42 @@ class ConfigurationSyncMergeTest {
         assertEquals("bbbbbbbbbbbbbbbb", pairing["uniqueId"].asString)
         assertEquals(1, computers.size())
         assertEquals("new-host", computers[0].asJsonObject["uuid"].asString)
+    }
+
+    @Test
+    fun customFrameRateCountsAreIncludedInPreviewAndImportTotals() {
+        val preview = ConfigurationSyncManager.PackagePreview(
+            schemaVersion = 2,
+            appVersionCode = 1L,
+            appVersionName = "test",
+            exportedAt = 1000L,
+            defaultPreferenceCount = 1,
+            appLastSettingsCount = 2,
+            customFrameRatesCount = 3,
+            customResolutionsCount = 4,
+            sceneConfigsCount = 5,
+            appViewPreferenceCount = 6,
+            hiddenAppsCount = 7,
+            crownProfilesCount = 8,
+            pairedComputersCount = 9,
+            hasPairingIdentity = true
+        )
+        val importResult = ConfigurationSyncManager.ImportResult(
+            defaultPreferencesImported = 1,
+            appLastSettingsImported = 2,
+            customFrameRatesImported = 3,
+            customResolutionsImported = 4,
+            sceneConfigsImported = 5,
+            appViewPreferencesImported = 6,
+            hiddenAppsImported = 7,
+            crownProfilesImported = 8,
+            crownProfilesFailed = 0,
+            pairingItemsImported = 9,
+            pairingItemsFailed = 0
+        )
+
+        assertEquals(46, preview.totalItems)
+        assertEquals(45, importResult.totalImported)
     }
 
     @Test

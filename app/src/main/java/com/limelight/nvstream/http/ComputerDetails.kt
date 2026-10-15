@@ -46,6 +46,7 @@ class ComputerDetails {
     var name: String? = null
     var localAddress: AddressTuple? = null
     var remoteAddress: AddressTuple? = null
+    var remoteAddressFromStun = false
     var manualAddress: AddressTuple? = null
     var ipv6Address: AddressTuple? = null
     var macAddress: String? = null
@@ -76,6 +77,15 @@ class ComputerDetails {
         update(details)
     }
 
+    internal val canRefreshRemoteAddressWithStun: Boolean
+        get() = remoteAddress == null || remoteAddressFromStun
+
+    internal fun updateStunRemoteAddress(address: AddressTuple) {
+        if (!canRefreshRemoteAddressWithStun) return
+        remoteAddress = address
+        remoteAddressFromStun = true
+    }
+
     fun guessExternalPort(): Int {
         if (externalPort != 0) return externalPort
         if (remoteAddress != null) return (remoteAddress?.port ?: 0)
@@ -96,8 +106,9 @@ class ComputerDetails {
         if (details.localAddress != null && details.localAddress?.address?.startsWith("127.") != true) {
             this.localAddress = details.localAddress
         }
-        if (details.remoteAddress != null) {
+        if (details.remoteAddress != null && (!details.remoteAddressFromStun || canRefreshRemoteAddressWithStun)) {
             this.remoteAddress = details.remoteAddress
+            this.remoteAddressFromStun = details.remoteAddressFromStun
         } else if (this.remoteAddress != null && details.externalPort != 0) {
             this.remoteAddress?.port = details.externalPort
         }
@@ -148,14 +159,14 @@ class ComputerDetails {
         return availableAddresses.size > 1
     }
 
-    fun getAddressTypeDescription(address: AddressTuple?): String {
+    fun getAddressTypeDescription(context: android.content.Context, address: AddressTuple?): String {
         if (address == null) return ""
 
-        if (address == localAddress) return "本地网络"
-        if (address == remoteAddress) return "远程网络"
-        if (address == manualAddress) return "手动配置"
-        if (address == ipv6Address) return "IPv6网络"
-        return "其他网络"
+        if (address == localAddress) return context.getString(com.limelight.R.string.address_local)
+        if (address == remoteAddress) return context.getString(com.limelight.R.string.address_remote)
+        if (address == manualAddress) return context.getString(com.limelight.R.string.address_manual)
+        if (address == ipv6Address) return context.getString(com.limelight.R.string.address_ipv6)
+        return context.getString(com.limelight.R.string.address_other)
     }
 
     fun getLanIpv4Addresses(): List<AddressTuple> {

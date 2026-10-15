@@ -28,11 +28,13 @@ import androidx.compose.ui.input.InputMode
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsFocused
+import androidx.compose.ui.test.click
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performKeyInput
+import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.pressKey
 import androidx.compose.ui.test.requestFocus
 import androidx.compose.ui.platform.testTag
@@ -188,15 +190,17 @@ class GameMenuComposeFocusTest {
             val initialFocusRequester = remember { FocusRequester() }
             val inputModeManager = LocalInputModeManager.current
             var focusRequestToken by remember { mutableIntStateOf(1) }
+            var handledFocusRequestToken by remember { mutableIntStateOf(0) }
             var contentLaidOut by remember { mutableStateOf(false) }
             var menuHasFocus by remember { mutableStateOf(false) }
             refreshHardwareFocus = { focusRequestToken++ }
 
-            LaunchedEffect(focusRequestToken, contentLaidOut) {
+            LaunchedEffect(focusRequestToken, handledFocusRequestToken, menuHasFocus, contentLaidOut) {
                 if (shouldRequestGameMenuFocus(
                         hardwareFocusRequestToken = focusRequestToken,
+                        handledHardwareFocusRequestToken = handledFocusRequestToken,
                         guideActive = false,
-                        hasOptions = true,
+                        hasFocusTarget = true,
                         menuContentLaidOut = contentLaidOut,
                         menuHasFocus = menuHasFocus
                     )
@@ -208,7 +212,12 @@ class GameMenuComposeFocusTest {
 
             Column(
                 modifier = Modifier
-                    .onFocusChanged { menuHasFocus = it.hasFocus }
+                    .onFocusChanged {
+                        menuHasFocus = it.hasFocus
+                        if (it.hasFocus) {
+                            handledFocusRequestToken = focusRequestToken
+                        }
+                    }
                     .focusGroup()
                     .onGloballyPositioned { contentLaidOut = true }
             ) {
@@ -270,6 +279,34 @@ class GameMenuComposeFocusTest {
             pressKey(Key.Enter)
         }
         assertTrue(advanced.get())
+    }
+
+    @Test
+    fun featureGuideTouchActivatesNonFocusedButtonOnce() {
+        val skipped = AtomicBoolean(false)
+
+        composeTestRule.setContent {
+            CuteFeatureGuideCard(
+                eyebrow = "Guide",
+                title = "Touch focus",
+                body = "Touching the other action should activate it immediately.",
+                actionLabel = "Next",
+                onAction = {},
+                onSkip = { skipped.set(true) },
+                hardwareFocusRequestToken = 1
+            )
+        }
+
+        val skipLabel = androidx.test.platform.app.InstrumentationRegistry
+            .getInstrumentation()
+            .targetContext
+            .getString(R.string.feature_guide_skip)
+
+        composeTestRule.onNodeWithText("Next").assertIsFocused()
+        composeTestRule.onNodeWithText(skipLabel).performTouchInput { click() }
+        composeTestRule.waitForIdle()
+
+        assertTrue("A touch on the non-focused guide action must click once", skipped.get())
     }
 
     @Test

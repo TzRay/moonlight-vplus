@@ -18,6 +18,7 @@ import android.os.VibratorManager
 import com.limelight.LimeLog
 import com.limelight.binding.input.driver.AbstractController
 import com.limelight.binding.input.driver.DualSenseAdaptiveTriggerEffect
+import com.limelight.binding.input.haptics.SingleMotorRumbleFold
 import com.limelight.nvstream.input.ControllerPacket
 import com.limelight.nvstream.jni.MoonBridge
 
@@ -239,10 +240,10 @@ class ControllerRumbleManager(private val handler: ControllerHandler) {
         highFreqMotor: Short,
         durationMs: Long = 60_000L
     ) {
-        // Since we can only use a single amplitude value, compute the desired amplitude
-        // by taking 80% of the big motor and 33% of the small motor, then capping to 255.
+        // Since we can only use a single amplitude value, compute the desired amplitude with the
+        // shared single-motor fold (the one place that owns those weights).
         // NB: This value is now 0-255 as required by VibrationEffect.
-        val simulatedAmplitude = simulatedAmplitude(lowFreqMotor, highFreqMotor)
+        val simulatedAmplitude = SingleMotorRumbleFold.amplitude(lowFreqMotor, highFreqMotor)
         vibrateSingleAmplitude(vibrator, simulatedAmplitude, durationMs)
     }
 
@@ -324,12 +325,6 @@ class ControllerRumbleManager(private val handler: ControllerHandler) {
         }
     }
 
-    private fun simulatedAmplitude(lowFreqMotor: Short, highFreqMotor: Short): Int {
-        val lowFreqMotorMSB = (lowFreqMotor.toInt() shr 8) and 0xFF
-        val highFreqMotorMSB = (highFreqMotor.toInt() shr 8) and 0xFF
-        return Math.min(255, ((lowFreqMotorMSB * 0.80) + (highFreqMotorMSB * 0.33)).toInt())
-    }
-
     private fun usbRumbleOutput(device: AbstractController): UsbRumbleOutput =
         synchronized(usbRumbleOutputsLock) {
             val controllerId = device.getControllerId()
@@ -363,6 +358,7 @@ class ControllerRumbleManager(private val handler: ControllerHandler) {
 
         for (i in 0 until handler.inputDeviceContexts.size()) {
             val deviceContext = handler.inputDeviceContexts.valueAt(i)
+            if (!handler.isContextUsable(deviceContext)) continue
 
             if (handler.prefConfig.multiController && !deviceContext.assignedControllerNumber) {
                 continue
@@ -384,6 +380,7 @@ class ControllerRumbleManager(private val handler: ControllerHandler) {
         }
 
         for (deviceContext in handler.driverControllerContexts.values) {
+            if (!handler.isContextUsable(deviceContext)) continue
 
             if (handler.prefConfig.multiController && !deviceContext.assignedControllerNumber) {
                 continue
@@ -446,6 +443,7 @@ class ControllerRumbleManager(private val handler: ControllerHandler) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             for (i in 0 until handler.inputDeviceContexts.size()) {
                 val deviceContext = handler.inputDeviceContexts.valueAt(i)
+                if (!handler.isContextUsable(deviceContext)) continue
 
                 if (handler.prefConfig.multiController && !deviceContext.assignedControllerNumber) {
                     continue
@@ -475,6 +473,7 @@ class ControllerRumbleManager(private val handler: ControllerHandler) {
         }
 
         for (deviceContext in handler.driverControllerContexts.values) {
+            if (!handler.isContextUsable(deviceContext)) continue
 
             if (handler.prefConfig.multiController && !deviceContext.assignedControllerNumber) {
                 continue
@@ -512,6 +511,7 @@ class ControllerRumbleManager(private val handler: ControllerHandler) {
         val triggers = AdaptiveTriggers(eventFlags, typeLeft, typeRight, left, right)
         for (i in 0 until handler.inputDeviceContexts.size()) {
             val deviceContext = handler.inputDeviceContexts.valueAt(i)
+            if (!handler.isContextUsable(deviceContext)) continue
             if (handler.prefConfig.multiController && !deviceContext.assignedControllerNumber) {
                 continue
             }
@@ -532,6 +532,7 @@ class ControllerRumbleManager(private val handler: ControllerHandler) {
             }
         }
         for (deviceContext in handler.driverControllerContexts.values) {
+            if (!handler.isContextUsable(deviceContext)) continue
             if (handler.prefConfig.multiController && !deviceContext.assignedControllerNumber) {
                 continue
             }
@@ -561,6 +562,7 @@ class ControllerRumbleManager(private val handler: ControllerHandler) {
         }
 
         for (deviceContext in handler.driverControllerContexts.values) {
+            if (!handler.isContextUsable(deviceContext)) continue
             if (handler.prefConfig.multiController && !deviceContext.assignedControllerNumber) {
                 continue
             }
@@ -569,7 +571,7 @@ class ControllerRumbleManager(private val handler: ControllerHandler) {
                     // Post to the background thread: USB transfers can block and this
                     // arrives on the common-c callback thread.
                     handler.backgroundThreadHandler.post {
-                        device.setControllerLED(r, g, b)
+                        if (handler.isContextUsable(deviceContext)) device.setControllerLED(r, g, b)
                     }
                 }
             }
@@ -578,6 +580,7 @@ class ControllerRumbleManager(private val handler: ControllerHandler) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             for (i in 0 until handler.inputDeviceContexts.size()) {
                 val deviceContext = handler.inputDeviceContexts.valueAt(i)
+                if (!handler.isContextUsable(deviceContext)) continue
 
                 if (deviceContext.controllerNumber == controllerNumber &&
                     deviceContext.directDualSenseBluetoothOutput?.updateLightbar(r, g, b) == true
@@ -587,28 +590,58 @@ class ControllerRumbleManager(private val handler: ControllerHandler) {
 
                 // Ignore input devices without an RGB LED
                 if (deviceContext.controllerNumber == controllerNumber && deviceContext.hasRgbLed) {
-                    // Create a new light session if one doesn't already exist
-                    if (deviceContext.lightsSession == null) {
-                        deviceContext.lightsSession = deviceContext.inputDevice!!.lightsManager.openSession()
-                    }
+                    // The lock keeps this open/request from interleaving with the main
+                    // thread transferring the session in migrateContext() or closing it
+                    // in destroy(). updateLightbar() above stays outside: it's a blocking
+                    // BT/USB write that must not stall the main thread behind this lock.
+                    synchronized(handler.lightsSessionLock) {
+                        // This context was read from the map before the lock was taken,
+                        // so re-validate it: the main thread may have migrated it
+                        // (onInputDeviceChanged), removed it (onInputDeviceRemoved),
+                        // or torn the handler down while we waited. Opening a session on
+                        // a stale context would leak it with nothing left to close it.
+                        if (!handler.isContextUsable(deviceContext) ||
+                            handler.inputDeviceContexts.get(deviceContext.id) !== deviceContext
+                        ) {
+                            return@synchronized
+                        }
+                        try {
+                            // Create a new light session if one doesn't already exist
+                            if (deviceContext.lightsSession == null) {
+                                deviceContext.lightsSession = deviceContext.inputDevice!!.lightsManager.openSession()
+                            }
 
-                    // Convert the RGB components into the integer value that LightState uses
-                    val argbValue = 0xFF000000.toInt() or
-                            ((r.toInt() shl 16) and 0xFF0000) or
-                            ((g.toInt() shl 8) and 0xFF00) or
-                            (b.toInt() and 0xFF)
-                    val lightState = LightState.Builder().setColor(argbValue).build()
+                            // Convert the RGB components into the integer value that LightState uses
+                            val argbValue = 0xFF000000.toInt() or
+                                    ((r.toInt() shl 16) and 0xFF0000) or
+                                    ((g.toInt() shl 8) and 0xFF00) or
+                                    (b.toInt() and 0xFF)
+                            val lightState = LightState.Builder().setColor(argbValue).build()
 
-                    // Set the RGB value for each RGB-controllable LED on the device
-                    val lightsRequestBuilder = LightsRequest.Builder()
-                    for (light in deviceContext.inputDevice!!.lightsManager.lights) {
-                        if (light.hasRgbControl()) {
-                            lightsRequestBuilder.addLight(light, lightState)
+                            // Set the RGB value for each RGB-controllable LED on the device
+                            val lightsRequestBuilder = LightsRequest.Builder()
+                            for (light in deviceContext.inputDevice!!.lightsManager.lights) {
+                                if (light.hasRgbControl()) {
+                                    lightsRequestBuilder.addLight(light, lightState)
+                                }
+                            }
+
+                            // Apply the LED changes
+                            deviceContext.lightsSession!!.requestLights(lightsRequestBuilder.build())
+                        } catch (e: Exception) {
+                            // openSession()/requestLights() are Binder calls into
+                            // system_server, which some OEM ROMs crash server-side during
+                            // device re-enumeration. Drop the session so the next command
+                            // starts over instead of killing the callback thread.
+                            LimeLog.warning("Failed to update RGB LED: $e")
+                            val failedSession = deviceContext.lightsSession
+                            deviceContext.lightsSession = null
+                            try {
+                                failedSession?.close()
+                            } catch (ignored: Exception) {
+                            }
                         }
                     }
-
-                    // Apply the LED changes
-                    deviceContext.lightsSession!!.requestLights(lightsRequestBuilder.build())
                 }
             }
         }
@@ -617,6 +650,7 @@ class ControllerRumbleManager(private val handler: ControllerHandler) {
     // This must not be called on the main thread due to risk of ANRs!
     @TargetApi(31)
     fun sendControllerBatteryPacket(context: InputDeviceContext) {
+        if (!handler.isContextUsable(context)) return
         val currentBatteryStatus: Int
         val currentBatteryCapacity: Float
 

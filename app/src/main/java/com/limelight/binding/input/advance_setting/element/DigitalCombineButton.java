@@ -186,11 +186,13 @@ public class DigitalCombineButton extends Element {
 
             @Override
             public void onRelease() {
-                value1SendHandler.sendEvent(false);
-                value2SendHandler.sendEvent(false);
-                value3SendHandler.sendEvent(false);
-                value4SendHandler.sendEvent(false);
+                // Release combinations in reverse order so modifiers remain held
+                // until every non-modifier key has been released.
                 value5SendHandler.sendEvent(false);
+                value4SendHandler.sendEvent(false);
+                value3SendHandler.sendEvent(false);
+                value2SendHandler.sendEvent(false);
+                value1SendHandler.sendEvent(false);
             }
         };
     }
@@ -656,6 +658,12 @@ public class DigitalCombineButton extends Element {
     protected void setElementTextSizePercent(int textSizePercent) {
         this.textSizePercent = textSizePercent;
         invalidate();
+    }
+
+    public static ContentValues getInitialInfo(Context context) {
+        ContentValues values = getInitialInfo();
+        values.put(COLUMN_STRING_ELEMENT_TEXT, context.getString(R.string.crown_combo_default));
+        return values;
     }
 
     public static ContentValues getInitialInfo() {

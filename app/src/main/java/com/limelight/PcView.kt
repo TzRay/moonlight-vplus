@@ -3,7 +3,6 @@ package com.limelight
 
 import java.io.File
 import java.io.FileNotFoundException
-import java.io.FileOutputStream
 import java.io.IOException
 import java.io.StringReader
 import java.net.UnknownHostException
@@ -18,9 +17,15 @@ import com.bumptech.glide.Glide
 import com.bumptech.glide.load.DecodeFormat
 import com.bumptech.glide.load.engine.DiskCacheStrategy
 import com.bumptech.glide.load.resource.bitmap.DownsampleStrategy
+import android.graphics.drawable.Drawable
 import com.bumptech.glide.request.FutureTarget
 import com.bumptech.glide.request.RequestOptions
+import com.bumptech.glide.request.target.CustomTarget
+import com.bumptech.glide.request.target.Target
+import com.bumptech.glide.request.transition.Transition
 import com.bumptech.glide.signature.ObjectKey
+import com.limelight.ui.ThemedActivity
+import com.limelight.utils.AppTheme
 import com.limelight.binding.PlatformBinding
 import com.limelight.binding.crypto.AndroidCryptoProvider
 import com.limelight.computers.ComputerManagerService
@@ -43,6 +48,9 @@ import com.limelight.nvstream.http.PairingManager.PairState
 import com.limelight.nvstream.wol.WakeOnLanSender
 import com.limelight.preferences.AddComputerManually
 import com.limelight.preferences.BackgroundSource
+import com.limelight.utils.background.PipwImages
+import com.limelight.utils.background.PipwImageStore
+import com.limelight.utils.background.BackgroundImageExport
 import com.limelight.preferences.CustomResolutionsStore
 import com.limelight.preferences.ResolutionValidator
 import com.limelight.preferences.GlPreferences
@@ -60,6 +68,7 @@ import com.limelight.utils.AnalyticsManager
 import com.limelight.utils.AppDialogStyler
 import com.limelight.utils.AppActionSheet
 import com.limelight.utils.AppCacheManager
+import com.limelight.utils.BgAccent
 import com.limelight.utils.CacheHelper
 import com.limelight.utils.HostCacheKey
 import com.limelight.utils.ConfigurationSyncScheduler
@@ -94,7 +103,6 @@ import org.json.JSONObject
 import org.xmlpull.v1.XmlPullParserException
 
 import android.annotation.SuppressLint
-import android.app.Activity
 import android.app.ActivityManager
 import android.app.AlertDialog
 import android.content.BroadcastReceiver
@@ -177,7 +185,7 @@ internal class PcViewExitGate(private val timeoutMillis: Long = 2_000L) {
     }
 }
 
-class PcView : Activity(), AdapterFragmentCallbacks, ShakeDetector.Listener, EasyTierController.VpnPermissionCallback {
+class PcView : ThemedActivity(), AdapterFragmentCallbacks, ShakeDetector.Listener, EasyTierController.VpnPermissionCallback {
 
     // Constants
     companion object {
@@ -223,6 +231,8 @@ class PcView : Activity(), AdapterFragmentCallbacks, ShakeDetector.Listener, Eas
     private lateinit var pcGridAdapter: PcGridAdapter
     private var pcListView: AbsListView? = null
     private var backgroundImageView: ImageView? = null
+    /** 当前主题 overlay 已使用的背景色相桶（用于检测背景刷新后的桶位变化）。 */
+    private var themedBgAccentBucket = Int.MIN_VALUE
     private var topSafeArea: Space? = null
 
     // State
@@ -255,6 +265,10 @@ class PcView : Activity(), AdapterFragmentCallbacks, ShakeDetector.Listener, Eas
     private val backgroundTargetLock = Any()
     private var backgroundLoadGeneration = 0
     private var backgroundFutureTarget: FutureTarget<Bitmap>? = null
+    /** 背景显示层的异步 Glide 请求（CustomTarget），换代时显式取消，防旧图迟到覆盖新图。 */
+    private var backgroundDisplayTarget: Target<Drawable>? = null
+    private var pipwBackgroundLease: PipwImageStore.Lease? = null
+    private var displayedBackgroundKey: String? = null
     private var lastBackgroundSource: BackgroundSource? = null
     private var backgroundPrefsListener: SharedPreferences.OnSharedPreferenceChangeListener? = null
 
@@ -309,6 +323,7 @@ class PcView : Activity(), AdapterFragmentCallbacks, ShakeDetector.Listener, Eas
         // androidx core-splashscreen backport shows the static icon over splash_bg and then
         // hands control to postSplashScreenTheme (AppTheme).
         val splashScreen = installSplashScreen()
+        themedBgAccentBucket = BgAccent.bucket(this)
         // Hold the splash on screen until PcView's real content view is inflated
         // (completeOnCreate -> initializeViews -> setContentView(activity_pc_view)).
         // Without this, the system fires onExitAnimationListener as soon as the
@@ -457,6 +472,7 @@ class PcView : Activity(), AdapterFragmentCallbacks, ShakeDetector.Listener, Eas
 
     override fun onDestroy() {
         AboutDialogLauncher.release(this)
+        UpdateManager.cleanup()
         super.onDestroy()
 
         uiScope.cancel()
@@ -471,6 +487,8 @@ class PcView : Activity(), AdapterFragmentCallbacks, ShakeDetector.Listener, Eas
         unregisterBackgroundReceiver()
         unregisterBackgroundPrefsListener()
         cancelPreviousBackgroundLoad()
+        pipwBackgroundLease?.close()
+        pipwBackgroundLease = null
 
         analyticsManager?.cleanup()
         if (pendingRefreshRunnable != null) {
@@ -713,7 +731,7 @@ class PcView : Activity(), AdapterFragmentCallbacks, ShakeDetector.Listener, Eas
             menu,
             R.drawable.ic_theme_mode,
             getString(R.string.pcview_toolbar_theme),
-            getThemeModeLabel(UiHelper.getAppThemeMode(this)),
+            getThemeSummary(),
             accent = true
         ) {
             popup.dismiss()
@@ -757,10 +775,10 @@ class PcView : Activity(), AdapterFragmentCallbacks, ShakeDetector.Listener, Eas
         accent: Boolean = false,
         onClick: () -> Unit
     ) {
-        val iconColor = ColorStateList.valueOf(ContextCompat.getColor(
-            this,
-            if (accent) R.color.app_dialog_accent_color else R.color.ui_shell_text_secondary
-        ))
+        val iconColor = ColorStateList.valueOf(
+            if (accent) UiHelper.accentColor(this)
+            else ContextCompat.getColor(this, R.color.ui_shell_text_secondary)
+        )
         val titleColor = ContextCompat.getColor(this, R.color.ui_shell_text_primary)
         val subtitleColor = ContextCompat.getColor(this, R.color.ui_shell_text_secondary)
 
@@ -817,34 +835,54 @@ class PcView : Activity(), AdapterFragmentCallbacks, ShakeDetector.Listener, Eas
         })
     }
 
-    private fun showThemeModeDialog() {
-        val modes = arrayOf(
-            UiHelper.THEME_MODE_SYSTEM,
-            UiHelper.THEME_MODE_LIGHT,
-            UiHelper.THEME_MODE_DARK
-        )
-        val labels = modes.map { getThemeModeLabel(it) }.toTypedArray()
-        val checked = modes.indexOf(UiHelper.getAppThemeMode(this)).coerceAtLeast(0)
+    private fun getThemeSummary(): String = getString(
+        R.string.theme_summary,
+        getThemeModeLabel(AppTheme.getAppThemeMode(this)),
+        getString(if (AppTheme.getAccentMode(this) == AppTheme.ACCENT_MODE_BG)
+            R.string.theme_accent_background else R.string.theme_accent_pink),
+    )
 
+    private fun showThemeModeDialog() {
+        val content = layoutInflater.inflate(R.layout.dialog_app_theme, null)
+        val modeGroup = content.findViewById<android.widget.RadioGroup>(R.id.themeModeGroup)
+        val accentGroup = content.findViewById<android.widget.RadioGroup>(R.id.themeAccentGroup)
+        val modeIds = mapOf(
+            R.id.themeSystem to AppTheme.THEME_MODE_SYSTEM,
+            R.id.themeLight to AppTheme.THEME_MODE_LIGHT,
+            R.id.themeDark to AppTheme.THEME_MODE_DARK,
+        )
+        modeGroup.check(modeIds.entries.first { it.value == AppTheme.getAppThemeMode(this) }.key)
+        accentGroup.check(if (AppTheme.getAccentMode(this) == AppTheme.ACCENT_MODE_BG)
+            R.id.themeBackgroundAccent else R.id.themePinkAccent)
         val dialog = AlertDialog.Builder(this, R.style.AppDialogStyle)
             .setTitle(R.string.pcview_theme_dialog_title)
-            .setSingleChoiceItems(labels, checked) { dialogInterface, which ->
-                val mode = modes[which]
-                UiHelper.setAppThemeMode(this, mode)
-                showToast(getString(R.string.pcview_theme_applied, labels[which]))
-                dialogInterface.dismiss()
+            .setView(content)
+            .setPositiveButton(R.string.dialog_button_ok) { _, _ ->
+                AppTheme.save(this, modeIds.getValue(modeGroup.checkedRadioButtonId),
+                    if (accentGroup.checkedRadioButtonId == R.id.themeBackgroundAccent)
+                        AppTheme.ACCENT_MODE_BG else AppTheme.ACCENT_MODE_PINK)
                 recreate()
             }
-            .setNegativeButton(R.string.dialog_button_close, null)
+            .setNegativeButton(R.string.dialog_button_cancel, null)
             .create()
         dialog.show()
-        AppDialogStyler.applySystemChoiceList(dialog, this)
+        AppDialogStyler.apply(dialog, this)
+    }
+
+    /**
+     * 背景换桶后重染工具栏上以 ?attr/appAccent 着色的图标。
+     * 矢量在膨胀时一次性解析主题属性，主题 overlay 更新后不会自动重解析。
+     */
+    private fun refreshAccentTintedToolbarIcons() {
+        val tint = ColorStateList.valueOf(UiHelper.accentColor(this))
+        findViewById<ImageButton?>(R.id.aboutButton)?.imageTintList = tint
+        findViewById<ImageButton?>(R.id.easyTierControlButton)?.imageTintList = tint
     }
 
     private fun getThemeModeLabel(mode: String): String {
         return when (mode) {
-            UiHelper.THEME_MODE_LIGHT -> getString(R.string.pcview_theme_light)
-            UiHelper.THEME_MODE_DARK -> getString(R.string.pcview_theme_dark)
+            AppTheme.THEME_MODE_LIGHT -> getString(R.string.pcview_theme_light)
+            AppTheme.THEME_MODE_DARK -> getString(R.string.pcview_theme_dark)
             else -> getString(R.string.pcview_theme_follow_system)
         }
     }
@@ -888,37 +926,64 @@ class PcView : Activity(), AdapterFragmentCallbacks, ShakeDetector.Listener, Eas
     // source returns, and cancels any in-flight load on reload so a stale
     // request can never overpaint a newer one.
 
-    private fun loadBackgroundImage(existingGeneration: Int? = null) {
+    private fun loadBackgroundImage(existingGeneration: Int? = null, isFromShake: Boolean = false) {
         if (backgroundImageView == null) return
 
         val loadGeneration = existingGeneration ?: cancelPreviousBackgroundLoad()
 
         val orientation = resources.configuration.orientation
         val resolved = BackgroundSource.resolveCurrentTarget(this, orientation)
+        if (loadGeneration != backgroundLoadGeneration) return
         val source = resolved.source
         val target = resolved.target
         lastBackgroundSource = source
+        val guarded = PipwImages.handles(resolved)
+        val hadPipwBackground = pipwBackgroundLease != null
+        if (!guarded || pipwBackgroundLease?.key != resolved.cacheKey) {
+            pipwBackgroundLease?.close()
+            pipwBackgroundLease = null
+        }
+        if (guarded || hadPipwBackground) {
+            backgroundImageView?.setImageDrawable(null)
+            BgAccent.clear(this)
+            refreshBackgroundAccent(BgAccent.NO_BUCKET)
+        }
 
         if (target == null) {
             // "none" or self-demoted bad state → leave the view empty.
             backgroundImageView?.setImageDrawable(null)
+            BgAccent.clear(this)
+            refreshBackgroundAccent(BgAccent.NO_BUCKET)
             return
         }
 
         backgroundLoadJob = uiScope.launch {
             try {
+                val lease = if (guarded) {
+                    pipwBackgroundLease ?: PipwImages.get(this@PcView).acquire(resolved, orientation).also { pipwBackgroundLease = it }
+                } else null
+                val verified = lease?.await()
                 val bitmap = withContext(Dispatchers.IO) {
-                    decodeBackgroundBitmap(resolved, loadGeneration)
+                    decodeBackgroundBitmap(resolved, loadGeneration, verified)
                 }
                 if (isActive) {
-                    applyBlurredBackground(bitmap)
+                    applyNewBackgroundAndAccent(bitmap, loadGeneration, resolved.cacheKey, guarded)
+                    if (isFromShake && loadGeneration == backgroundLoadGeneration) {
+                        showToast(getString(R.string.background_refreshed_with_remaining, getRemainingRefreshCount()))
+                    }
                 }
             } catch (_: CancellationException) {
                 // Superseded by a newer load; nothing to do.
             } catch (e: ExecutionException) {
-                handleGlideException(e)
+                if (guarded) LimeLog.warning("Pipw background decode failed") else handleGlideException(e)
+                if (isFromShake && loadGeneration == backgroundLoadGeneration) {
+                    showToast(getString(R.string.refresh_failed_network))
+                }
             } catch (e: Exception) {
-                e.printStackTrace()
+                if (guarded) LimeLog.warning("Pipw background unavailable") else e.printStackTrace()
+                if (isFromShake && loadGeneration == backgroundLoadGeneration) {
+                    showToast(getString(R.string.refresh_failed_with_error, friendlyNetworkError(e)))
+                }
             }
         }
     }
@@ -943,29 +1008,31 @@ class PcView : Activity(), AdapterFragmentCallbacks, ShakeDetector.Listener, Eas
 
     private fun decodeBackgroundBitmap(
         resolved: BackgroundSource.ResolvedTarget,
-        loadGeneration: Int
+        loadGeneration: Int,
+        verified: File? = null
     ): Bitmap {
         val target = requireNotNull(resolved.target)
+        val (width, height) = backgroundDecodeSize()
         val request = Glide.with(this@PcView as Context)
             .asBitmap()
-            .load(resolveGlideTarget(target))
+            .load(verified ?: resolveGlideTarget(target))
             .skipMemoryCache(true)
             .signature(ObjectKey(resolved.cacheKey))
             // Keep the exact response bytes so settings can reuse the image
             // selected by random-image APIs instead of issuing a second draw.
-            .diskCacheStrategy(DiskCacheStrategy.DATA)
+            .diskCacheStrategy(if (verified != null) DiskCacheStrategy.NONE else DiskCacheStrategy.DATA)
+            // 显示解码一律按屏幕尺寸降采样。随机图源可能返回 8K 级原图，
+            // 全分辨率位图塞进 ImageView 会触发 "Canvas: trying to draw too
+            // large bitmap" 崩溃；长按保存走 DATA 磁盘缓存独立重解码，不受影响。
+            .override(width, height)
+            .downsample(DownsampleStrategy.CENTER_INSIDE)
 
         val futureTarget = if (resolved.source !== BackgroundSource.Local) {
-            // Preserve the existing decode and cache behavior for network
-            // backgrounds, including full-resolution long-press saves.
             request.submit()
         } else {
-            val (width, height) = backgroundDecodeSize()
             request
                 .apply(
                     RequestOptions()
-                        .override(width, height)
-                        .downsample(DownsampleStrategy.CENTER_INSIDE)
                         .format(DecodeFormat.PREFER_RGB_565)
                 )
                 .submit(width, height)
@@ -994,7 +1061,10 @@ class PcView : Activity(), AdapterFragmentCallbacks, ShakeDetector.Listener, Eas
      */
     private fun cancelPreviousBackgroundLoad(): Int {
         backgroundLoadJob?.cancel()
+        displayedBackgroundKey = null
         backgroundImageView?.let { Glide.with(applicationContext).clear(it) }
+        backgroundDisplayTarget?.let { Glide.with(applicationContext).clear(it) }
+        backgroundDisplayTarget = null
 
         val (generation, previousTarget) = synchronized(backgroundTargetLock) {
             backgroundLoadGeneration += 1
@@ -1009,13 +1079,71 @@ class PcView : Activity(), AdapterFragmentCallbacks, ShakeDetector.Listener, Eas
         return generation
     }
 
-    private fun applyBlurredBackground(bitmap: Bitmap) {
+    /**
+     * 新背景位图落地：先提取主导色相并同步强调色（跟随壁纸模式下桶位变化时
+     * 重叠 overlay、重绑列表、重染工具栏图标——不能 recreate：随机图源每次
+     * 加载都是新图，recreate 会触发无限循环），再做模糊处理上屏。
+     * 所有背景加载路径（loadBackgroundImage / refreshBackgroundImage）都必须走这里，
+     * 否则强调色会落后背景一次刷新。
+     */
+    private suspend fun applyNewBackgroundAndAccent(bitmap: Bitmap, loadGeneration: Int, key: String, guarded: Boolean) {
+        // 先于模糊处理提取主导色相（源头图信息量最大）
+        val bucket = withContext(Dispatchers.Default) { BgAccent.extractHueBucket(bitmap) }
+        if (loadGeneration != backgroundLoadGeneration) return
+        BgAccent.saveBucket(this, bucket)
+        refreshBackgroundAccent(bucket)
+        applyBlurredBackground(bitmap, loadGeneration, key, guarded)
+    }
+
+    private fun refreshBackgroundAccent(bucket: Int) {
+        if (bucket == themedBgAccentBucket) return
+        themedBgAccentBucket = bucket
+        AppTheme.applyTo(this)
+        pcGridAdapter.notifyDataSetChanged()
+        refreshAccentTintedToolbarIcons()
+        findViewById<com.limelight.ui.HostSearchRadarView>(R.id.host_search_radar)?.refreshAccentColor()
+    }
+
+    private fun applyBlurredBackground(bitmap: Bitmap, loadGeneration: Int, key: String, guarded: Boolean) {
         if (backgroundImageView == null) return
+        // 兜底钳制：任何路径传入的位图都不得超过 2 倍屏幕像素，防止 Canvas 崩溃
+        val metrics = resources.displayMetrics
+        val maxPixels = metrics.widthPixels.toLong() * metrics.heightPixels * 2
+        val bitmapPixels = bitmap.width.toLong() * bitmap.height
+        val safe = if (bitmapPixels > maxPixels) {
+            val scale = Math.sqrt(maxPixels.toDouble() / bitmapPixels)
+            Bitmap.createScaledBitmap(
+                bitmap,
+                (bitmap.width * scale).toInt().coerceAtLeast(1),
+                (bitmap.height * scale).toInt().coerceAtLeast(1),
+                true
+            )
+        } else {
+            bitmap
+        }
+        val displayTarget = object : CustomTarget<Drawable>() {
+            override fun onResourceReady(resource: Drawable, transition: Transition<in Drawable>?) {
+                // 代际守卫：旧代的慢速模糊完成后不得覆盖新一代背景
+                if (loadGeneration == backgroundLoadGeneration) {
+                    backgroundImageView?.setImageDrawable(resource)
+                    displayedBackgroundKey = key
+                }
+            }
+
+            override fun onLoadCleared(placeholder: Drawable?) {
+                if (loadGeneration == backgroundLoadGeneration) {
+                    backgroundImageView?.setImageDrawable(placeholder)
+                }
+            }
+        }
+        backgroundDisplayTarget = displayTarget
         Glide.with(this as Context)
-                .load(bitmap)
+                .load(safe)
+                .diskCacheStrategy(if (guarded) DiskCacheStrategy.NONE else DiskCacheStrategy.AUTOMATIC)
+                .skipMemoryCache(guarded)
                 .apply(RequestOptions.bitmapTransform(BlurTransformation(2, 3)))
                 .transform(ColorFilterTransformation(Color.argb(120, 0, 0, 0)))
-                .into(backgroundImageView!!)
+                .into(displayTarget)
     }
 
     private fun handleGlideException(e: ExecutionException) {
@@ -1152,39 +1280,8 @@ class PcView : Activity(), AdapterFragmentCallbacks, ShakeDetector.Listener, Eas
     }
 
     private fun refreshBackgroundImage(isFromShake: Boolean) {
-        if (backgroundImageView == null) return
-
-        val loadGeneration = cancelPreviousBackgroundLoad()
         BackgroundSource.invalidateResolvedTarget()
-
-        val orientation = resources.configuration.orientation
-        val resolved = BackgroundSource.resolveCurrentTarget(this, orientation)
-        val source = resolved.source
-        val target = resolved.target
-        lastBackgroundSource = source
-
-        if (target == null) {
-            backgroundImageView?.setImageDrawable(null)
-            return
-        }
-        backgroundLoadJob = uiScope.launch {
-            try {
-                val bitmap = withContext(Dispatchers.IO) {
-                    decodeBackgroundBitmap(resolved, loadGeneration)
-                }
-                if (isActive) {
-                    applyBlurredBackground(bitmap)
-                    if (isFromShake) {
-                        showToast(getString(R.string.background_refreshed_with_remaining, getRemainingRefreshCount()))
-                    }
-                }
-            } catch (_: CancellationException) {
-                // superseded
-            } catch (e: Exception) {
-                e.printStackTrace()
-                showToast(getString(R.string.refresh_failed_with_error, friendlyNetworkError(e)))
-            }
-        }
+        loadBackgroundImage(isFromShake = isFromShake)
     }
 
     /** 把 Glide / 网络异常翻译成给用户看的简短提示，避免展示 stack trace 风格的英文。 */
@@ -1193,6 +1290,7 @@ class PcView : Activity(), AdapterFragmentCallbacks, ShakeDetector.Listener, Eas
         val cause = (e as? ExecutionException)?.cause ?: e
         val msg = cause.message ?: ""
         return when {
+            cause is IOException -> getString(R.string.refresh_failed_network)
             msg.contains("HttpException") || msg.contains("status code") ||
             msg.contains("SocketException") || msg.contains("UnknownHost") ||
             msg.contains("timeout", ignoreCase = true) ->
@@ -1228,7 +1326,7 @@ class PcView : Activity(), AdapterFragmentCallbacks, ShakeDetector.Listener, Eas
             this,
             resources.configuration.orientation
         )
-        if (resolved.target == null || backgroundImageView?.drawable == null) {
+        if (resolved.target == null || backgroundImageView?.drawable == null || displayedBackgroundKey != resolved.cacheKey) {
             showToast(getString(R.string.image_not_loaded_please_retry))
             return
         }
@@ -1243,18 +1341,30 @@ class PcView : Activity(), AdapterFragmentCallbacks, ShakeDetector.Listener, Eas
      * random-image endpoints can return a different wallpaper for the same URL.
      */
     private fun saveResolvedBackground(resolved: BackgroundSource.ResolvedTarget) {
-        uiScope.launch {
+        val snapshot = if (PipwImages.handles(resolved)) pipwBackgroundLease?.retainReady() else null
+        if (PipwImages.handles(resolved) && snapshot == null) {
+            showToast(getString(R.string.image_not_loaded_please_retry))
+            return
+        }
+        val saveJob = uiScope.launch {
             try {
+                val verified = snapshot?.await()
                 val file = withContext(Dispatchers.IO) {
-                    saveResolvedBackgroundFromCache(resolved)
+                    if (verified != null) saveReviewedPipwImage(verified)
+                    else saveResolvedBackgroundFromCache(resolved)
                 }
                 refreshSystemPic(file)
                 showToast(getString(R.string.image_saved_successfully))
             } catch (e: Exception) {
-                e.printStackTrace()
-                showToast(getString(R.string.image_save_failed_with_error, e.message))
+                if (e is CancellationException) throw e
+                if (snapshot == null) e.printStackTrace() else LimeLog.warning("Pipw image export failed")
+                if (snapshot != null) showToast(getString(R.string.toast_image_save_failed))
+                else showToast(getString(R.string.image_save_failed_with_error, e.message))
+            } finally {
+                snapshot?.close()
             }
         }
+        saveJob.invokeOnCompletion { snapshot?.close() }
     }
 
     private fun saveResolvedBackgroundFromCache(
@@ -1279,21 +1389,30 @@ class PcView : Activity(), AdapterFragmentCallbacks, ShakeDetector.Listener, Eas
         }
     }
 
-    private fun writeBitmapToFile(bitmap: Bitmap): File {
-        val dir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES), "setu")
+    private fun backgroundSaveDirectory(): File {
+        val dir = File(
+            Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES),
+            "vplus"
+        )
         if (!dir.exists() && !dir.mkdirs()) {
             throw IOException("Failed to create directory")
         }
+        return dir
+    }
 
-        val fileName = "pipw-${System.currentTimeMillis()}.png"
-        val file = File(dir, fileName)
-        FileOutputStream(file).use { outputStream ->
+    private fun saveReviewedPipwImage(verified: File): File {
+        val extension = PipwImages.imageExtension(verified)
+        return BackgroundImageExport.write(backgroundSaveDirectory(), extension) { output ->
+            verified.inputStream().use { it.copyTo(output) }
+        }
+    }
+
+    private fun writeBitmapToFile(bitmap: Bitmap): File {
+        return BackgroundImageExport.write(backgroundSaveDirectory(), "png") { outputStream ->
             if (!bitmap.compress(Bitmap.CompressFormat.PNG, 100, outputStream)) {
                 throw IOException("Failed to encode bitmap")
             }
-            outputStream.flush()
         }
-        return file
     }
 
     private fun refreshSystemPic(file: File) {
@@ -1399,7 +1518,7 @@ class PcView : Activity(), AdapterFragmentCallbacks, ShakeDetector.Listener, Eas
         backgroundImageRefreshReceiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context, intent: Intent) {
                 if (BackgroundSource.ACTION_REFRESH == intent.action) {
-                    refreshBackgroundImage(false)
+                    loadBackgroundImage()
                 }
             }
         }
@@ -1667,7 +1786,7 @@ class PcView : Activity(), AdapterFragmentCallbacks, ShakeDetector.Listener, Eas
         try {
             addDetails.name = getString(R.string.title_add_pc)
         } catch (e: Exception) {
-            addDetails.name = "添加电脑"
+            addDetails.name = getString(R.string.title_add_pc_choose)
         }
         addDetails.state = ComputerDetails.State.UNKNOWN
 
