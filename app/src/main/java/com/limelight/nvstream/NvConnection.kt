@@ -6,6 +6,7 @@ import android.net.ConnectivityManager
 import android.os.Build
 import android.os.SystemClock
 import android.provider.Settings
+import android.view.Display
 
 import com.limelight.utils.NetHelper
 
@@ -37,6 +38,7 @@ import com.limelight.nvstream.http.NvHTTP
 import com.limelight.nvstream.http.PairingManager
 import com.limelight.nvstream.input.MouseButtonPacket
 import com.limelight.nvstream.jni.MoonBridge
+import com.limelight.utils.HdrBrightness
 import com.limelight.utils.HdrCapabilityHelper
 
 open class NvConnection(
@@ -48,6 +50,7 @@ open class NvConnection(
     config: StreamConfiguration,
     private val cryptoProvider: LimelightCryptoProvider,
     serverCert: X509Certificate?,
+    outputDisplay: Display,
     displayName: String? = null,
     forceResumeCurrentSession: Boolean = false
 ) {
@@ -76,38 +79,25 @@ open class NvConnection(
         context.riKey = generateRiAesKey()
         context.riKeyId = generateRiKeyId()
 
-        if (config.hdrBrightnessSource == StreamConfiguration.HDR_BRIGHTNESS_SOURCE_MANUAL) {
-            context.minBrightness = config.hdrManualMinBrightness
-            context.maxBrightness = config.hdrManualMaxBrightness
-            context.maxAverageBrightness = config.hdrManualMaxAvgBrightness
-            LimeLog.info(
-                "使用手动 HDR 亮度：min=${context.minBrightness}, " +
-                    "max=${context.maxBrightness}, maxAvg=${context.maxAverageBrightness}"
+        // 手动校准优先；自动模式使用实际输出屏的浮点亮度报告。
+        context.hdrBrightness = if (config.hdrBrightnessSource == StreamConfiguration.HDR_BRIGHTNESS_SOURCE_MANUAL) {
+            HdrBrightness.fromManual(
+                maxNits = config.hdrManualMaxBrightness,
+                minNits = config.hdrManualMinBrightness,
+                maxFullFrameNits = config.hdrManualMaxAvgBrightness,
             )
         } else {
-            val brightnessRange = HdrCapabilityHelper.getBrightnessRangeForLaunch(appContext).let {
-                if (config.hdrBrightnessOverride) {
-                    HdrCapabilityHelper.applyBrightnessOverride(it, config.hdrPeakBrightnessNits)
-                } else {
-                    it
-                }
-            }
-            context.minBrightness = brightnessRange[0].toFloat()
-            context.maxBrightness = brightnessRange[1].toInt()
-            context.maxAverageBrightness = brightnessRange[2].toInt()
-
-            if (config.hdrBrightnessOverride) {
-                LimeLog.info(
-                    "HDR 亮度校准覆盖：min=${context.minBrightness}, " +
-                        "max=${context.maxBrightness}, avg=${context.maxAverageBrightness} nits"
-                )
-            } else {
-                LimeLog.info(
-                    "使用自动 HDR 亮度：min=${context.minBrightness}, " +
-                        "max=${context.maxBrightness}, maxAvg=${context.maxAverageBrightness}"
-                )
-            }
+            HdrCapabilityHelper.getBrightnessReport(
+                outputDisplay,
+                config.hdrPeakBrightnessNits.takeIf { config.hdrBrightnessOverride },
+            )
         }
+
+        val brightness = context.hdrBrightness
+        LimeLog.info(
+            "HDR 亮度来源=${config.hdrBrightnessSource}：min=${brightness?.minNits}, " +
+                "max=${brightness?.maxNits}, maxAvg=${brightness?.maxFullFrameNits} nits"
+        )
     }
 
     fun stop() {
