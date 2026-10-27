@@ -90,6 +90,14 @@ jobs:
           python3 scripts/test_accent_palette.py
           python3 scripts/generate_accent_variants.py --check
 
+      - name: Run native streaming tests
+        run: |
+          cmake -S app/src/main/jni/moonlight-core/moonlight-common-c \
+            -B "$RUNNER_TEMP/moonlight-native-tests" \
+            -DBUILD_SHARED_LIBS=OFF -DCMAKE_BUILD_TYPE=Debug -DHAVE_CLOCK_GETTIME=ON
+          cmake --build "$RUNNER_TEMP/moonlight-native-tests" --parallel 2
+          ctest --test-dir "$RUNNER_TEMP/moonlight-native-tests" --output-on-failure
+
       - name: Run lint and unit tests
         run: ./gradlew :app:lintNonRootDebug :app:testNonRootDebugUnitTest --no-daemon --stacktrace
 

@@ -2416,4 +2416,8 @@ Tap again to replace it.</string>
     <string name="summary_fec_fixed">Your fixed percentage takes priority on a compatible host. Applied on the next connection.</string>
     <string name="numeric_parameter_range">Enter a valid value from %1$s to %2$s %3$s.</string>
     <string name="pyrowave_negotiation_fallback">PyroWave negotiation failed. Falling back to %1$s.</string>
+    <string name="title_video_receive_avoid_cpu0">Video receive CPU isolation (experimental)</string>
+    <string name="summary_video_receive_avoid_cpu0">Move video reception off CPU0 when other allowed cores are available. Reconnect to apply and compare stuttering with this option on and off.</string>
+    <string name="title_enable_stream_diagnostics">Stream timing diagnostics</string>
+    <string name="summary_enable_stream_diagnostics">Record timing summaries about every 10 seconds to diagnose reception, error correction, decoder waits and frame intervals. Reconnect to apply.</string>
 </resources>

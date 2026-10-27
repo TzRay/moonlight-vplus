@@ -13,7 +13,6 @@ import com.limelight.BuildConfig
 import com.limelight.LimeLog
 import com.limelight.preferences.PreferenceConfiguration
 import java.util.concurrent.ArrayBlockingQueue
-import java.util.concurrent.locks.LockSupport
 
 /**
  * Controls frame output timing for decoded video frames.
@@ -89,6 +88,7 @@ internal class FramePacingController(
     private var surfaceFlingerSkippedFrames = 0
     private var surfaceFlingerTargetTime = 0L
     private var surfaceFlingerTimingError = 0L
+    private val preciseFrameWaiter = PreciseFrameWaiter({ surfaceFlingerActive && !stopping })
 
     fun start(decoder: MediaCodec, refreshRate: Int) {
         this.videoDecoder = decoder
@@ -322,7 +322,7 @@ internal class FramePacingController(
 
     @SuppressLint("DefaultLocale")
     private fun runSurfaceFlingerLoop(vsyncOffsetNs: Long, presentationDeadlineNs: Long) {
-        while (surfaceFlingerActive && !stopping) {
+        while (surfaceFlingerActive && !stopping && !Thread.currentThread().isInterrupted) {
             try {
                 val currentTime = System.nanoTime()
                 if (currentTime >= surfaceFlingerTargetTime) {
@@ -477,20 +477,7 @@ internal class FramePacingController(
     }
 
     private fun waitForNextFrame() {
-        val sleepTimeNs = surfaceFlingerTargetTime - System.nanoTime()
-        if (sleepTimeNs <= 0) return
-
-        // Use LockSupport.parkNanos() for efficient waiting, wake early for precision
-        if (sleepTimeNs > 1_000_000) { // > 1ms
-            LockSupport.parkNanos(sleepTimeNs - 500_000) // Wake 0.5ms early
-        } else if (sleepTimeNs > 100_000) { // > 0.1ms
-            LockSupport.parkNanos(sleepTimeNs shr 1) // Wait half the time
-        }
-
-        // Busy-wait for sub-microsecond precision
-        @Suppress("ControlFlowWithEmptyBody")
-        while (System.nanoTime() < surfaceFlingerTargetTime) {
-        }
+        preciseFrameWaiter.await(surfaceFlingerTargetTime)
     }
 
     /**

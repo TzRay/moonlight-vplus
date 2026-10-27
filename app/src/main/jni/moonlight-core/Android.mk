@@ -36,6 +36,7 @@ LOCAL_SRC_FILES := moonlight-common-c/src/AudioStream.c \
                    moonlight-common-c/src/SdpGenerator.c \
                    moonlight-common-c/src/SimpleStun.c \
                    moonlight-common-c/src/VideoDepacketizer.c \
+                   moonlight-common-c/src/VideoDiagnostics.c \
                    moonlight-common-c/src/VideoStream.c \
                    moonlight-common-c/src/MicrophoneStream.c \
                    moonlight-common-c/src/RemoteTextContextStream.c \

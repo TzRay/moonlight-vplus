@@ -1089,4 +1089,8 @@
     <string name="summary_fec_fixed">用戶端指定比例優先於相容主機的 FEC 設定，下次連線生效。</string>
     <string name="numeric_parameter_range">請輸入 %1$s–%2$s %3$s 內的有效數值。</string>
     <string name="pyrowave_negotiation_fallback">PyroWave 協商失敗，已改用 %1$s。</string>
+    <string name="title_video_receive_avoid_cpu0">影片收包避開 CPU0（實驗）</string>
+    <string name="summary_video_receive_avoid_cpu0">有其他允許的核心時，將影片收包移出 CPU0。重新連線後生效，請比較開關前後的卡頓情況。</string>
+    <string name="title_enable_stream_diagnostics">串流時序診斷</string>
+    <string name="summary_enable_stream_diagnostics">每約 10 秒記錄收包、糾錯、解碼等待和影格間隔的統計，用於定位卡頓。重新連線後生效。</string>
 </resources>

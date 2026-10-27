@@ -23,6 +23,9 @@ public class MoonBridge {
     public static final int AUDIO_CODEC_PCM_S16 = 3;
 
     public static final int VIDEO_FORMAT_H264 = 0x0001;
+    // Local-only receive policy, matching Limelight.h. Defaults are unchanged.
+    public static final int VIDEO_RECEIVE_AVOID_CPU0 = 0x1;
+    public static final int VIDEO_RECEIVE_TIMING_STATS = 0x2;
     public static final int VIDEO_FORMAT_H265 = 0x0100;
     public static final int VIDEO_FORMAT_H265_MAIN10 = 0x0200;
     public static final int VIDEO_FORMAT_AV1_MAIN8 = 0x1000;
@@ -568,7 +571,8 @@ public class MoonBridge {
                                               int videoCapabilities,
                                               int colorSpace, int colorRange, int hdrMode,
                                               boolean enableMic, boolean controlOnly,
-                                              int audioCodec, int audioBitrate, boolean authoredPcmHaptics, int fecPercentage);
+                                              int audioCodec, int audioBitrate, boolean authoredPcmHaptics, int fecPercentage,
+                                              int videoReceiveOptions);
 
     // Sunshine dynamic HDR negotiation result. Valid after the connection
     // callback reports the session is established (RTSP handshake complete).

@@ -45,6 +45,10 @@ class MediaCodecDecoderRenderer(
     private val pyrowaveFailureListener: (String) -> Unit,
 ) : VideoDecoderRenderer() {
 
+    private val streamTimingDiagnostics = if (prefs.enableStreamDiagnostics) {
+        StreamTimingDiagnostics { LimeLog.info(it) }
+    } else null
+
     companion object {
         private const val USE_FRAME_RENDER_TIME = true
         private const val FRAME_RENDER_TIME_ONLY = USE_FRAME_RENDER_TIME && false
@@ -811,6 +815,7 @@ class MediaCodecDecoderRenderer(
         }
 
         LimeLog.info("Resuming video processing")
+        streamTimingDiagnostics?.resumeAfterPause()
 
         // 重置停止标志，允许渲染线程运行
         stopping = false
@@ -1466,7 +1471,10 @@ class MediaCodecDecoderRenderer(
         linearBlockEnabled = false
 
         if (USE_FRAME_RENDER_TIME && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            videoDecoder!!.setOnFrameRenderedListener({ _, presentationTimeUs, renderTimeNanos ->
+            videoDecoder!!.setOnFrameRenderedListener({ codec, presentationTimeUs, renderTimeNanos ->
+                if (!stopping && codec === videoDecoder) {
+                    streamTimingDiagnostics?.recordRendered(renderTimeNanos)
+                }
                 // 首帧实际显示到 surface 的时刻（最准的"画面已上屏"时机）
                 if (!firstFrameDelivered) {
                     firstFrameDelivered = true
@@ -2045,6 +2053,7 @@ class MediaCodecDecoderRenderer(
         // concurrent release surfaces as a handled IllegalStateException rather than an NPE.
         val decoder = videoDecoder ?: return false
 
+        val inputAcquireStartNs = if (streamTimingDiagnostics != null) System.nanoTime() else 0L
         try {
             // If we don't have an input buffer index yet, fetch one now
             if (asyncModeEnabled) {
@@ -2083,6 +2092,7 @@ class MediaCodecDecoderRenderer(
             handleDecoderException(e)
             return false
         } finally {
+            streamTimingDiagnostics?.recordInputAcquire(inputAcquireStartNs, System.nanoTime())
             codecRecovered = doCodecRecoveryIfRequired(CR_FLAG_INPUT_THREAD)
         }
 
@@ -2181,6 +2191,7 @@ class MediaCodecDecoderRenderer(
     }
 
     override fun cleanup() {
+        streamTimingDiagnostics?.close()
         destroyPyrowaveDecoder()
         currentHdrMetadata = null
         dolbyVisionRoutingActive = false

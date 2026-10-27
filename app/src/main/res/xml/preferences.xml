@@ -138,6 +138,16 @@
             android:entries="@array/hevc_low_latency_mode_names"
             android:entryValues="@array/hevc_low_latency_mode_values"
             android:defaultValue="auto" />
+        <CheckBoxPreference
+            android:key="checkbox_video_receive_avoid_cpu0"
+            android:title="@string/title_video_receive_avoid_cpu0"
+            android:summary="@string/summary_video_receive_avoid_cpu0"
+            android:defaultValue="false" />
+        <CheckBoxPreference
+            android:key="checkbox_enable_stream_diagnostics"
+            android:title="@string/title_enable_stream_diagnostics"
+            android:summary="@string/summary_enable_stream_diagnostics"
+            android:defaultValue="false" />
     </PreferenceCategory>
     <!-- Runtime gating is enforced again in Game before capture starts. -->
     <PreferenceCategory android:title="@string/category_framegen_settings"

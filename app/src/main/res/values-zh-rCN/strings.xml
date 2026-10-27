@@ -2324,4 +2324,8 @@
     <string name="summary_fec_fixed">客户端指定比例优先于兼容主机的 FEC 设置，下次连接生效。</string>
     <string name="numeric_parameter_range">请输入 %1$s–%2$s %3$s 内的有效数值。</string>
     <string name="pyrowave_negotiation_fallback">PyroWave 协商失败，已回退至 %1$s。</string>
+    <string name="title_video_receive_avoid_cpu0">视频收包避开 CPU0（实验）</string>
+    <string name="summary_video_receive_avoid_cpu0">有其他允许的核心时，将视频收包移出 CPU0。重新连接后生效，请比较开关前后的卡顿情况。</string>
+    <string name="title_enable_stream_diagnostics">串流时序诊断</string>
+    <string name="summary_enable_stream_diagnostics">每约 10 秒记录收包、纠错、解码等待和帧间隔的统计，用于定位卡顿。重新连接后生效。</string>
 </resources>

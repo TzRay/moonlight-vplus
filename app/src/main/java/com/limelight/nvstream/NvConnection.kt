@@ -269,7 +269,8 @@ open class NvConnection(
             context.streamConfig.audioCodec,
             context.streamConfig.audioBitrate,
             context.streamConfig.authoredPcmHaptics,
-            context.streamConfig.fecPercentage
+            context.streamConfig.fecPercentage,
+            context.streamConfig.videoReceiveOptions
         )
 
     @Throws(XmlPullParserException::class, IOException::class, InterruptedException::class)

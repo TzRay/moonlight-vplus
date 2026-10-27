@@ -75,6 +75,7 @@ docs/*
 !docs/pyrowave-decoder-design.md
 !docs/pyrowave-vulkan-synchronization-design.md
 !docs/pyrowave-dynamic-hdr.md
+!docs/SHIELD_STREAM_STABILITY.md
 
 # Kotlin build cache
 .kotlin/

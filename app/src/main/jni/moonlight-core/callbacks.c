@@ -806,7 +806,8 @@ Java_com_limelight_nvstream_jni_MoonBridge_startConnection(JNIEnv *env, jclass c
                                                            jint videoCapabilities,
                                                            jint colorSpace, jint colorRange, jint hdrMode,
                                                            jboolean enableMic, jboolean controlOnly,
-                                                           jint audioCodec, jint audioBitrate, jboolean authoredPcmHaptics, jint fecPercentage) {
+                                                           jint audioCodec, jint audioBitrate, jboolean authoredPcmHaptics, jint fecPercentage,
+                                                           jint videoReceiveOptions) {
     SERVER_INFORMATION serverInfo = {
             .address = (*env)->GetStringUTFChars(env, address, 0),
             .serverInfoAppVersion = (*env)->GetStringUTFChars(env, appVersion, 0),
@@ -820,6 +821,7 @@ Java_com_limelight_nvstream_jni_MoonBridge_startConnection(JNIEnv *env, jclass c
             .fps = fps,
             .bitrate = bitrate,
             .videoFecPercentage = fecPercentage,
+            .videoReceiveOptions = videoReceiveOptions & (VIDEO_RECEIVE_AVOID_CPU0 | VIDEO_RECEIVE_TIMING_STATS),
             .packetSize = packetSize,
             .streamingRemotely = streamingRemotely,
             .audioConfiguration = audioConfiguration,
