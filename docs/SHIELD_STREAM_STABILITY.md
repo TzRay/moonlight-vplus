@@ -131,6 +131,7 @@ adb logcat --pid <上一步得到的PID> -v threadtime > shield-A.log
 | 原生 Debug 静态库构建及 CTest | 13 / 13 通过，保留断言 |
 | Android Release 原生 JNI 构建 | `arm64-v8a`、`armeabi-v7a` 编译和链接通过；NDK 28.2.13676358，最低 API 22 |
 | 应用主代码、资源及完整 JVM 单元测试 | 1,010 项通过，0 失败、0 错误、0 跳过；包含 11 项新增时序/等待测试 |
+| Android lint | 按仓库现有 baseline 通过；仍有 312 条 warning，未修改 baseline 或新增忽略规则；两个新增主代码文件无 lint finding |
 | 精确等待热循环字节码检查 | 时钟返回原始 `long`，循环中没有 `Long` 装箱 |
 | SHIELD 真机性能 | 尚未运行，需要按第 4 节验收 |
 
@@ -150,7 +151,13 @@ ctest --test-dir /tmp/moonlight-native-tests --output-on-failure
 
 Android CI 已加入上述原生构建和 CTest 步骤，应用侧新测试由现有单元测试步骤自动运行。
 
-Android 使用仓库当前 CI 固定的依赖和音频 SDK。定向测试命令：
+Android 使用仓库当前 CI 固定的依赖和音频 SDK。完整应用检查已执行：
+
+```bash
+bash gradlew :app:lintNonRootDebug :app:testNonRootDebugUnitTest --no-daemon
+```
+
+仅复现本轮直接相关的回归测试时，可以使用：
 
 ```bash
 bash gradlew :app:testNonRootDebugUnitTest \
