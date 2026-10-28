@@ -21,7 +21,7 @@ class AndroidAudioRenderer(
     private val enableSpatializer: Boolean,
     enableSystemAudioHaptics: Boolean = false,
     onSystemAudioHapticsActiveChanged: (Boolean) -> Unit = {},
-    private val onAudioPresentationClock: (framePosition: Long, systemNanoTime: Long, sampleRate: Int) -> Unit = { _, _, _ -> }
+    onAudioPresentationClock: (framePosition: Long, systemNanoTime: Long, sampleRate: Int) -> Unit = { _, _, _ -> }
 ) : AudioRenderer {
 
     @Volatile private var track: AudioTrack? = null
@@ -46,8 +46,7 @@ class AndroidAudioRenderer(
     private var savedSamplesPerFrame = 0
     private var savedChannelCount = 0
     private var decodedStreamFramePosition = 0L
-    private var trackStreamFrameOffset = 0L
-    private var presentationClockValid = true
+    private val presentationClock = AudioPresentationClock(onAudioPresentationClock)
 
     private fun createAudioTrack(channelConfig: Int, sampleRate: Int, bufferSize: Int, lowLatency: Boolean): AudioTrack {
         val attributesBuilder = AudioAttributes.Builder()
@@ -104,8 +103,7 @@ class AndroidAudioRenderer(
     ): Int {
         // AudioTrack frame positions restart from zero whenever the track is
         // rebuilt. Keep them in the native IR stream's cumulative time origin.
-        trackStreamFrameOffset = decodedStreamFramePosition
-        presentationClockValid = true
+        val trackStreamFrameOffset = decodedStreamFramePosition
         val channelConfig: Int
         val bytesPerFrame: Int
 
@@ -162,6 +160,7 @@ class AndroidAudioRenderer(
                 track = createAudioTrack(channelConfig, sampleRate, bufferSize, lowLatency)
                 systemAudioHaptics.attach(track!!)
                 track!!.play()
+                presentationClock.reset(track!!, trackStreamFrameOffset)
 
                 // Successfully created working AudioTrack. We're done here.
                 LimeLog.info("Audio track configuration: ${bufferSize} lowLatency=${lowLatency} spatializer=${enableSpatializer}")
@@ -227,7 +226,6 @@ class AndroidAudioRenderer(
         this.savedSamplesPerFrame = samplesPerFrame
         this.savedChannelCount = audioConfiguration.channelCount
         decodedStreamFramePosition = 0L
-        trackStreamFrameOffset = 0L
 
         return initializeAudioTrackInternal(audioConfiguration, sampleRate, samplesPerFrame)
     }
@@ -347,13 +345,13 @@ class AndroidAudioRenderer(
         if (writtenSamples != audioData.size) {
             // Once samples are omitted, one constant track/stream offset no
             // longer describes the queued audio. Resume the clock on rebuild.
-            presentationClockValid = false
-            clearAudioPresentationClock()
+            presentationClock.invalidate(currentTrack)
         }
-        if (presentationClockValid && !isProcessingPaused && track === currentTrack &&
+        if (!isProcessingPaused && track === currentTrack &&
             writtenSamples > 0 && savedSampleRate > 0 && currentTrack.getTimestamp(audioTimestamp)) {
-            onAudioPresentationClock(
-                trackStreamFrameOffset + audioTimestamp.framePosition,
+            presentationClock.publish(
+                currentTrack,
+                audioTimestamp.framePosition,
                 audioTimestamp.nanoTime,
                 savedSampleRate
             )
@@ -407,7 +405,7 @@ class AndroidAudioRenderer(
     }
 
     private fun clearAudioPresentationClock() {
-        onAudioPresentationClock(-1L, -1L, 0)
+        presentationClock.clear()
     }
 
     /**
