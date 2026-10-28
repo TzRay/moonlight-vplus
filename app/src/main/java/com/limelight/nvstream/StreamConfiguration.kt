@@ -66,6 +66,8 @@ class StreamConfiguration private constructor() {
     /** Requested audio codec — see [MoonBridge.AUDIO_CODEC_OPUS]/AC3/EAC3. Default = OPUS. */
     var audioCodec: Int = MoonBridge.AUDIO_CODEC_OPUS
         private set
+    var smoothHostVideoPacing: Boolean = false
+        private set
     /** Requested AC3/E-AC3 bitrate in bits/sec. 0 = use server default. */
     var audioBitrate: Int = 0
     var hostGamepad: String? = null
@@ -101,6 +103,7 @@ class StreamConfiguration private constructor() {
         fun setRefreshRate(refreshRate: Int): Builder = apply { config.refreshRate = refreshRate }
         fun setLaunchRefreshRate(refreshRate: Int): Builder = apply { config.launchRefreshRate = refreshRate }
         fun setBitrate(bitrate: Int): Builder = apply { config.bitrate = bitrate }
+        fun setSmoothHostVideoPacing(enabled: Boolean): Builder = apply { config.smoothHostVideoPacing = enabled }
         fun setVideoReceiveOptions(avoidCpu0: Boolean, diagnostics: Boolean): Builder = apply {
             config.videoReceiveOptions =
                 (if (avoidCpu0) MoonBridge.VIDEO_RECEIVE_AVOID_CPU0 else 0) or

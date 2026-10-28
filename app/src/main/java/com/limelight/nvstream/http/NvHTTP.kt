@@ -45,6 +45,7 @@ import org.xmlpull.v1.XmlPullParserFactory
 import com.limelight.BuildConfig
 import com.limelight.LimeLog
 import com.limelight.nvstream.ConnectionContext
+import com.limelight.nvstream.HostVideoPacing
 import com.limelight.nvstream.http.PairingManager.PairState
 import com.limelight.nvstream.jni.MoonBridge
 
@@ -813,6 +814,10 @@ class NvHTTP(
             streamConfig.hostGamepad?.let { queryParams += "&gamepad=$it" }
         }
         queryParams += MoonBridge.getLaunchUrlQueryParameters()
+        val requestedPacing = HostVideoPacing.request(
+            streamConfig.smoothHostVideoPacing, context.isNvidiaServerSoftware, context.hostVideoPacingModes
+        )
+        requestedPacing?.let { queryParams += "&videoPacing=$it" }
 
         val xmlStr = openHttpConnectionToString(
             httpClientLongConnectNoReadTimeout,
@@ -825,6 +830,10 @@ class NvHTTP(
             (verb == "resume" && getXmlString(xmlStr, "resume", true) != "0")
         ) {
             context.rtspSessionUrl = getXmlString(xmlStr, "sessionUrl0", false)
+            if (streamConfig.smoothHostVideoPacing) {
+                val accepted = HostVideoPacing.acknowledged(requestedPacing, getXmlString(xmlStr, "videoPacing", false))
+                LimeLog.info("Host video pacing: ${if (accepted) HostVideoPacing.SMOOTH_V1 else "legacy (request not acknowledged)"}")
+            }
             true
         } else {
             false

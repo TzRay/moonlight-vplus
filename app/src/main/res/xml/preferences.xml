@@ -148,6 +148,11 @@
             android:title="@string/title_enable_stream_diagnostics"
             android:summary="@string/summary_enable_stream_diagnostics"
             android:defaultValue="false" />
+        <CheckBoxPreference
+            android:key="checkbox_smooth_host_video_pacing"
+            android:title="@string/title_smooth_host_video_pacing"
+            android:summary="@string/summary_smooth_host_video_pacing"
+            android:defaultValue="false" />
     </PreferenceCategory>
     <!-- Runtime gating is enforced again in Game before capture starts. -->
     <PreferenceCategory android:title="@string/category_framegen_settings"

@@ -175,3 +175,51 @@ bash gradlew :app:testNonRootDebugUnitTest \
 - [Linux：recvmmsg 等待语义和超时限制](https://man7.org/linux/man-pages/man2/recvmmsg.2.html)
 - [Java：LockSupport 允许提前和虚假唤醒](https://docs.oracle.com/javase/8/docs/api/java/util/concurrent/locks/LockSupport.html)
 - [Android：MediaCodec 渲染回调时间戳、批量回调及缺失回调限制](https://developer.android.com/reference/android/media/MediaCodec.OnFrameRenderedListener)
+
+## 8. Windows 主机配套改进（2026-10-28）
+
+本分支延续上述首轮客户端工作，并增加 Windows Sunshine 配套协商与音频写入修复。
+完整服务端评估、风险、带宽计算和实机矩阵见
+[Windows Sunshine / SHIELD 评估](https://github.com/TzRay/foundation-sunshine/blob/codex/windows-stream-stability/docs/WINDOWS_SHIELD_STABILITY.md)。
+原生子模块保持此前已推送的 `d4414cf287b42098cbd9b2f14c32ecd1ff9816db`，本轮没有再修改 native 协议。
+
+### 主机平滑发送（实验）
+
+新设置默认关闭，修改后需重连。仅当用户开启、主机不是 NVIDIA 原版服务且 `/serverinfo` 明确公布
+`VideoPacingModes=smooth-v1`，客户端才在 `/launch` 或 `/resume` 请求 `videoPacing=smooth-v1`。
+只有响应确认同一版本，日志才显示启用。旧主机、未知版本、缺失确认都不会被报告为已启用。
+
+Sunshine 将视频批次限制为最多 16 包，并按实际发送时刻设置下一期限，避免迟到后连续补发多个过期批次。
+它没有改变协商的 HDR、视频格式、FEC 或目标码率，但可能增加唤醒、CPU 和帧发送完成时间。
+需要独立 A/B，不应与“视频收包避开 CPU0”一起切换后归因。
+
+注意服务端另有独立的音频带宽预算修复：48kHz/16bit/7.1 PCM 的有效载荷为 6.144Mbps，
+加 4+2 FEC 后预留 9.216Mbps；固定总预算下分给视频的码率可能下降。
+这项变化不会重采样、降低位深或减少声道，仍需在验收时记录实际视频编码目标。
+
+### AudioTrack 写入与 PCM 帧对齐
+
+- 解码后 `short[]` 和 PCM 透传 `byte[]` 共用按实际接受数量继续写入的循环，正数短写不会直接丢弃剩余数据。
+- 零进度、错误、暂停/停止或 track 被替换时停止，避免忙循环或向旧 track 重放数据；多次阻塞写仍可能增加调用时长。
+- short 数量和 byte 数量分别保留各自单位，不以调用次数或网络包数替代音频样本帧。
+- 部分音频确实丢失时暂停向触觉系统发布呈现时钟，直到重建 track；不再把不连续的流强行解释成一个固定时钟偏移。
+- PCM buffer 按完整交错样本帧对齐，保留设备最小容量与原有 8192 字节默认值。日志记录的是请求容量对应的时长，不是实测扬声器延迟。
+- Android API 22 使用兼容构造和三参数 write；API 23+ 使用 Builder/显式阻塞写。低延迟模式仍只是可失败的可选提示。
+
+这些修复提高写入完整性与兼容性，不改变音频内容、PCM 格式、声道映射或 HDMI 输出策略，不能直接宣称音质变好或音频延迟降低。
+
+### 本轮验证
+
+完整 JVM 测试已运行：1018 项通过，0 失败、0 错误、0 跳过；其中新增 8 项覆盖协商、回退、短写、停止、错误和帧对齐。
+Kotlin/Java 主代码编译和 lint 通过；沿用现有 baseline，剩余 312 条 warning，没有增加忽略规则。
+完整 APK 构建及平台 CI 以本 PR 的最终检查结果为准。
+第 6 节保留的是首轮原生/JVM/Release 验证记录，不将旧测试结果冒充新的 SHIELD 实机性能验收。
+
+### 后续改造边界
+
+报告的约 300 次重组/秒、每次三片与 7.1 PCM/5ms/4+2 FEC 的理论包率吻合，但必须先核对实际音频格式并抓取音频端口流量。
+本轮没有把该推测视为已确认根因，也没有改 PCM 网络分块。后续可做能力协商的 MTU 感知分块、
+实际播放时钟驱动的缓冲调节、总码率/视频净码率分别展示，以及 HDR 元数据与色彩链验收。
+每项都应保持旧版本回退，并单独测量 CPU、尾延迟、声道和画质，避免用更高包率、更多排队或更低码率掩盖问题。
+
+补充接口依据：[Android AudioTrack](https://developer.android.com/reference/android/media/AudioTrack)。

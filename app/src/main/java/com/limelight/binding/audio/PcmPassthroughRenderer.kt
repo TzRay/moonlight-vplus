@@ -3,6 +3,7 @@ package com.limelight.binding.audio
 import android.content.Context
 import android.media.AudioAttributes
 import android.media.AudioFormat
+import android.media.AudioManager
 import android.media.AudioTrack
 import android.os.Build
 
@@ -27,7 +28,9 @@ class PcmPassthroughRenderer(
     onSystemAudioHapticsActiveChanged: (Boolean) -> Unit = {}
 ) : AudioRenderer {
 
-    private var track: AudioTrack? = null
+    @Volatile private var track: AudioTrack? = null
+    @Volatile private var stopped = true
+    private var sampleFrameBytes = 0
     private val systemAudioHaptics = SystemAudioHapticsSession(
         enableSystemAudioHaptics,
         onSystemAudioHapticsActiveChanged
@@ -43,6 +46,8 @@ class PcmPassthroughRenderer(
         if (codec != MoonBridge.AUDIO_CODEC_PCM_S16) {
             return -1
         }
+        if (sampleRate <= 0 || samplesPerFrame <= 0) return -1
+        sampleFrameBytes = audioConfiguration.channelCount * 2
 
         val channelMask = when (audioConfiguration.channelCount) {
             2 -> AudioFormat.CHANNEL_OUT_STEREO
@@ -76,28 +81,32 @@ class PcmPassthroughRenderer(
                 LimeLog.warning("PcmPassthroughRenderer: PCM_S16 ${audioConfiguration.channelCount}ch ($channelMaskName) not supported on this device/route (minBuffer=$minBuf)")
                 return -1
             }
-            val bufferSize = maxOf(minBuf, bufferBytes)
+            val bufferSize = alignedPcmBufferSize(minBuf, bufferBytes, audioConfiguration.channelCount)
 
-            val builder = AudioTrack.Builder()
-                .setAudioFormat(format)
-                .setAudioAttributes(attributes)
-                .setTransferMode(AudioTrack.MODE_STREAM)
-                .setBufferSizeInBytes(bufferSize)
-
-            // FLAG_LOW_LATENCY hint (API 26+).
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                try {
-                    builder.setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
-                } catch (_: Throwable) {
-                    // Optional hint; ignore if rejected.
+            track = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                val builder = AudioTrack.Builder()
+                    .setAudioFormat(format)
+                    .setAudioAttributes(attributes)
+                    .setTransferMode(AudioTrack.MODE_STREAM)
+                    .setBufferSizeInBytes(bufferSize)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    try {
+                        builder.setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
+                    } catch (_: Exception) {
+                        // The hint is optional on vendor audio routes.
+                    }
                 }
+                builder.build()
+            } else {
+                AudioTrack(attributes, format, bufferSize,
+                    AudioTrack.MODE_STREAM, AudioManager.AUDIO_SESSION_ID_GENERATE)
             }
-
-            track = builder.build()
             systemAudioHaptics.attach(track!!)
             track!!.play()
+            stopped = false
             val frameBytes = audioConfiguration.channelCount * samplesPerFrame * 2
-            LimeLog.info("PcmPassthroughRenderer: PCM_S16 @${sampleRate} Hz, ${audioConfiguration.channelCount}ch (mask=$channelMaskName), bitrate=$bitrate bps, buffer=$bufferSize B, frame=$frameBytes B")
+            val capacityMs = bufferSize * 1000.0 / (sampleRate * sampleFrameBytes)
+            LimeLog.info("PcmPassthroughRenderer: PCM_S16 @${sampleRate} Hz, ${audioConfiguration.channelCount}ch (mask=$channelMaskName), bitrate=$bitrate bps, requestedBuffer=$bufferSize B ($capacityMs ms capacity, not measured latency), frame=$frameBytes B")
             return 0
         } catch (e: Exception) {
             LimeLog.severe("PcmPassthroughRenderer: AudioTrack create failed: ${e.message}")
@@ -115,6 +124,7 @@ class PcmPassthroughRenderer(
     }
 
     override fun stop() {
+        stopped = true
         try {
             systemAudioHaptics.detach()
             track?.pause()
@@ -138,23 +148,24 @@ class PcmPassthroughRenderer(
 
     override fun playEncodedAudio(audioData: ByteArray, length: Int) {
         val t = track ?: return
-        if (length <= 0) return
+        if (stopped || length <= 0 || length > audioData.size || sampleFrameBytes <= 0 || length % sampleFrameBytes != 0) return
         try {
-            var offset = 0
-            while (offset < length) {
-                val written = t.write(audioData, offset, length - offset, AudioTrack.WRITE_BLOCKING)
-                if (written <= 0) {
-                    LimeLog.warning("PcmPassthroughRenderer.write returned $written")
-                    break
+            val written = writeAudioFully(length, { !stopped && track === t }) { offset, remaining ->
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    t.write(audioData, offset, remaining, AudioTrack.WRITE_BLOCKING)
+                } else {
+                    @Suppress("DEPRECATION")
+                    t.write(audioData, offset, remaining)
                 }
-                offset += written
             }
+            if (written != length && !stopped) LimeLog.warning("PcmPassthroughRenderer: accepted $written/$length bytes")
         } catch (e: Exception) {
             LimeLog.warning("PcmPassthroughRenderer.write failed: ${e.message}")
         }
     }
 
     override fun cleanup() {
+        stopped = true
         try {
             systemAudioHaptics.close()
             track?.stop()

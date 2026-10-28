@@ -1213,6 +1213,7 @@ class Game : ThemedComponentActivity(), SurfaceHolder.Callback,
             .setBitrate(prefConfig.bitrate)
             .setFecPercentage(prefConfig.fecPercentage)
             .setVideoReceiveOptions(prefConfig.videoReceiveAvoidCpu0, prefConfig.enableStreamDiagnostics)
+            .setSmoothHostVideoPacing(prefConfig.smoothHostVideoPacing)
             .setResolutionScale(prefConfig.resolutionScale)
             .setEnableSops(prefConfig.enableSops)
             .enableLocalAudioPlayback(prefConfig.playHostAudio)

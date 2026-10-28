@@ -288,6 +288,7 @@ open class NvConnection(
         serverVersion = details.sunshineVersion ?: context.serverAppVersion
         context.isNvidiaServerSoftware = details.nvidiaServer
         context.supportsDesktopSpecialApp = details.supportsDesktopSpecialApp
+        context.hostVideoPacingModes = NvHTTP.getXmlString(serverInfo, "VideoPacingModes", false)
 
         context.serverGfeVersion = h.getGfeVersion(serverInfo)
 

@@ -2420,4 +2420,6 @@ Tap again to replace it.</string>
     <string name="summary_video_receive_avoid_cpu0">Move video reception off CPU0 when other allowed cores are available. Reconnect to apply and compare stuttering with this option on and off.</string>
     <string name="title_enable_stream_diagnostics">Stream timing diagnostics</string>
     <string name="summary_enable_stream_diagnostics">Record timing summaries about every 10 seconds to diagnose reception, error correction, decoder waits and frame intervals. Reconnect to apply.</string>
+    <string name="title_smooth_host_video_pacing">Smooth host video sending (experimental)</string>
+    <string name="summary_smooth_host_video_pacing">Ask a compatible Sunshine host to send smaller, paced bursts. Keeps bitrate and HDR settings; may increase host CPU use or send time. Reconnect to apply.</string>
 </resources>

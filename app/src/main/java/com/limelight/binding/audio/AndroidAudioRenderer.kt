@@ -24,7 +24,7 @@ class AndroidAudioRenderer(
     private val onAudioPresentationClock: (framePosition: Long, systemNanoTime: Long, sampleRate: Int) -> Unit = { _, _, _ -> }
 ) : AudioRenderer {
 
-    private var track: AudioTrack? = null
+    @Volatile private var track: AudioTrack? = null
     private var spatializer: Spatializer? = null
     private val audioTimestamp = AudioTimestamp()
     private val systemAudioHaptics = SystemAudioHapticsSession(
@@ -47,6 +47,7 @@ class AndroidAudioRenderer(
     private var savedChannelCount = 0
     private var decodedStreamFramePosition = 0L
     private var trackStreamFrameOffset = 0L
+    private var presentationClockValid = true
 
     private fun createAudioTrack(channelConfig: Int, sampleRate: Int, bufferSize: Int, lowLatency: Boolean): AudioTrack {
         val attributesBuilder = AudioAttributes.Builder()
@@ -104,6 +105,7 @@ class AndroidAudioRenderer(
         // AudioTrack frame positions restart from zero whenever the track is
         // rebuilt. Keep them in the native IR stream's cumulative time origin.
         trackStreamFrameOffset = decodedStreamFramePosition
+        presentationClockValid = true
         val channelConfig: Int
         val bytesPerFrame: Int
 
@@ -334,8 +336,22 @@ class AndroidAudioRenderer(
 
         // Backlog shedding happens in the native decode callback before bass/haptic
         // analysis, so every PCM frame reaching this method must also reach AudioTrack.
-        val writtenSamples = currentTrack.write(audioData, 0, audioData.size)
-        if (writtenSamples > 0 && savedSampleRate > 0 && currentTrack.getTimestamp(audioTimestamp)) {
+        val writtenSamples = try {
+            writeAudioFully(audioData.size, { !isProcessingPaused && track === currentTrack }) { offset, remaining ->
+                currentTrack.write(audioData, offset, remaining)
+            }
+        } catch (e: IllegalStateException) {
+            LimeLog.warning("AudioTrack write interrupted: ${e.message}")
+            0
+        }
+        if (writtenSamples != audioData.size) {
+            // Once samples are omitted, one constant track/stream offset no
+            // longer describes the queued audio. Resume the clock on rebuild.
+            presentationClockValid = false
+            clearAudioPresentationClock()
+        }
+        if (presentationClockValid && !isProcessingPaused && track === currentTrack &&
+            writtenSamples > 0 && savedSampleRate > 0 && currentTrack.getTimestamp(audioTimestamp)) {
             onAudioPresentationClock(
                 trackStreamFrameOffset + audioTimestamp.framePosition,
                 audioTimestamp.nanoTime,
