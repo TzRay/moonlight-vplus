@@ -202,6 +202,7 @@ class PreferenceConfiguration {
     var enableHostCadencePreciseSync = false // 精确同步·两步 host-cadence 呈现（仅精确同步模式生效）
     var videoReceiveAvoidCpu0 = false
     var enableStreamDiagnostics = false
+    var smoothHostVideoPacing = false
     var absoluteMouseMode = false
     var mouseAxisCorrection = MouseAxisCorrection.OFF
     var enableNativeMousePointer = false
@@ -511,6 +512,7 @@ class PreferenceConfiguration {
         copy.enableHostCadencePreciseSync = this.enableHostCadencePreciseSync
         copy.videoReceiveAvoidCpu0 = this.videoReceiveAvoidCpu0
         copy.enableStreamDiagnostics = this.enableStreamDiagnostics
+        copy.smoothHostVideoPacing = this.smoothHostVideoPacing
         copy.stretchVideo = this.stretchVideo
         copy.enableSops = this.enableSops
         copy.unlockFps = this.unlockFps
@@ -661,6 +663,7 @@ class PreferenceConfiguration {
         const val ENABLE_HOST_CADENCE_PRECISE_SYNC_STRING = "checkbox_enable_host_cadence_precise_sync"
         const val VIDEO_RECEIVE_AVOID_CPU0_STRING = "checkbox_video_receive_avoid_cpu0"
         const val ENABLE_STREAM_DIAGNOSTICS_STRING = "checkbox_enable_stream_diagnostics"
+        const val SMOOTH_HOST_VIDEO_PACING_STRING = "checkbox_smooth_host_video_pacing"
         private const val ABSOLUTE_MOUSE_MODE_PREF_STRING = "checkbox_absolute_mouse_mode"
         private const val MOUSE_AXIS_CORRECTION_PREF_STRING = "list_mouse_axis_correction"
         // Card visibility preferences
@@ -1487,6 +1490,7 @@ class PreferenceConfiguration {
             config.enableHostCadencePreciseSync = prefs.getBoolean(ENABLE_HOST_CADENCE_PRECISE_SYNC_STRING, true)
             config.videoReceiveAvoidCpu0 = prefs.getBoolean(VIDEO_RECEIVE_AVOID_CPU0_STRING, false)
             config.enableStreamDiagnostics = prefs.getBoolean(ENABLE_STREAM_DIAGNOSTICS_STRING, false)
+            config.smoothHostVideoPacing = prefs.getBoolean(SMOOTH_HOST_VIDEO_PACING_STRING, false)
 
             config.analogStickForScrolling = getAnalogStickForScrollingValue(context)
             config.controllerMouseSpeedPercent = prefs.getInt(CONTROLLER_MOUSE_SPEED_PREF_STRING, 100).coerceIn(50, 200)

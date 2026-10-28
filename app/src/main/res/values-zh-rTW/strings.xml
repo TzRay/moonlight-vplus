@@ -1093,4 +1093,6 @@
     <string name="summary_video_receive_avoid_cpu0">有其他允許的核心時，將影片收包移出 CPU0。重新連線後生效，請比較開關前後的卡頓情況。</string>
     <string name="title_enable_stream_diagnostics">串流時序診斷</string>
     <string name="summary_enable_stream_diagnostics">每約 10 秒記錄收包、糾錯、解碼等待和影格間隔的統計，用於定位卡頓。重新連線後生效。</string>
+    <string name="title_smooth_host_video_pacing">平滑主機影片發包（實驗）</string>
+    <string name="summary_smooth_host_video_pacing">請求相容的 Sunshine 主機以較小批次傳送影片。保留位元率及 HDR 設定，可能增加主機 CPU 用量或傳送耗時。重新連線後生效。</string>
 </resources>

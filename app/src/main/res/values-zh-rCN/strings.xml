@@ -2328,4 +2328,6 @@
     <string name="summary_video_receive_avoid_cpu0">有其他允许的核心时，将视频收包移出 CPU0。重新连接后生效，请比较开关前后的卡顿情况。</string>
     <string name="title_enable_stream_diagnostics">串流时序诊断</string>
     <string name="summary_enable_stream_diagnostics">每约 10 秒记录收包、纠错、解码等待和帧间隔的统计，用于定位卡顿。重新连接后生效。</string>
+    <string name="title_smooth_host_video_pacing">平滑主机视频发包（实验）</string>
+    <string name="summary_smooth_host_video_pacing">请求兼容的 Sunshine 主机以更小的批次发送视频。保留码率和 HDR 设置，可能增加主机 CPU 占用或发送耗时。重新连接后生效。</string>
 </resources>
