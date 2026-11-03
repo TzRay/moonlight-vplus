@@ -5,6 +5,11 @@ import com.limelight.nvstream.jni.MoonBridge
 
 class StreamConfiguration private constructor() {
 
+    internal fun updateResolution(width: Int, height: Int) {
+        this.width = width
+        this.height = height
+    }
+
     var app: NvApp = NvApp("Steam")
         private set
     var width: Int = 1280
@@ -73,6 +78,7 @@ class StreamConfiguration private constructor() {
     var hostGamepad: String? = null
         private set
     var authoredPcmHaptics: Boolean = false
+    var authoredIrHaptics: Boolean = false
         private set
 
     /** Sunshine dynamic HDR negotiation (client opt-in). All zero = legacy client. */
@@ -171,6 +177,7 @@ class StreamConfiguration private constructor() {
         }
 
         fun setAuthoredPcmHaptics(enabled: Boolean): Builder = apply { config.authoredPcmHaptics = enabled }
+        fun setAuthoredIrHaptics(enabled: Boolean): Builder = apply { config.authoredIrHaptics = enabled }
 
         fun setAudioBitrate(bitrate: Int): Builder = apply { config.audioBitrate = bitrate }
 
