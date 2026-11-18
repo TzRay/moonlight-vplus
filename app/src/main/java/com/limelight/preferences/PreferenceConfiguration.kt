@@ -2,6 +2,7 @@
 package com.limelight.preferences
 
 import com.limelight.nvstream.HostGamepadSelection
+import com.limelight.perfhud.PerfHudDensity
 
 import android.content.Context
 import android.content.SharedPreferences
@@ -12,10 +13,12 @@ import android.os.Build
 import android.view.Display
 import android.view.KeyEvent
 import androidx.preference.PreferenceManager
+import com.limelight.binding.audio.MicrophoneButtonPreferences
 import com.limelight.binding.input.MouseAxisCorrection
 import com.limelight.binding.input.InputDeviceSensorPolicy
 import com.limelight.binding.input.haptics.GameRumbleMode
 import com.limelight.binding.input.haptics.Ds5SimulationMode
+import com.limelight.binding.input.touchpad.TouchpadZoneGeometry
 import com.limelight.binding.video.DecoderInputBufferMode
 import com.limelight.nvstream.jni.MoonBridge
 import kotlin.math.max
@@ -161,6 +164,7 @@ class PreferenceConfiguration {
     var perfOverlayOrientation: PerfOverlayOrientation = PerfOverlayOrientation.HORIZONTAL
     var perfOverlayPosition: PerfOverlayPosition = PerfOverlayPosition.TOP
     var perfOverlayClockFormat = "system_minutes"
+    var perfOverlayStyle: PerfHudDensity = PerfHudDensity.DEFAULT
     var enableSimplifyPerfOverlay = false
     var enableLatencyToast = false
     var enableStun = false
@@ -189,6 +193,14 @@ class PreferenceConfiguration {
     var touchscreenTrackpad = false
     /** Use the device touchscreen as the touchpad of a virtual DualSense controller. */
     var screenDs5Touchpad = false
+    /** Legacy tap-to-click; standard mode uses double-tap, holding the second contact to hold. */
+    var screenDs5SingleTapToClick = false
+    /**
+     * Touchable rect of the screen DS5 pad, as "left,top,right,bottom" normalized to
+     * the stream content: touches inside it reach the pad and the rest of the screen
+     * stays regular multi-touch.
+     */
+    var screenDs5TouchpadZoneRect = TouchpadZoneGeometry.DEFAULT_ZONE_RECT
     /** Ask the host to auto-invoke its touch keyboard when a text field gains focus (Sunshine extension). */
     var touchKeyboardAutoInvoke = true
     /** Auto-open the local IME on API 33+ when the host reports a trusted editable activation. */
@@ -345,6 +357,7 @@ class PreferenceConfiguration {
                 .putBoolean(PERF_OVERLAY_LOCKED_STRING, perfOverlayLocked)
                 .putInt(PERF_OVERLAY_BG_OPACITY_STRING, perfOverlayBgOpacity)
                 .putString(PERF_OVERLAY_CLOCK_FORMAT_STRING, perfOverlayClockFormat)
+                .putString(PERF_OVERLAY_STYLE_STRING, perfOverlayStyle.prefValue)
                 .putInt(GAME_MENU_OPACITY_PREF_STRING, gameMenuOpacity)
                 .putBoolean(REVERSE_RESOLUTION_PREF_STRING, reverseResolution)
                 .putBoolean(ROTABLE_SCREEN_PREF_STRING, rotableScreen)
@@ -401,6 +414,8 @@ class PreferenceConfiguration {
                 .putBoolean(ENABLE_NATIVE_MOUSE_POINTER_PREF_STRING, enableNativeMousePointer)
                 .putString(MOUSE_AXIS_CORRECTION_PREF_STRING, mouseAxisCorrection.preferenceValue)
                 .putBoolean(SCREEN_DS5_TOUCHPAD_PREF_STRING, screenDs5Touchpad)
+                .putBoolean(SCREEN_DS5_SINGLE_TAP_TO_CLICK_PREF_STRING, screenDs5SingleTapToClick)
+                .putString(SCREEN_DS5_TOUCHPAD_ZONE_RECT_PREF_STRING, screenDs5TouchpadZoneRect)
                 .putBoolean(FORCE_MTK_MAX_OPERATING_RATE_PREF_STRING, forceMtkMaxOperatingRate)
                 .putString(
                     HEVC_LOW_LATENCY_MODE_PREF_STRING,
@@ -538,6 +553,7 @@ class PreferenceConfiguration {
                 .putString(PERF_OVERLAY_ORIENTATION_STRING, getPerfOverlayOrientationPreferenceString(perfOverlayOrientation))
                 .putString(PERF_OVERLAY_POSITION_STRING, getPerfOverlayPositionPreferenceString(perfOverlayPosition))
                 .putString(PERF_OVERLAY_CLOCK_FORMAT_STRING, perfOverlayClockFormat)
+                .putString(PERF_OVERLAY_STYLE_STRING, perfOverlayStyle.prefValue)
                 .apply()
             true
         } catch (e: Exception) {
@@ -586,6 +602,7 @@ class PreferenceConfiguration {
         copy.perfOverlayOrientation = this.perfOverlayOrientation
         copy.perfOverlayPosition = this.perfOverlayPosition
         copy.perfOverlayClockFormat = this.perfOverlayClockFormat
+        copy.perfOverlayStyle = this.perfOverlayStyle
         copy.reverseResolution = this.reverseResolution
         copy.rotableScreen = this.rotableScreen
         copy.screenPosition = this.screenPosition
@@ -659,7 +676,7 @@ class PreferenceConfiguration {
         private const val HOST_AUDIO_PREF_STRING = "checkbox_host_audio"
         private const val DEADZONE_PREF_STRING = "seekbar_deadzone"
         private const val OSC_OPACITY_PREF_STRING = "seekbar_osc_opacity"
-        private const val LANGUAGE_PREF_STRING = "list_languages"
+        internal const val LANGUAGE_PREF_STRING = "list_languages"
         private const val SMALL_ICONS_PREF_STRING = "checkbox_small_icon_mode"
         private const val MULTI_CONTROLLER_PREF_STRING = "checkbox_multi_controller"
         private const val USB_DRIVER_PREF_SRING = "checkbox_usb_driver"
@@ -692,6 +709,7 @@ class PreferenceConfiguration {
         const val GAME_MENU_OPACITY_PREF_STRING = "seekbar_game_menu_opacity"
         private const val PERF_OVERLAY_ORIENTATION_STRING = "list_perf_overlay_orientation"
         private const val PERF_OVERLAY_POSITION_STRING = "list_perf_overlay_position"
+        const val PERF_OVERLAY_STYLE_STRING = "list_perf_overlay_style"
         private const val BIND_ALL_USB_STRING = "checkbox_usb_bind_all"
         private const val ANALOG_SCROLLING_PREF_STRING = "analog_scrolling"
         const val CONTROLLER_MOUSE_SPEED_PREF_STRING = "controller_mouse_speed_percent"
@@ -819,6 +837,8 @@ class PreferenceConfiguration {
         const val TOUCH_KEYBOARD_AUTO_INVOKE_PREF_STRING = "checkbox_touch_keyboard_auto_invoke"
         const val REMOTE_IME_AUTO_SHOW_PREF_STRING = "checkbox_remote_ime_auto_show"
         const val SCREEN_DS5_TOUCHPAD_PREF_STRING = "checkbox_screen_ds5_touchpad"
+        const val SCREEN_DS5_SINGLE_TAP_TO_CLICK_PREF_STRING = "checkbox_screen_ds5_single_tap_to_click"
+        const val SCREEN_DS5_TOUCHPAD_ZONE_RECT_PREF_STRING = "string_screen_ds5_touchpad_zone_rect"
         const val ENABLE_NATIVE_MOUSE_POINTER_PREF_STRING = "checkbox_enable_native_mouse_pointer"
         const val NATIVE_MOUSE_MODE_PRESET_PREF_STRING = "list_native_mouse_mode_preset"
         const val ENABLE_ENHANCED_TOUCH_PREF_STRING = "checkbox_enable_enhanced_touch"
@@ -1339,6 +1359,62 @@ class PreferenceConfiguration {
             }
         }
 
+        /** Shared device defaults for opening the settings screen and restoring its preferences. */
+        internal fun initializeDeviceDefaults(context: Context) {
+            // Run before XML inflation can persist generic defaults over device-specific ones.
+            readPreferences(context)
+            val preferences = PreferenceManager.getDefaultSharedPreferences(context)
+            LegacySettingsModeStore(preferences).ensureTouchDefaults(
+                context.packageManager.hasSystemFeature(PackageManager.FEATURE_TOUCHSCREEN)
+            )
+            MicrophoneButtonPreferences(context).migrateLegacyVisibilityIfNeeded()
+            if (!preferences.contains(AUTO_ADJUST_BITRATE_PREF_STRING)) {
+                val recommended = getDefaultBitrate(context)
+                preferences.edit().putBoolean(
+                    AUTO_ADJUST_BITRATE_PREF_STRING,
+                    preferences.getInt(BITRATE_PREF_STRING, recommended) == recommended
+                ).apply()
+            }
+        }
+
+        /** Settings owned by this reader that have no persistent row in preferences.xml. */
+        internal val nonXmlResetPreferenceKeys = setOf(
+            GAMEPAD_MOTION_SENSORS_ANDROID12_MIGRATION_PREF_STRING,
+            GAMEPAD_MOTION_SENSORS_ANDROID12_CONFIRMED_PREF_STRING,
+            SCREEN_DS5_TOUCHPAD_ZONE_RECT_PREF_STRING,
+            LEGACY_RES_FPS_PREF_STRING,
+            LEGACY_ENABLE_51_SURROUND_PREF_STRING,
+            BITRATE_PREF_OLD_STRING,
+            LEGACY_DISABLE_FRAME_DROP_PREF_STRING,
+            LEGACY_VIBRATE_FALLBACK_PREF_STRING,
+            ENABLE_LOCAL_CURSOR_RENDERING_PREF_STRING,
+            ENABLE_JITTER_MONITOR_STRING,
+            PERF_OVERLAY_LOCKED_STRING,
+            GAME_MENU_OPACITY_PREF_STRING,
+            ANALOG_SCROLLING_PREF_STRING,
+            CONTROLLER_MOUSE_SPEED_PREF_STRING,
+            CONTROLLER_MOUSE_DPAD_PREF_STRING,
+            SHOW_BITRATE_CARD_PREF_STRING,
+            SHOW_DISPLAY_SETTINGS_CARD_PREF_STRING,
+            SHOW_AUDIO_HAPTICS_CARD_PREF_STRING,
+            SHOW_GYRO_CARD_PREF_STRING,
+            SHOW_QuickKeyCard,
+            SHOW_WAVEFORM_HAPTICS_CARD_PREF_STRING,
+            GYRO_SENSITIVITY_MULTIPLIER_PREF_STRING,
+            GYRO_INVERT_X_AXIS_PREF_STRING,
+            GYRO_INVERT_Y_AXIS_PREF_STRING,
+            GYRO_ACTIVATION_KEY_CODE_PREF_STRING,
+            GYRO_TO_RIGHT_STICK_PREF_STRING,
+            GYRO_TO_MOUSE_PREF_STRING,
+            FLOAT_BALL_SWIPE_UP_ACTION_PREF_STRING,
+            FLOAT_BALL_SWIPE_DOWN_ACTION_PREF_STRING,
+            FLOAT_BALL_SWIPE_LEFT_ACTION_PREF_STRING,
+            FLOAT_BALL_SWIPE_RIGHT_ACTION_PREF_STRING,
+            AUTO_ADJUST_BITRATE_PREF_STRING,
+            UNLOCK_FPS_STRING,
+            SHOW_LOW_RESOLUTION_PRESETS_PREF_STRING
+        )
+
         fun resetStreamingSettings(context: Context) {
             // We consider resolution, FPS, bitrate, HDR, and video format as "streaming settings" here
             val prefs = PreferenceManager.getDefaultSharedPreferences(context)
@@ -1694,6 +1770,9 @@ class PreferenceConfiguration {
                     perfOverlayClockFormat
                 else -> DEFAULT_PERF_OVERLAY_CLOCK_FORMAT
             }
+            config.perfOverlayStyle = PerfHudDensity.fromPreference(
+                prefs.getString(PERF_OVERLAY_STYLE_STRING, PerfHudDensity.DEFAULT.prefValue)
+            )
 
             config.bindAllUsb = prefs.getBoolean(BIND_ALL_USB_STRING, DEFAULT_BIND_ALL_USB)
             config.mouseNavButtons = prefs.getBoolean(MOUSE_NAV_BUTTONS_STRING, DEFAULT_MOUSE_NAV_BUTTONS)
@@ -1724,6 +1803,11 @@ class PreferenceConfiguration {
             config.touchscreenTrackpad = touchModeState.touchscreenTrackpad
             config.enableNativeMousePointer = touchModeState.nativeMousePointer
             config.screenDs5Touchpad = touchModeState.screenDs5Touchpad
+            config.screenDs5SingleTapToClick = prefs.getBoolean(SCREEN_DS5_SINGLE_TAP_TO_CLICK_PREF_STRING, false)
+            config.screenDs5TouchpadZoneRect = prefs.getString(
+                SCREEN_DS5_TOUCHPAD_ZONE_RECT_PREF_STRING,
+                TouchpadZoneGeometry.DEFAULT_ZONE_RECT
+            ) ?: TouchpadZoneGeometry.DEFAULT_ZONE_RECT
             config.touchKeyboardAutoInvoke = prefs.getBoolean(TOUCH_KEYBOARD_AUTO_INVOKE_PREF_STRING, true)
             config.remoteImeAutoShow = prefs.getBoolean(REMOTE_IME_AUTO_SHOW_PREF_STRING, true)
             config.enableLatencyToast = prefs.getBoolean(LATENCY_TOAST_PREF_STRING, DEFAULT_LATENCY_TOAST)

@@ -8,5 +8,11 @@
             android:exported="true"
             android:permission="android.permission.DUMP"
             android:label="MAT sample comparison" />
+        <activity
+            android:name=".preferences.MicrophoneTestActivity"
+            android:exported="false"
+            android:theme="@style/SettingsThemeCompat"
+            android:resizeableActivity="true"
+            android:label="@string/title_mic_test" />
     </application>
 </manifest>

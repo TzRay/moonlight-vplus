@@ -176,8 +176,9 @@
     <string name="title_add_pc"> new\nDianLao () </string>
     <string name="title_add_pc_choose">添加电脑</string>
     <string name="addpc_manual">输入 IP 地址</string>
+    <string name="addpc_manual_description">已知主机 IP 地址时使用</string>
     <string name="addpc_qr_scan">扫描二维码</string>
-    <string name="qr_scan_prompt">扫描 Sunshine 网页界面上的二维码</string>
+    <string name="qr_scan_prompt">扫描 Foundation Sunshine 网页界面上的二维码</string>
     <string name="qr_invalid_code">无法识别的二维码</string>
     <string name="qr_pairing">二维码配对中…</string>
     <string name="qr_pair_success">配对成功！</string>
@@ -582,7 +583,7 @@
     <string name="title_enable_host_cadence_precise_sync">精确同步更顺滑</string>
     <string name="summary_enable_host_cadence_precise_sync">网络稳定时可减少规律性小卡顿，90/120 FPS 下更容易感觉到。可能增加约 1-3 ms 延迟。</string>
     <string name="title_perf_overlay_orientation">性能统计布局</string>
-    <string name="summary_perf_overlay_orientation">选择横向单行或纵向单列。</string>
+    <string name="summary_perf_overlay_orientation">经典样式：横向单行或纵向单列。HUD：仅对浮动状态下的标准档生效。</string>
     <string name="title_perf_overlay_clock_format">时钟格式</string>
     <string name="summary_perf_overlay_clock_format">先在“性能统计指标”中开启“时钟”，再修改时钟格式。</string>
     <string name="perf_overlay_clock_format_system_minutes">跟随系统，仅显示时分</string>
@@ -592,7 +593,7 @@
     <string name="perf_overlay_clock_format_12_minutes">12 小时制，仅显示时分</string>
     <string name="perf_overlay_clock_format_12_seconds">12 小时制，显示时分秒</string>
     <string name="title_perf_overlay_position">性能统计位置</string>
-    <string name="summary_perf_overlay_position">横向布局可放在顶部或底部，纵向布局可放在四角。</string>
+    <string name="summary_perf_overlay_position">未拖动过时的初始位置。经典样式可选顶部/底部或四角；竖屏下 HUD 有空间时会自动停靠在画面下方。</string>
     <string name="title_perf_overlay_display_items">性能统计指标</string>
     <string name="summary_perf_overlay_display_items">选择要显示的串流、解码器、网络、主机和设备指标。</string>
     <string name="title_perf_overlay_bg_opacity">性能统计背景不透明度</string>
@@ -936,7 +937,71 @@
     <string name="tip_hdr_colors">💡 串流小课堂：调整分辨率可以平衡画质和性能，找到最适合的设置～</string>
     <string name="tip_touch_modes">💡 串流小课堂：游戏菜单中可以切换触控模式，增强式多点触控适合手游，触控板模式适合办公，找到最适合你的操作方式～</string>
     <string name="tip_custom_keys">💡 串流小课堂：可以添加自定义按键组合，比如Ctrl+Shift+Esc快速打开任务管理器，让操作更便捷～</string>
-    <string name="tip_performance_overlay">💡 串流小课堂：性能覆盖层可以拖动到任意位置，双击可以切换横竖布局，点击各项指标还能查看详细说明哦～</string>
+    <string name="tip_performance_overlay">💡 串流小课堂：单击性能 HUD 能在 迷你 / 标准 / 详细 之间切换，双击切横竖排，长按指标看说明，还能拖着到处跑哦～这都不会用的话，就是杂鱼♡</string>
+    <string name="title_perf_overlay_style">覆盖层样式</string>
+    <string name="perf_overlay_style_mini">迷你</string>
+    <string name="perf_overlay_style_standard">标准</string>
+    <string name="perf_overlay_style_detailed">详细</string>
+    <string name="perf_overlay_style_classic">经典</string>
+    <string name="game_menu_perf_overlay_style">覆盖层样式</string>
+    <string name="perf_hud_style_changed">换成「%1$s」了哦，杂鱼～</string>
+    <string name="perf_hud_long_press_hint">长按某个指标能看它的说明哦，杂鱼～</string>
+    <string name="perf_hud_hint">💡 串流小课堂：单击切信息密度，双击切横竖，长按指标看说明，拖动挪位置～记不住的话就是杂鱼喵♡</string>
+    <string name="perf_hud_dock_orientation_hint">停在画面下面哪来的横竖啦，杂鱼～转到横屏再双击♡</string>
+    <string name="tip_performance_overlay_classic">💡 串流小课堂：覆盖层可以拖到任意位置，双击切换横竖布局，点各项指标还有说明～人家这么贴心，杂鱼还不快说谢谢♡</string>
+    <string name="perf_hud_label_one_percent_low" formatted="false">1%L</string>
+    <string name="perf_hud_label_latency">延迟</string>
+    <string name="perf_hud_label_latency_chain">延迟链（估算）</string>
+    <string name="perf_hud_label_network">网络</string>
+    <string name="perf_hud_label_host">主机</string>
+    <string name="perf_hud_label_decode">解码</string>
+    <string name="perf_hud_label_render">渲染</string>
+    <string name="perf_hud_label_loss">丢包</string>
+    <string name="perf_hud_label_bandwidth">带宽</string>
+    <string name="perf_hud_label_battery">电量</string>
+    <string name="perf_hud_label_decoder">解码器</string>
+    <string name="perf_hud_label_resolution">画面</string>
+    <string name="perf_hud_label_clock">时间</string>
+    <string name="perf_hud_label_fps_history">帧率历史</string>
+    <string name="perf_hud_drain_per_hour">%.0f%%/时</string>
+    <string name="perf_hud_mood_warming_up">🌙 热身中，杂鱼等一下下～</string>
+    <string name="perf_hud_mood_smooth">满帧丝滑，杂鱼运气不错嘛♡</string>
+    <string name="perf_hud_mood_full_moon">满月加持，满帧丝滑♡</string>
+    <string name="perf_hud_mood_hot_decode">🥵 解码器烫烫的，杂鱼设备～</string>
+    <string name="perf_hud_mood_lossy">📶 在掉包喵，杂鱼网络～</string>
+    <string name="perf_hud_mood_fps_drop">帧率掉了喵，杂鱼～</string>
+    <string name="perf_hud_mood_laggy">🐢 延迟好高，杂鱼网络～</string>
+    <string name="perf_hud_mood_low_battery">🔋 快没电了，杂鱼快去充电♡</string>
+    <string name="perf_latency_chain_title">⛓️ 延迟链（估算）</string>
+    <string name="perf_latency_chain_content">网络（RTT / 2）：%1$s\n主机处理：%2$s\n解码：%3$s\n渲染：%4$s\n────────\n合计 ≈ %5$s\n\n这是把各段加起来的估算值，可不是实测的“按键到画面”延迟哦，杂鱼别当真～网络段用往返时间的一半近似单程。\n\n🥵 解码 ≥ 15 ms 时出现：降分辨率或换个编码啦。\n🧋 表示主机没回传处理时间，换支持 Ver.V+ 的主机就有了♡</string>
+    <string name="perf_latency_chain_no_host">🧋 没回传</string>
+    <string name="perf_diag_title">🍥 串流体检</string>
+    <string name="perf_diag_line_fps">帧率：%1$s / %2$d FPS</string>
+    <string name="perf_diag_line_loss">丢包：%1$s</string>
+    <string name="perf_diag_line_rtt">网络 RTT：%1$d ms（±%2$d）</string>
+    <string name="perf_diag_line_decode">解码：%1$s</string>
+    <string name="perf_diag_line_battery">电量：%1$d%%</string>
+    <string name="perf_diag_tip_fps">帧率没跑满哦，杂鱼～降点分辨率或帧率，再看看主机那边游戏是不是自己在掉帧。</string>
+    <string name="perf_diag_tip_loss">丢包这么多，杂鱼网络～换 5GHz Wi‑Fi 或有线，离路由器近一点，或者把码率降一降。</string>
+    <string name="perf_diag_tip_rtt">延迟慢得像乌龟🐢，杂鱼～别用 2.4GHz 和中继，远程串流挑条近一点的线路。</string>
+    <string name="perf_diag_tip_decode">🥵 解码喘不过气了，杂鱼设备～换 HEVC/AV1 或降分辨率，再把后台应用关掉啦。</string>
+    <string name="perf_diag_tip_battery">🔋 电量见底了，杂鱼还不快投喂充电器♡</string>
+    <string name="perf_diag_all_good">全都正常，杂鱼今天运气不错嘛，安心玩吧 (๑•̀ㅂ•́)و✧</string>
+    <string name="perf_diag_footer">💡 串流小课堂：单击切信息密度，双击切横竖，长按指标看说明～这都记不住就是杂鱼♡</string>
+    <string name="perf_diag_moon_button">%1$s 今夜月相</string>
+    <string name="perf_hud_fps_row_rx">Rx 接收</string>
+    <string name="perf_hud_fps_row_rd">Rd 渲染</string>
+    <string name="perf_hud_fps_row_fg">FG 插帧</string>
+    <string name="perf_hud_fps_verdict_ok">Rx 和 Rd 都跑满了，杂鱼这把稳稳的♡</string>
+    <string name="perf_hud_fps_verdict_remote">Rx 就没跑满，是主机或网络那头没送够帧，跟杂鱼的设备没关系哦～</string>
+    <string name="perf_hud_fps_verdict_local">帧都收到了 Rd 却掉了，是这台设备解码渲染跟不上啦，杂鱼设备🥵</string>
+    <string name="perf_hud_fps_verdict_surplus">主机送来的帧比要显示的还多，多出来的会被跳过，画面不受影响，杂鱼放心～</string>
+    <string name="perf_hud_fps_info" formatted="false">HUD 上帧率那组就是 Rd、Rx、FG 三项，迷你胶囊和大数字显示的是 Rd，也就是真正画到屏幕上的帧数。\n\n上面几行怎么看：\n• Rx 接收：主机送过来的帧数，正常时是灰的，没送够才变黄变红\n• Rd 渲染：解码后实际显示的帧数\n• FG 插帧：开了插帧增强才出现\n\nRd 颜色（对比目标帧率）：\n• 绿：95% 以上\n• 黄：80–95%\n• 红：不到 80%\n\n💡 串流小课堂：Rx 低找主机和网络，Rx 满但 Rd 低找本机解码～</string>
+    <string name="perf_hud_network_latency_info">HUD 上的 RTT 是数据包在主机和设备之间跑一个来回的时间，± 后面是抖动，越小越稳。\n\n颜色：\n• 绿：40 ms 以内\n• 黄：40–80 ms\n• 红：80 ms 以上，心情会变成 🐢\n\n带宽：\n• 详细档和停靠卡片里才显示\n• 是当前视频流的实际传输速率\n\n💡 串流小课堂：延迟链里的网络段按 RTT 的一半估算单程～</string>
+    <string name="perf_hud_decode_latency_info">HUD 上的「解码」是本机硬件解码一帧要花的时间。\n\n颜色：\n• 绿：比一帧的时间短（120 FPS 约 8.3 ms）\n• 黄：超过一帧的时间但不到 15 ms，开始拖帧了\n• 红：15 ms 以上，后面还会挂个 🥵\n\n影响因素：\n• 分辨率和编码格式，HEVC 和 AV1 通常更省力\n• 设备发热和后台负载\n\n💡 串流小课堂：解码低于 10 ms 就别折腾它了，去看看帧率和画质吧～</string>
+    <string name="perf_hud_host_latency_info">HUD 上的「主机」是主机处理一帧（抓屏加编码）的时间，由主机回传。\n\n参考：\n• 5 ms 以内：主机很轻松\n• 5–10 ms：正常水平\n• 10 ms 以上：主机有点忙，看看游戏或后台程序\n\n🧋 是什么：\n• 主机没回传这项数据时显示，先喝杯奶茶吧\n• 换支持 Ver.V+ 的主机就有了♡</string>
+    <string name="perf_hud_packet_loss_info" formatted="false">HUD 上的「丢包」是最近一段时间网络丢掉的视频包比例。\n\n颜色：\n• 绿：1% 以内\n• 黄：1–5%，偶尔花屏或顿一下\n• 红：5% 以上，心情会变成 📶 在掉包\n\n影响因素：\n• Wi‑Fi 信号和频段，2.4GHz 最容易丢\n• 路由器性能\n• 码率超过网络能扛的上限\n\n💡 串流小课堂：长按月相做一次串流体检，人家会告诉杂鱼该怎么修♡</string>
+    <string name="perf_hud_one_percent_low_info" formatted="false">HUD 上的 1%L 是最慢那 1% 帧换算出的帧率，专抓平均帧率看不出的微卡顿。\n\n怎么算：\n• 记录每帧的渲染间隔\n• 取第 99 百分位，也就是最慢的 1%\n• 换算成帧率：1000 ÷ 该间隔\n\n颜色（对比目标帧率）：\n• 绿：85% 以上\n• 黄：65–85%，偶尔顿一下\n• 红：不到 65%，明显卡顿\n\n💡 串流小课堂：平均帧率满了但 1%L 很低，多半是网络抖动或主机偶尔卡了一下～</string>
     <string name="tip_audio_config">💡 串流小课堂：启用Dolby Atmos或DTS:X可以获得更沉浸的音频体验，而此时需要启用系统均衡器来获得最佳效果～</string>
     <string name="tip_external_display">💡 串流小课堂：连接外接显示器时，可以在设置中选择在外接显示器上显示串流画面，大屏游戏更爽～</string>
     <string name="tip_virtual_display">💡 串流小课堂：虚拟显示器功能可以创建独立的显示空间，特别适合多任务场景，让串流更灵活～</string>
@@ -961,7 +1026,7 @@
     <string name="game_menu_touch_mode_native_mouse_summary">适合蓝牙、USB 鼠标和键盘触摸板</string>
     <string name="game_menu_touch_mode_ds5">DS5 触控板</string>
     <string name="game_menu_touch_mode_ds5_short">DS5</string>
-    <string name="game_menu_touch_mode_ds5_summary">屏幕作为 DualSense 手柄的触控板，轻点或用力按压即可点击</string>
+    <string name="game_menu_touch_mode_ds5_summary">分区内为 DualSense 触控板，其余区域正常多点触控。双击点击，第二下按住可长按；也可用力按压点击，拖动边缘调整大小。</string>
     <string name="game_menu_touch_mode_primary_group">主要输入模式（单选）</string>
     <string name="game_menu_touch_mode_compatible_group">辅助选项（可共存）</string>
     <string name="game_menu_touch_pointer_speed">指针区速度</string>
@@ -1083,25 +1148,33 @@
 
     <!-- App Last Settings strings -->
     <string name="app_last_settings_title">上一次设置</string>
-    <string name="app_last_settings_none">无上一次设置</string>
-    <string name="app_last_settings_use_checkbox">使用上一次设置</string>
-    <string name="app_last_settings_apply_success">已应用上一次设置</string>
     <string name="app_last_settings_start_with_last">使用上一次设置启动</string>
+    <string name="app_last_settings_reuse">沿用</string>
+    <string name="app_last_settings_reuse_description">启动时沿用上一次设置</string>
+    <string name="app_last_settings_pill_description">上一次设置，%1$s，%2$s</string>
+    <string name="app_last_settings_expand">展开详情</string>
+    <string name="app_last_settings_collapse">收起详情</string>
+    <string name="app_last_settings_row_video">视频</string>
+    <string name="app_last_settings_row_encoding">编码</string>
+    <string name="app_last_settings_row_audio">音频</string>
+    <string name="app_last_settings_row_input">操作</string>
+    <string name="app_last_settings_row_cards">菜单卡片</string>
+    <string name="app_last_settings_hdr_on">HDR 已开启</string>
+    <string name="app_last_settings_hdr_off">HDR 已关闭</string>
+    <string name="app_last_settings_mic_on">麦克风已开启\u2002%1$d kbps</string>
+    <string name="app_last_settings_mic_off">麦克风已关闭</string>
+    <string name="app_last_settings_native_mouse_on">原生鼠标</string>
+    <string name="app_last_settings_cards_none">未开启卡片</string>
+    <string name="app_last_settings_scale">缩放 %1$d%%</string>
+    <string name="app_last_settings_card_bitrate">码率</string>
+    <string name="app_last_settings_card_display">显示设置</string>
+    <string name="app_last_settings_card_audio_haptics">音频振动</string>
+    <string name="app_last_settings_card_gyro">陀螺仪</string>
+    <string name="app_last_settings_card_quick_key">特殊按键</string>
+    <string name="app_last_settings_card_waveform">波形触感</string>
 
     <!-- Setting detail strings -->
-    <string name="setting_resolution">分辨率：%1$dx%2$d</string>
-    <string name="setting_fps">帧率：%1$dfps</string>
-    <string name="setting_bitrate">码率：%1$dkbps</string>
-    <string name="setting_scale">缩放：%1$d%%</string>
-    <string name="setting_format">视频编码：%1$s</string>
-    <string name="setting_hdr_enabled">HDR：开启</string>
-    <string name="setting_mic_enabled">麦克风：%1$dkbps</string>
-    <string name="setting_native_mouse_enabled">原生鼠标：开启</string>
     <string name="setting_gyro_sensitivity">陀螺仪：%1$.1fx</string>
-    <string name="setting_bitrate_card_enabled">码率卡片：开启</string>
-    <string name="setting_audio_haptics_card_enabled">音频振动卡片：开启</string>
-    <string name="setting_gyro_card_enabled">陀螺仪卡片：开启</string>
-    <string name="setting_QuickKey_card_enabled">特殊按键卡片：开启</string>
 
     <!-- Time format strings -->
     <string name="time_just_now">刚刚</string>
@@ -1156,15 +1229,15 @@
     <string name="suffix_seekbar_output_buffer_queue_limit">帧</string>
 
     <!-- 屏幕组合模式 -->
-    <string name="title_screen_combination_mode">主机显示器排列</string>
+    <string name="title_screen_combination_mode">屏幕组合</string>
     <string name="summary_screen_combination_mode">选择 Foundation Sunshine 如何排列或组合主机显示器，需要兼容的 Foundation Sunshine 主机。</string>
     <string name="screen_combination_mode_dialog_subtitle">Sunshine 基地适用</string>
     <string name="screen_mode_host_default">跟随主机</string>
-    <string name="screen_mode_no_operation">无操作模式</string>
+    <string name="screen_mode_no_operation">无操作</string>
     <string name="screen_mode_auto_activate">激活模式</string>
-    <string name="screen_mode_primary_streaming">主屏串流模式</string>
-    <string name="screen_mode_secondary_streaming">副屏串流模式</string>
-    <string name="screen_mode_exclusive_streaming">仅启用指定显示器模式</string>
+    <string name="screen_mode_primary_streaming">主屏串流</string>
+    <string name="screen_mode_secondary_streaming">副屏串流</string>
+    <string name="screen_mode_exclusive_streaming">独占显示</string>
     <string name="screen_mode_host_default_desc">使用 Sunshine 主机端配置，不覆盖屏幕组合设置。</string>
     <string name="screen_mode_no_operation_desc">保持当前屏幕布局，不调整显示器拓扑。</string>
     <string name="screen_mode_auto_activate_desc">自动激活指定显示器用于串流。</string>
@@ -1272,14 +1345,7 @@
     <string name="appview_background_mode_title">背景</string>
     <string name="appview_quick_settings_title">快速设置</string>
     <string name="appview_full_settings">完整设置</string>
-    <string name="appview_screen_combination_title">屏幕组合</string>
     <string name="appview_open_screen_combination_picker">打开屏幕组合选择器</string>
-    <string name="appview_screen_mode_host_short">跟随主机</string>
-    <string name="appview_screen_mode_noop_short">无操作</string>
-    <string name="appview_screen_mode_activate_short">激活模式</string>
-    <string name="appview_screen_mode_primary_short">主屏串流</string>
-    <string name="appview_screen_mode_secondary_short">副屏串流</string>
-    <string name="appview_screen_mode_exclusive_short">独占显示</string>
     <string name="appview_display_selection_virtual">虚拟显示器</string>
     <string name="appview_background_mode_artwork">应用封面</string>
     <string name="appview_background_mode_acrylic">亚克力</string>
@@ -1381,6 +1447,7 @@
     <string name="layout_page_config_text_83a23">触控输入</string>
     <string name="layout_page_config_text_f4b7c">触控板</string>
     <string name="layout_page_device_text_mmo">仅鼠标移动</string>
+    <string name="layout_page_device_text_dsc">DS5 触摸板切换</string>
     <string name="layout_page_device_text_mmo_true_text">仅鼠标移动</string>
     <string name="layout_page_device_text_mmo_false_text">鼠标移动+点击</string>
     <string name="layout_page_config_text_8ea81">多点触控</string>
@@ -1602,7 +1669,12 @@
     <string name="toast_crown_not_enabled">王冠未启用</string>
     <string name="game_menu_toggle_touch">触控输入</string>
     <string name="ds5_touchpad_active_title">DS5 触控板已激活</string>
-    <string name="ds5_touchpad_active_subtitle">触摸移动 · 轻点即可点击</string>
+    <string name="ds5_touchpad_active_subtitle_zone">双击点击 · 第二下按住可长按</string>
+    <string name="ds5_touchpad_active_subtitle_single_tap">轻点点击 · 拖动分区边缘调整大小</string>
+    <string name="title_ds5_single_tap_to_click">DS5 单击点击（兼容）</string>
+    <string name="summary_ds5_single_tap_to_click">关闭：双击点击，第二下按住可长按；开启：恢复单击点击。两种方式均支持用力按压。</string>
+    <string name="toast_ds5_touchpad_on">DS5 触摸板已开启</string>
+    <string name="toast_ds5_touchpad_off">DS5 触摸板已关闭</string>
     <string name="toast_touch_enabled">触控已开启</string>
     <string name="toast_touch_disabled">触控已关闭</string>
     <string name="toast_cannot_access_controller">无法访问控制器</string>
@@ -1674,6 +1746,7 @@
     <string name="quick_btn_controller">手柄</string>
     <string name="quick_btn_perf">性能</string>
     <string name="quick_btn_remote_mouse">远程鼠标</string>
+    <string name="quick_btn_ds5_touchpad">DS5 触摸板</string>
 
     <!-- Quick button editor -->
     <string name="quick_button_editor_title">快捷按钮配置</string>
@@ -2132,7 +2205,7 @@
     <string name="appview_guide_resume_body">已有会话时，点一下电脑名和应用名就能直接回到串流。别再绕远路啦。</string>
     <!-- Foundation Sunshine 启动前网络探测 -->
     <string name="network_quality_test_title">串流质量检测</string>
-    <string name="network_quality_card_summary">%1$.0f ms · %2$.0f Mbps</string>
+    <string name="network_quality_card_summary">%1$.0f ms %2$.0f Mbps</string>
     <string name="network_quality_menu_summary">%1$s · %2$s</string>
     <string name="network_quality_measuring_response">正在测量响应延迟</string>
     <string name="network_quality_measuring_bandwidth">正在测量稳定带宽</string>
@@ -2253,6 +2326,9 @@
     <string name="theme_accent_source">强调色来源</string>
     <string name="theme_accent_pink">品牌粉</string>
     <string name="theme_accent_background">跟随首页背景</string>
+    <string name="theme_icon_style">应用图标</string>
+    <string name="theme_icon_standard">标准</string>
+    <string name="theme_icon_dark">暗黑</string>
     <string name="theme_summary">%1$s · %2$s</string>
     <string name="title_experimental_haptic_protocols">允许实验性触觉协议</string>
     <string name="summary_experimental_haptic_protocols">自动识别手柄。允许尝试已识别但尚未验证的波形协议；未知协议继续使用普通振动。更改后重新串流。</string>
@@ -2332,6 +2408,11 @@
     <string name="display_native_resolution_description">跟随目标显示器 · %1$s</string>
     <string name="display_choice_unavailable">此设备暂不支持</string>
     <string name="display_custom_resolution_action">管理分辨率…</string>
+    <string name="display_custom_frame_rate_action">编辑常用帧率…</string>
+    <string name="title_custom_frame_rates">常用帧率</string>
+    <string name="custom_frame_rate_hint">常用帧率只影响游戏菜单的展示，不会改变当前串流帧率；设置页始终保留完整列表。</string>
+    <string name="custom_frame_rate_add_favorite">加入常用</string>
+    <string name="frame_rate_show_all">全部帧率…</string>
     <string name="title_float_ball_settings">悬浮球</string>
     <string name="float_ball_appearance">悬浮显示</string>
     <string name="float_ball_gestures">手势操作</string>
@@ -2362,6 +2443,8 @@
     <string name="title_native_device_haptics">原生设备触觉（实验）</string>
     <string name="summary_native_device_haptics">按设备能力合成持续振动与轻重短点，不可用时沿用原有输出。可能增加延迟，持续效果可能有短暂接缝。重新连接后生效。</string>
     <string name="summary_native_device_haptics_requires_output">需主机模拟 DualSense、选择 IR 增强及设备或协同输出，并将设备振动力度设为大于零。重新连接后生效。</string>
+    <string name="title_mic_test">测试麦克风</string>
+    <string name="summary_mic_test">直接采集本机麦克风并显示波形，不进入串流。</string>
     <!-- 指纹解锁主机 -->
     <string name="quick_btn_unlock_host">指纹解锁</string>
     <string name="host_unlock_not_connected">未连接到主机</string>

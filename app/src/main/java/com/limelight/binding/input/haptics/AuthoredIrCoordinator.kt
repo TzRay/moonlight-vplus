@@ -32,9 +32,17 @@ internal class AuthoredIrCoordinator(
     private val legacyRenderers = mutableMapOf<Short, AuthoredHapticsRenderer>()
     private val pendingLegacy = mutableMapOf<Short, Legacy>()
     private var queued = false
+    // A zero-delay drain is already posted; further frames before it runs need no repost.
+    private var wakePosted = false
     private var stopped = false
     private var nativePhone = false
+    // Bumped on every receive-thread phone release; outputs polled before a release carry
+    // the then-current token and must not re-acquire the phone afterwards.
+    private var phoneReleaseToken = 0L
     private val drainTask = Runnable { drain() }
+    private val drainOutputs = ArrayList<Triple<Short, AuthoredIrTimeline.Output, Long>>()
+    private val drainLegacy = ArrayList<Pair<Legacy, Long>>()
+    private val expiredPulses = ArrayList<Short>()
 
     val queuedEvents: Int get() = synchronized(lock) { timelines.values.sumOf { it.queuedEvents } }
 
@@ -42,6 +50,12 @@ internal class AuthoredIrCoordinator(
         if (stopped || !enabled() || frame.controllerNumber.toInt() !in 0 until 16) return@synchronized
         if (!timelines.getOrPut(frame.controllerNumber, ::AuthoredIrTimeline)
                 .accept(frame, clockMs() * 1000)) return@synchronized
+        if (frame.ended && frame.controllerNumber.toInt() == 0) {
+            // Release the phone on the receive thread so the stop never queues behind the
+            // main loop; the token invalidates outputs drain() already polled.
+            phoneReleaseToken++
+            phone.resetAuthoredIr()
+        }
         pendingLegacy.remove(frame.controllerNumber)
         wakeLocked()
     }
@@ -56,42 +70,61 @@ internal class AuthoredIrCoordinator(
     }
 
     private fun wakeLocked() {
+        if (wakePosted) return
         removeCallbacks(drainTask)
         queued = true
+        wakePosted = true
         postDelayed(drainTask, 0)
     }
 
     private fun drain() {
-        if (stopped || !enabled()) return
+        if (stopped || !enabled()) {
+            synchronized(lock) { queued = false; wakePosted = false }
+            return
+        }
         val now = clockMs()
-        val outputs: MutableList<Pair<Short, AuthoredIrTimeline.Output>>
-        val legacy: List<Legacy>
+        val outputs = drainOutputs
+        val legacy = drainLegacy
+        outputs.clear()
+        legacy.clear()
+        var token = 0L
         synchronized(lock) {
             queued = false
-            outputs = timelines.mapNotNull { (number, timeline) ->
-                timeline.poll(now * 1000)?.let { number to it }
-            }.toMutableList()
-            legacy = pendingLegacy.values.toList()
+            wakePosted = false
+            token = phoneReleaseToken
+            for ((number, timeline) in timelines) {
+                timeline.poll(now * 1000)?.let { outputs += Triple(number, it, token) }
+            }
+            pendingLegacy.values.forEach { legacy += it to token }
             pendingLegacy.clear()
         }
-        pulses.toMap().forEach { (number, pulse) ->
-            if (pulse.second <= now) {
+        if (pulses.isNotEmpty()) {
+            expiredPulses.clear()
+            for ((number, pulse) in pulses) if (pulse.second <= now) expiredPulses += number
+            for (number in expiredPulses) {
                 pulses.remove(number)
                 if (outputs.none { it.first == number }) last[number]?.let {
-                    outputs += number to it.copy(event = null, reset = false)
+                    outputs += Triple(number, it.copy(event = null, reset = false), token)
                 }
             }
         }
-        outputs.forEach { (number, output) ->
-            last[number] = output.copy(event = null, reset = false)
-            route(number, output, now)
+        for ((number, output, outputToken) in outputs) {
+            last[number] = if (output.event == null && !output.reset) output
+                else output.copy(event = null, reset = false)
+            route(number, output, now, outputToken)
         }
-        legacy.forEach { routeLegacy(it, now) }
+        for ((pending, pendingToken) in legacy) routeLegacy(pending, now, pendingToken)
+        outputs.clear()
+        legacy.clear()
         synchronized(lock) {
             if (!queued && !stopped && enabled()) {
-                val next = (timelines.values.mapNotNull { it.nextWakeUs()?.let { us -> (us + 999) / 1000 } } +
-                    pulses.values.map { it.second }).minOrNull()
-                if (next != null) {
+                var next = Long.MAX_VALUE
+                for (timeline in timelines.values) {
+                    val us = timeline.nextWakeUs()
+                    if (us != null) next = minOf(next, (us + 999) / 1000)
+                }
+                for (pulse in pulses.values) next = minOf(next, pulse.second)
+                if (next != Long.MAX_VALUE) {
                     queued = true
                     postDelayed(drainTask, (next - now).coerceAtLeast(1))
                 }
@@ -99,7 +132,7 @@ internal class AuthoredIrCoordinator(
         }
     }
 
-    private fun route(number: Short, output: AuthoredIrTimeline.Output, now: Long) {
+    private fun route(number: Short, output: AuthoredIrTimeline.Output, now: Long, token: Long) {
         if (output.reset) {
             pulses.remove(number)
             policies.remove(number)
@@ -113,61 +146,74 @@ internal class AuthoredIrCoordinator(
         val pointOnly = targets.hasDevice && policies.getOrPut(number, ::AuthoredIrPhonePolicy)
             .useDetails(output.body, now, output.ended, targets.mode, targets.hasController)
         val native = targets.hasDevice && targets.mode != GameRumbleMode.CONTROLLER && phone.supportsNativeAuthored
-        if (number.toInt() == 0 && nativePhone != native) {
-            phone.resetAuthoredIr()
-            nativePhone = native
-        }
         val eventPower = output.event?.value?.let { maxOf(it.leftStrength, it.rightStrength) } ?: 0f
         if (output.ended) pulses.remove(number)
         else if (eventPower > 0) pulses[number] = eventPower to (now + 60)
-        val pulse = transientAmplitude(pulses[number]?.first ?: 0f)
+        val pulse = motorTransientAmplitude(pulses[number]?.first ?: 0f)
         val details = native || pointOnly && supportsTick()
-        val plan = AuthoredIrAllocator.allocate(targets, output.body, pulse, details)
-        val body = if (targets.hasController && targets.mode != GameRumbleMode.DEVICE) output.body else ControllerRumbleState.ZERO
+        val nativePlan = if (native) AuthoredIrAllocator.allocateNativeBody(targets, output.body) else null
+        val body = if (nativePlan != null) nativePlan.controller ?: ControllerRumbleState.ZERO
+            else if (targets.hasController && targets.mode != GameRumbleMode.DEVICE) output.body else ControllerRumbleState.ZERO
         mixer.submit(number, RumbleSource.AUTHORED_BODY, body, now, output.bodyValidUntilUs / 1000)
         val transient = if (!details && targets.mode != GameRumbleMode.DEVICE && targets.hasController)
             ControllerRumbleState(0f, pulse) else ControllerRumbleState.ZERO
         val mixed = mixer.submit(number, RumbleSource.AUTHORED_TRANSIENT, transient, now,
             pulses[number]?.second ?: now)
         if (targets.hasController) renderer.queueController(mixed)
-        if (number.toInt() == 0) {
-            if (native) {
-                val nativeBody = if (targets.mode == GameRumbleMode.COORDINATED && targets.hasController)
-                    ControllerRumbleState.ZERO else output.body
-                val gain = strengthPercent().coerceIn(0, 200) / 100f
-                // Merge band energy into the carrier's peak amplitude; point strength is never
-                // reduced to the fixed-strength TICK used by the public vibrator fallback.
-                val bodyGain = sqrt(2f * (nativeBody.lowFrequency * nativeBody.lowFrequency +
-                    nativeBody.highFrequency * nativeBody.highFrequency)) * gain
-                phone.submitNativeAuthored(bodyGain,
-                    // Profile 1 carries early band-peak evidence, not the finished PCM crest.
-                    // Native playback needs its own makeup gain; otherwise rain collapses
-                    // into the bank's weakest level. The backend limits physical sample gain.
-                    transientAmplitude(eventPower) * 2f * gain,
-                    output.bodyValidUntilUs / 1000, output.event?.expiresUs?.div(1000) ?: now,
-                    active = !output.ended && gain > 0)
-            } else {
-                val deviceBody = plan.device ?: ControllerRumbleState.ZERO
-                phone.submitAuthoredIrBody(deviceBody.lowFrequency.toMotorShort(), deviceBody.highFrequency.toMotorShort(),
-                    strengthPercent(), !output.ended, output.bodyValidUntilUs / 1000)
-                phone.submitAuthoredIrDetail(details && output.event != null, if (details) strengthPercent() else 0,
-                    output.event?.expiresUs?.div(1000) ?: now, details && !output.ended)
+        if (number.toInt() == 0) synchronized(lock) {
+            // The token check and these submissions are atomic against the receive-thread
+            // end release (same lock): a polled-before-reset output must not re-acquire the
+            // phone afterwards, and a release landing mid-route stops whatever reacquired.
+            if (token == phoneReleaseToken) {
+                if (nativePhone != native) {
+                    phone.resetAuthoredIr()
+                    nativePhone = native
+                }
+                if (native) {
+                    val nativeBody = nativePlan?.device ?: ControllerRumbleState.ZERO
+                    val gain = strengthPercent().coerceIn(0, 200) / 100f
+                    phone.submitNativeAuthored(NativeAuthoredBody.fromBands(
+                        nativeBody.lowFrequency * gain, nativeBody.highFrequency * gain, output.frequencyHintHz),
+                        // Profile 1 strength is a linear local peak, not power. Preserve its
+                        // contrast: sqrt(strength) disproportionately boosted weak points,
+                        // especially when coordinated mode removed the phone's background.
+                        // Keep the old 100%-strength saturation point (2*sqrt(.09) == .6)
+                        // and the native short waveform, without adding a floor or rate gate.
+                        ControllerRumbleState.normalizeAmplitude(eventPower) / SOURCE_POINT_FULL_SCALE *
+                            NATIVE_POINT_FULL_SCALE * gain,
+                        output.bodyValidUntilUs / 1000, output.event?.expiresUs?.div(1000) ?: now,
+                        active = !output.ended && gain > 0)
+                } else {
+                    val deviceBody = AuthoredIrAllocator.allocate(targets, output.body, pulse, details)
+                        .device ?: ControllerRumbleState.ZERO
+                    phone.submitAuthoredIrBody(deviceBody.lowFrequency.toMotorShort(), deviceBody.highFrequency.toMotorShort(),
+                        strengthPercent(), !output.ended, output.bodyValidUntilUs / 1000)
+                    phone.submitAuthoredIrDetail(details && output.event != null, if (details) strengthPercent() else 0,
+                        output.event?.expiresUs?.div(1000) ?: now, details && !output.ended)
+                }
             }
         }
         onOutput(number, output)
         scheduleExpiry()
     }
 
-    // Match v2's perceptual makeup before 8-bit motor output is quantized.
-    private fun transientAmplitude(strength: Float): Float =
+    // Compatibility curve for ordinary motor fallback, not native waveform amplitude.
+    private fun motorTransientAmplitude(strength: Float): Float =
         sqrt(ControllerRumbleState.normalizeAmplitude(strength))
+
+    private companion object {
+        // Retain the existing native backend range; these are rendering units, not
+        // calibrated DS5 force or a minimum perceptible event threshold.
+        const val SOURCE_POINT_FULL_SCALE = .09f
+        const val NATIVE_POINT_FULL_SCALE = .6f
+    }
 
     private fun targetsFor(number: Short): GameRumbleContext = context(number).let {
         // A muted phone cannot accept the details removed from the controller signal.
         if (number.toInt() == 0 && strengthPercent() > 0) it else it.copy(hasDevice = false)
     }
 
-    private fun routeLegacy(pending: Legacy, now: Long) {
+    private fun routeLegacy(pending: Legacy, now: Long, token: Long) {
         val number = pending.controllerNumber
         if (number.toInt() == 0 && nativePhone) { phone.resetAuthoredIr(); nativePhone = false }
         val targets = targetsFor(number)
@@ -179,13 +225,19 @@ internal class AuthoredIrCoordinator(
             plan.controller ?: ControllerRumbleState.ZERO, now, now + 200)
         if (targets.hasController) renderer.queueController(mixed)
         if (number.toInt() == 0) {
-            if (details) phone.submitAuthoredDetail(pending.tickAt?.let { now - it <= 100 } == true,
-                strengthPercent(), !pending.output.ended)
-            else {
-                phone.submitAuthoredDetail(false, 0, false)
-                val device = plan.device ?: ControllerRumbleState.ZERO
-                phone.submitAuthoredIrBody(device.lowFrequency.toMotorShort(), device.highFrequency.toMotorShort(),
-                    strengthPercent(), !pending.output.ended, now + 200)
+            // Same release-token gate as route(): a legacy output polled before an
+            // end-frame reset must not re-acquire the phone afterwards.
+            synchronized(lock) {
+                if (token == phoneReleaseToken) {
+                    if (details) phone.submitAuthoredDetail(pending.tickAt?.let { now - it <= 100 } == true,
+                        strengthPercent(), !pending.output.ended)
+                    else {
+                        phone.submitAuthoredDetail(false, 0, false)
+                        val device = plan.device ?: ControllerRumbleState.ZERO
+                        phone.submitAuthoredIrBody(device.lowFrequency.toMotorShort(), device.highFrequency.toMotorShort(),
+                            strengthPercent(), !pending.output.ended, now + 200)
+                    }
+                }
             }
         }
         scheduleExpiry()
@@ -205,6 +257,7 @@ internal class AuthoredIrCoordinator(
     fun stop() {
         synchronized(lock) {
             stopped = true
+            wakePosted = false
             removeCallbacks(drainTask)
             timelines.clear(); pendingLegacy.clear(); legacyRenderers.clear()
         }
@@ -214,6 +267,28 @@ internal class AuthoredIrCoordinator(
 
 /** Allocation of already-decomposed authored IR; ordinary rumble retains its own allocator. */
 internal object AuthoredIrAllocator {
+    /** This route is the uncalibrated two-amplitude rumble API, not a waveform sink.
+     * Native controller PCM playback is routed independently by AuthoredPcmOutputRouter;
+     * ControllerHapticsCoordinator suppresses motor writes while that sink owns output.
+     * No existing rumble route supplies a calibrated frequency/force transfer function.
+     * A two-motor command cannot reproduce authored carrier frequency.
+     * In native cooperation the phone owns the complete authored continuous signal.
+     * Ordinary HOST rumble still reaches the controller through its independent mixer
+     * source. Do not subtract a fictitious ERM energy contribution from the phone.
+     */
+    fun allocateNativeBody(context: GameRumbleContext, body: ControllerRumbleState): GameRumbleRoute {
+        if (context.mode == GameRumbleMode.COORDINATED && context.hasController && context.hasDevice) {
+            return GameRumbleRoute(
+                controller = ControllerRumbleState.ZERO,
+                device = body
+            )
+        }
+        return GameRumbleRoute(
+            controller = body.takeIf { context.hasController && context.mode != GameRumbleMode.DEVICE },
+            device = body.takeIf { context.hasDevice && context.mode != GameRumbleMode.CONTROLLER }
+        )
+    }
+
     fun allocate(context: GameRumbleContext, body: ControllerRumbleState, pulse: Float,
                  details: Boolean): GameRumbleRoute {
         val fallback = ControllerRumbleState(body.lowFrequency, maxOf(body.highFrequency, pulse))

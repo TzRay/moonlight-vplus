@@ -94,7 +94,7 @@ internal class DeviceVibrationCoordinator(
     private var detailInputAtMs = 0L
     private var detailWatchdog: Runnable? = null
     private var authoredIrOwned = false
-    private data class NativeState(val body: Float, val expiresAtMs: Long, val warmUntilMs: Long)
+    private data class NativeState(val body: NativeAuthoredBody, val expiresAtMs: Long, val warmUntilMs: Long)
     private data class NativePoint(val gain: Float, val expiresAtMs: Long)
     private var nativeState: NativeState? = null
     private var nativePoint: NativePoint? = null
@@ -109,7 +109,7 @@ internal class DeviceVibrationCoordinator(
     /** Points keep their source deadline and strength; continuous replacements are paced at 20ms.
      * Like the existing dispatcher, stalled hardware keeps the latest event rather than a backlog.
      */
-    fun submitNativeAuthored(body: Float, point: Float, expiresAtMs: Long,
+    fun submitNativeAuthored(body: NativeAuthoredBody, point: Float, expiresAtMs: Long,
                              pointExpiresAtMs: Long, active: Boolean = true) {
         val command = synchronized(lock) {
             if (closed) return
@@ -125,10 +125,9 @@ internal class DeviceVibrationCoordinator(
                     clearGameRefreshLocked()
                     if (!audioOwned && !touchActive) generation++
                 }
-                val normalizedBody = ControllerRumbleState.normalizeAmplitude(body)
-                val warmUntil = if (nativeState == null || normalizedBody > 0 || point > 0 && pointExpiresAtMs >= clockMs())
+                val warmUntil = if (nativeState == null || !body.isSilent || point > 0 && pointExpiresAtMs >= clockMs())
                     clockMs() + NATIVE_IDLE_WARM_MS else nativeState!!.warmUntilMs
-                nativeState = NativeState(normalizedBody, expiresAtMs, warmUntil)
+                nativeState = NativeState(body, expiresAtMs, warmUntil)
                 if (!audioOwned && !touchActive && point > 0 && pointExpiresAtMs >= clockMs())
                     nativePoint = NativePoint(ControllerRumbleState.normalizeAmplitude(point), pointExpiresAtMs)
                 scheduleNativeStateWakeLocked()
@@ -571,7 +570,9 @@ internal class DeviceVibrationCoordinator(
         }
         if (gameRefreshCallback != null) return
 
-        val callback = Runnable { refreshGameLease() }
+        val callback = object : Runnable {
+            override fun run() = refreshGameLease(this)
+        }
         gameRefreshCallback = callback
         postDelayed(callback, GAME_SOURCE_REFRESH_MS)
     }
@@ -581,8 +582,12 @@ internal class DeviceVibrationCoordinator(
         gameRefreshCallback = null
     }
 
-    private fun refreshGameLease() {
+    private fun refreshGameLease(task: Runnable) {
         val command = synchronized(lock) {
+            // The worker may start this task before an ownership change cancelled it
+            // (cancel(false) cannot stop a running task). The captured level is then stale,
+            // so only the still-registered callback may act.
+            if (gameRefreshCallback !== task) return
             gameRefreshCallback = null
             if (closed || audioOwned || touchActive) return
             if (levelAmplitude == 0) return
@@ -594,7 +599,7 @@ internal class DeviceVibrationCoordinator(
     private fun dispatch(command: VibrationCommand) {
         // Admit the write under the ownership lock, then release it before entering vendor Binder.
         // Audio only writes after claimForAudio() reports that no admitted game write is in flight.
-        var nativeBody = 0f
+        var nativeBody = NativeAuthoredBody.ZERO
         var nativeEvent = 0f
         var nativeKeepWarm = false
         var switchingToNative = false
@@ -614,7 +619,7 @@ internal class DeviceVibrationCoordinator(
                     nativeResetPending = false
                     switchingToNative = !nativeOutput || resettingNative
                     nativeOutput = true
-                    nativeBody = nativeState?.body ?: 0f
+                    nativeBody = nativeState?.body ?: NativeAuthoredBody.ZERO
                     nativeKeepWarm = nativeState?.let { it.warmUntilMs > clockMs() } == true
                     nativeEvent = nativePoint?.takeIf { it.expiresAtMs >= clockMs() }?.gain ?: 0f
                     nativePoint = null
@@ -661,8 +666,8 @@ internal class DeviceVibrationCoordinator(
         }
     }
 
-    private companion object {
-        val THREAD_NUMBER = AtomicInteger()
+    internal companion object {
+        private val THREAD_NUMBER = AtomicInteger()
         // Long one-shot effects are reprogrammed only four times per second. Some vendor
         // vibrator services deadlock when effects are replaced at controller packet rate.
         // Start/stop edges bypass level pacing. Native writes stay serialized; hardware
@@ -673,7 +678,7 @@ internal class DeviceVibrationCoordinator(
         const val MAXIMUM_TOUCH_DURATION_MS = 1_000L
         const val NATIVE_IDLE_WARM_MS = 1_500L
 
-        fun newWorker(): ScheduledExecutorService {
+        internal fun newWorker(): ScheduledExecutorService {
             val threadNumber = THREAD_NUMBER.incrementAndGet()
             return Executors.newSingleThreadScheduledExecutor { runnable ->
                 Thread(runnable, "DeviceVibration-$threadNumber").apply { isDaemon = true }

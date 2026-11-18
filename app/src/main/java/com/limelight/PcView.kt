@@ -48,6 +48,7 @@ import com.limelight.nvstream.http.NvHTTP
 import com.limelight.nvstream.http.PairingManager
 import com.limelight.nvstream.http.PairingManager.PairState
 import com.limelight.nvstream.wol.WakeOnLanSender
+import com.limelight.perfhud.PerfHudDensity
 import com.limelight.preferences.AddComputerManually
 import com.limelight.preferences.BackgroundSource
 import com.limelight.utils.background.PipwImages
@@ -61,6 +62,8 @@ import com.limelight.preferences.StreamSettings
 import com.limelight.ui.AdapterFragment
 import com.limelight.ui.AdapterFragmentCallbacks
 import com.limelight.ui.FeatureGuideRegistry
+import com.limelight.ui.MoonWheelDrawable
+import com.limelight.ui.PixelMapBackgroundDrawable
 import com.limelight.ui.UiDismissKeyHandler
 import com.limelight.ui.ViewFeatureGuide
 import com.limelight.ui.ViewFeatureGuideStep
@@ -159,6 +162,7 @@ import android.widget.Toast
 import androidx.annotation.RequiresApi
 
 import javax.microedition.khronos.egl.EGLConfig
+import javax.microedition.khronos.egl.EGL10
 import javax.microedition.khronos.opengles.GL10
 
 import jp.wasabeef.glide.transformations.BlurTransformation
@@ -483,6 +487,23 @@ class PcView : ThemedActivity(), AdapterFragmentCallbacks, ShakeDetector.Listene
 
     private fun initGlRenderer(glPrefs: GlPreferences) {
         val surfaceView = GLSurfaceView(this)
+        // This surface only queries GL_RENDERER. The default chooser insists on
+        // RGB888 with no alpha and a depth buffer, which some devices lack.
+        surfaceView.setEGLConfigChooser { egl, display ->
+            val attributes = intArrayOf(
+                EGL10.EGL_RED_SIZE, 4,
+                EGL10.EGL_GREEN_SIZE, 4,
+                EGL10.EGL_BLUE_SIZE, 4,
+                EGL10.EGL_SURFACE_TYPE, EGL10.EGL_WINDOW_BIT,
+                EGL10.EGL_NONE
+            )
+            val configs = arrayOfNulls<EGLConfig>(1)
+            val count = IntArray(1)
+            check(egl.eglChooseConfig(display, attributes, configs, configs.size, count) && count[0] > 0) {
+                "No EGL window config available for renderer probe"
+            }
+            checkNotNull(configs[0])
+        }
         surfaceView.setRenderer(object : GLSurfaceView.Renderer {
             override fun onSurfaceCreated(gl10: GL10, eglConfig: EGLConfig) {
                 glPrefs.glRenderer = gl10.glGetString(GL10.GL_RENDERER)
@@ -654,6 +675,7 @@ class PcView : ThemedActivity(), AdapterFragmentCallbacks, ShakeDetector.Listene
         val easyTierButton = findViewById<ImageButton>(R.id.easyTierControlButton)
         val toolbarMenuButton = findViewById<ImageButton>(R.id.pcToolbarMenuButton)
 
+        refreshAccentTintedToolbarIcons()
         settingsButton.setOnClickListener { startActivity(Intent(this, StreamSettings::class.java)) }
 
         aboutButton?.setOnClickListener { AboutDialogLauncher.show(this) }
@@ -717,7 +739,7 @@ class PcView : ThemedActivity(), AdapterFragmentCallbacks, ShakeDetector.Listene
             accent = true
         ) {
             popup.dismiss()
-            showThemeModeDialog()
+            showAppThemeSheet(this) { recreate() }
         }
 
         menu.measure(
@@ -824,41 +846,23 @@ class PcView : ThemedActivity(), AdapterFragmentCallbacks, ShakeDetector.Listene
             R.string.theme_accent_background else R.string.theme_accent_pink),
     )
 
-    private fun showThemeModeDialog() {
-        val content = layoutInflater.inflate(R.layout.dialog_app_theme, null)
-        val modeGroup = content.findViewById<android.widget.RadioGroup>(R.id.themeModeGroup)
-        val accentGroup = content.findViewById<android.widget.RadioGroup>(R.id.themeAccentGroup)
-        val modeIds = mapOf(
-            R.id.themeSystem to AppTheme.THEME_MODE_SYSTEM,
-            R.id.themeLight to AppTheme.THEME_MODE_LIGHT,
-            R.id.themeDark to AppTheme.THEME_MODE_DARK,
-        )
-        modeGroup.check(modeIds.entries.first { it.value == AppTheme.getAppThemeMode(this) }.key)
-        accentGroup.check(if (AppTheme.getAccentMode(this) == AppTheme.ACCENT_MODE_BG)
-            R.id.themeBackgroundAccent else R.id.themePinkAccent)
-        val dialog = AlertDialog.Builder(this, R.style.AppDialogStyle)
-            .setTitle(R.string.pcview_theme_dialog_title)
-            .setView(content)
-            .setPositiveButton(R.string.dialog_button_ok) { _, _ ->
-                AppTheme.save(this, modeIds.getValue(modeGroup.checkedRadioButtonId),
-                    if (accentGroup.checkedRadioButtonId == R.id.themeBackgroundAccent)
-                        AppTheme.ACCENT_MODE_BG else AppTheme.ACCENT_MODE_PINK)
-                recreate()
-            }
-            .setNegativeButton(R.string.dialog_button_cancel, null)
-            .create()
-        dialog.show()
-        AppDialogStyler.apply(dialog, this)
-    }
-
     /**
      * 背景换桶后重染工具栏上以 ?attr/appAccent 着色的图标。
      * 矢量在膨胀时一次性解析主题属性，主题 overlay 更新后不会自动重解析。
      */
     private fun refreshAccentTintedToolbarIcons() {
         val tint = ColorStateList.valueOf(UiHelper.accentColor(this))
+        findViewById<ImageButton?>(R.id.settingsButton)?.setImageDrawable(
+            MoonWheelDrawable(
+                density = resources.displayMetrics.density,
+                graphiteColor = ContextCompat.getColor(this, R.color.ui_shell_text_primary),
+                accentColor = UiHelper.accentColor(this)
+            )
+        )
         findViewById<ImageButton?>(R.id.aboutButton)?.imageTintList = tint
         findViewById<ImageButton?>(R.id.easyTierControlButton)?.imageTintList = tint
+        findViewById<ImageButton?>(R.id.pcToolbarMenuButton)?.imageTintList =
+            ColorStateList.valueOf(ContextCompat.getColor(this, R.color.ui_shell_text_primary))
     }
 
     private fun getThemeModeLabel(mode: String): String {
@@ -932,8 +936,12 @@ class PcView : ThemedActivity(), AdapterFragmentCallbacks, ShakeDetector.Listene
         }
 
         if (target == null) {
-            // "none" or self-demoted bad state → leave the view empty.
-            backgroundImageView?.setImageDrawable(null)
+            backgroundImageView?.setImageDrawable(
+                when (source) {
+                    BackgroundSource.Auto, BackgroundSource.Api -> PixelMapBackgroundDrawable(this)
+                    else -> null
+                }
+            )
             BgAccent.clear(this)
             refreshBackgroundAccent(BgAccent.NO_BUCKET)
             return
@@ -1175,9 +1183,7 @@ class PcView : ThemedActivity(), AdapterFragmentCallbacks, ShakeDetector.Listene
     /**
      * First-launch background source picker (issue #263).
      *
-     * - TV / Leanback devices: no dialog ever. They are auto-switched to Picsum
-     *   (photography, family-friendly) silently because D-pad dialogs on a
-     *   shared TV are worse UX than picking the safe option.
+     * - TV / Leanback devices: no dialog. Keep the offline V/+ map default.
      * - Everyone else on a fresh install: one-time picker so nobody is
      *   ambushed by animé wallpapers in public / at work.
      * - Anyone who already picked, or who already saw+dismissed the dialog,
@@ -1196,7 +1202,7 @@ class PcView : ThemedActivity(), AdapterFragmentCallbacks, ShakeDetector.Listene
             return
         }
         if (BackgroundSource.isTvDevice(this)) {
-            BackgroundSource.setActive(this, BackgroundSource.Picsum)
+            BackgroundSource.setActive(this, BackgroundSource.Auto)
             return
         }
 
@@ -1284,12 +1290,21 @@ class PcView : ThemedActivity(), AdapterFragmentCallbacks, ShakeDetector.Listene
     // Image Save Methods
 
     private fun saveImageWithPermissionCheck() {
+        val resolved = BackgroundSource.resolveCurrentTarget(
+            this,
+            resources.configuration.orientation
+        )
+        if (resolved.target == null || backgroundImageView?.drawable == null || displayedBackgroundKey != resolved.cacheKey) {
+            showToast(getString(R.string.image_not_loaded_please_retry))
+            return
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && !Environment.isExternalStorageManager()) {
             showToast(getString(R.string.storage_permission_required))
             requestStoragePermission()
             return
         }
-        saveImage()
+        showToast(getString(R.string.downloading_image_please_wait))
+        saveResolvedBackground(resolved)
     }
 
     @RequiresApi(Build.VERSION_CODES.R)
@@ -1301,20 +1316,6 @@ class PcView : ThemedActivity(), AdapterFragmentCallbacks, ShakeDetector.Listene
         } catch (e: Exception) {
             startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
         }
-    }
-
-    private fun saveImage() {
-        val resolved = BackgroundSource.resolveCurrentTarget(
-            this,
-            resources.configuration.orientation
-        )
-        if (resolved.target == null || backgroundImageView?.drawable == null || displayedBackgroundKey != resolved.cacheKey) {
-            showToast(getString(R.string.image_not_loaded_please_retry))
-            return
-        }
-
-        showToast(getString(R.string.downloading_image_please_wait))
-        saveResolvedBackground(resolved)
     }
 
     /**
@@ -1429,6 +1430,8 @@ class PcView : ThemedActivity(), AdapterFragmentCallbacks, ShakeDetector.Listene
     }
 
     override fun hearShake() {
+        // Procedural/empty backgrounds have nothing to refresh and consume no download quota.
+        if (BackgroundSource.resolveCurrentTarget(this, resources.configuration.orientation).target == null) return
         val currentTime = System.currentTimeMillis()
 
         if (currentTime - lastShakeTime < SHAKE_DEBOUNCE_INTERVAL) {
@@ -1812,7 +1815,8 @@ class PcView : ThemedActivity(), AdapterFragmentCallbacks, ShakeDetector.Listene
             val perfOverlayLocked: Boolean,
             val perfOverlayBgOpacity: Int,
             val perfOverlayOrientation: PreferenceConfiguration.PerfOverlayOrientation,
-            val perfOverlayPosition: PreferenceConfiguration.PerfOverlayPosition
+            val perfOverlayPosition: PreferenceConfiguration.PerfOverlayPosition,
+            val perfOverlayStyle: PerfHudDensity
     ) {
         fun applyTo(prefs: PreferenceConfiguration): PreferenceConfiguration {
             prefs.width = width
@@ -1838,6 +1842,7 @@ class PcView : ThemedActivity(), AdapterFragmentCallbacks, ShakeDetector.Listene
             prefs.perfOverlayBgOpacity = perfOverlayBgOpacity
             prefs.perfOverlayOrientation = perfOverlayOrientation
             prefs.perfOverlayPosition = perfOverlayPosition
+            prefs.perfOverlayStyle = perfOverlayStyle
             return prefs
         }
 
@@ -1866,6 +1871,7 @@ class PcView : ThemedActivity(), AdapterFragmentCallbacks, ShakeDetector.Listene
                 put("perfOverlayBgOpacity", perfOverlayBgOpacity)
                 put("perfOverlayOrientation", perfOverlayOrientation.name)
                 put("perfOverlayPosition", perfOverlayPosition.name)
+                put("perfOverlayStyle", perfOverlayStyle.prefValue)
             }
         }
 
@@ -1894,7 +1900,8 @@ class PcView : ThemedActivity(), AdapterFragmentCallbacks, ShakeDetector.Listene
                         perfOverlayLocked = prefs.perfOverlayLocked,
                         perfOverlayBgOpacity = prefs.perfOverlayBgOpacity,
                         perfOverlayOrientation = prefs.perfOverlayOrientation,
-                        perfOverlayPosition = prefs.perfOverlayPosition)
+                        perfOverlayPosition = prefs.perfOverlayPosition,
+                        perfOverlayStyle = prefs.perfOverlayStyle)
             }
 
             fun fromJson(json: JSONObject, fallback: PreferenceConfiguration): SceneConfiguration {
@@ -1929,7 +1936,12 @@ class PcView : ThemedActivity(), AdapterFragmentCallbacks, ShakeDetector.Listene
                         perfOverlayLocked = json.optBoolean("perfOverlayLocked", fallback.perfOverlayLocked),
                         perfOverlayBgOpacity = json.optInt("perfOverlayBgOpacity", fallback.perfOverlayBgOpacity),
                         perfOverlayOrientation = parseEnum(json.optString("perfOverlayOrientation", fallback.perfOverlayOrientation.name), fallback.perfOverlayOrientation),
-                        perfOverlayPosition = parseEnum(json.optString("perfOverlayPosition", fallback.perfOverlayPosition.name), fallback.perfOverlayPosition))
+                        perfOverlayPosition = parseEnum(json.optString("perfOverlayPosition", fallback.perfOverlayPosition.name), fallback.perfOverlayPosition),
+                        perfOverlayStyle = if (json.has("perfOverlayStyle")) {
+                            PerfHudDensity.fromPreference(json.optString("perfOverlayStyle"))
+                        } else {
+                            fallback.perfOverlayStyle
+                        })
             }
 
             private inline fun <reified T : Enum<T>> parseEnum(value: String, fallback: T): T {
@@ -2193,11 +2205,15 @@ class PcView : ThemedActivity(), AdapterFragmentCallbacks, ShakeDetector.Listene
                 AppActionSheet.Action(
                     id = ADD_PC_MANUALLY_ID,
                     title = getString(R.string.addpc_manual),
+                    description = getString(R.string.addpc_manual_description),
+                    iconRes = R.drawable.ic_add_host_address,
                     opensSubmenu = true
                 ),
                 AppActionSheet.Action(
                     id = ADD_PC_QR_SCAN_ID,
                     title = getString(R.string.addpc_qr_scan),
+                    description = getString(R.string.qr_scan_prompt),
+                    iconRes = R.drawable.ic_add_host_scan,
                     opensSubmenu = true
                 )
             ),

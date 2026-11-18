@@ -28,9 +28,10 @@ import android.widget.LinearLayout;
 import android.widget.RadioButton;
 import android.app.AlertDialog;
 import android.widget.SeekBar;
-import android.widget.Switch;
 import android.widget.TextView;
 import android.widget.Toast;
+import androidx.appcompat.widget.SwitchCompat;
+import com.limelight.utils.AppSwitchStyle;
 
 import com.limelight.Game;
 import com.limelight.LimeLog;
@@ -79,6 +80,7 @@ public class ElementController {
     private static final String SPECIAL_KEY_OPEN_GAME_MENU = "OGM";
     private static final String SPECIAL_KEY_EDIT_MODE_SWITCH = "EMS"; // 编辑模式
     private static final String SPECIAL_KEY_MOUSE_MOVE_ONLY = "MMO"; // 仅鼠标移动
+    private static final String SPECIAL_KEY_DS5_TOUCHPAD_CYCLE = "DSC"; // DS5 触摸板 开/关
 
 
 
@@ -396,8 +398,9 @@ public class ElementController {
                 addElement(contentValues);
             }
         });
-        Switch dragEditSwitch = pageEdit.findViewById(R.id.page_edit_drag_edit_switch);
+        SwitchCompat dragEditSwitch = pageEdit.findViewById(R.id.page_edit_drag_edit_switch);
         if (dragEditSwitch != null) {
+            AppSwitchStyle.apply(dragEditSwitch);
             // 设置初始状态
             dragEditSwitch.setChecked(true); // 默认启用长按移动按键
 
@@ -411,8 +414,9 @@ public class ElementController {
                 }
             });
         }
-        Switch alignmentSnapSwitch = pageEdit.findViewById(R.id.page_edit_alignment_snap_switch);
+        SwitchCompat alignmentSnapSwitch = pageEdit.findViewById(R.id.page_edit_alignment_snap_switch);
         if (alignmentSnapSwitch != null) {
+            AppSwitchStyle.apply(alignmentSnapSwitch);
             alignmentSnapSwitch.setChecked(alignmentSnapEnabled);
             alignmentSnapSwitch.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
                 @Override
@@ -1040,12 +1044,9 @@ public class ElementController {
     }
 
     private void applyCrownDetailStyle(View view) {
-        if (view instanceof Switch) {
-            Switch switchView = (Switch) view;
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                switchView.setThumbTintList(getColorStateList(R.color.crown_switch_thumb));
-                switchView.setTrackTintList(getColorStateList(R.color.crown_switch_track));
-            }
+        if (view instanceof SwitchCompat) {
+            SwitchCompat switchView = (SwitchCompat) view;
+            AppSwitchStyle.apply(switchView);
         } else if (view instanceof RadioButton) {
             RadioButton radioButton = (RadioButton) view;
             radioButton.setTextColor(context.getResources().getColor(R.color.crown_text_primary));
@@ -1507,6 +1508,23 @@ public class ElementController {
             return switchMouseMode(true, false, context.getString(R.string.touch_mode_trackpad));
         } else if (key.equals(SPECIAL_KEY_MULTI_TOUCH_MODE)) {
             return switchMouseMode(false, true, context.getString(R.string.touch_mode_multitouch));
+        } else if (key.equals(SPECIAL_KEY_DS5_TOUCHPAD_CYCLE)) {
+            return new SendEventHandler() {
+                @Override
+                public void sendEvent(boolean down) {
+                    if (down) {
+                        boolean enabled = game.getScreenDs5Touchpad().toggle();
+                        int toastRes = enabled ? R.string.toast_ds5_touchpad_on
+                            : R.string.toast_ds5_touchpad_off;
+                        showToast(context.getString(toastRes));
+                    }
+                }
+
+                @Override
+                public void sendEvent(int analog1, int analog2) {
+
+                }
+            };
         } else if (key.equals(SPECIAL_KEY_PC_KEYBOARD_SWITCH)) {
             return new SendEventHandler() {
                 @Override

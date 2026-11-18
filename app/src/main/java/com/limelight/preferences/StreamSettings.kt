@@ -12,8 +12,8 @@ import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.content.res.ColorStateList
 import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.StateListDrawable
 import android.content.res.Configuration
-import android.graphics.Bitmap
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.Drawable
@@ -73,7 +73,6 @@ import androidx.recyclerview.widget.RecyclerView
 
 import com.bumptech.glide.Glide
 import com.bumptech.glide.load.DecodeFormat
-import com.bumptech.glide.load.MultiTransformation
 import com.bumptech.glide.load.engine.DiskCacheStrategy
 import com.bumptech.glide.load.resource.drawable.DrawableTransitionOptions
 import com.bumptech.glide.request.RequestOptions
@@ -84,6 +83,7 @@ import com.bumptech.glide.signature.ObjectKey
 import com.limelight.services.KeyboardAccessibilityEnabler
 import com.limelight.ui.ThemedAppCompatActivity
 import com.limelight.ui.UiDismissKeyHandler
+import com.limelight.ui.showAppInfoSheet
 import rikka.shizuku.Shizuku
 import com.limelight.utils.AppTheme
 import com.limelight.LimeLog
@@ -104,6 +104,7 @@ import com.limelight.nvstream.HostGamepadSelection
 import com.limelight.binding.video.MediaCodecHelper
 import com.limelight.handbook.HandbookLauncher
 import com.limelight.utils.AboutDialogLauncher
+import com.limelight.utils.BrowserOnlyLauncher
 import com.limelight.utils.ConfigurationSyncManager
 import com.limelight.utils.ConfigurationSyncScheduler
 import com.limelight.utils.Dialog
@@ -123,7 +124,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 import jp.wasabeef.glide.transformations.BlurTransformation
-import jp.wasabeef.glide.transformations.ColorFilterTransformation
 
 import java.io.File
 import java.io.IOException
@@ -177,6 +177,7 @@ class StreamSettings : ThemedAppCompatActivity() {
     private var drawerLayout: DrawerLayout? = null // 竖屏时使用，横屏时为 null
     private var categoryList: RecyclerView? = null
     private var categoryAdapter: CategoryAdapter? = null
+    private var crownInfoDialog: android.app.Dialog? = null
     private val categories: MutableList<CategoryItem> = ArrayList()
     private var selectedCategoryIndex = 0
 
@@ -239,6 +240,24 @@ class StreamSettings : ThemedAppCompatActivity() {
         ).commitAllowingStateLoss()
     }
 
+    /** Reapplies presentation after reset and rebuilds the home screen for legacy locale changes. */
+    internal fun onSettingsReset() {
+        val languageChanged = UiHelper.resetLocale(this)
+        BackgroundSource.invalidateResolvedTarget()
+        sendBroadcast(Intent(BackgroundSource.ACTION_REFRESH).setPackage(packageName))
+        AppTheme.applyStoredAppTheme(this)
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU && languageChanged) {
+            // Rebuild the home screen too, matching the existing legacy language-change flow.
+            startActivities(arrayOf(
+                Intent(this, PcView::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK),
+                Intent(this, StreamSettings::class.java)
+            ))
+            finish()
+        } else {
+            recreate()
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         // 应用带阴影的主题
         AppTheme.applyStyle(this, R.style.PreferenceThemeWithShadow)
@@ -289,11 +308,18 @@ class StreamSettings : ThemedAppCompatActivity() {
         // 初始化抽屉菜单
         initDrawerMenu()
         savedInstanceState?.let { state ->
-            searchInput?.setText(state.getString(KEY_SEARCH_QUERY).orEmpty())
-            if (state.getBoolean(KEY_SEARCH_VISIBLE)) {
+            val restoredQuery = state.getString(KEY_SEARCH_QUERY).orEmpty()
+            searchInput?.setText(restoredQuery)
+            // 横屏的搜索栏常驻，不参与展开状态；竖屏重建时连查询一起还原成展开态，
+            // 否则用户会看到被过滤的列表却找不到搜索框。
+            val restoreExpanded = searchToggle != null &&
+                (state.getBoolean(KEY_SEARCH_VISIBLE) || restoredQuery.isNotBlank())
+            if (restoreExpanded) {
                 searchBar?.visibility = View.VISIBLE
                 searchToggle?.visibility = View.GONE
                 menuToggleView?.visibility = View.GONE
+                // 焦点目标和可见性必须同源，否则重建后列表“向上”会指向隐藏的控件
+                searchBarExpanded = true
             }
         }
 
@@ -369,13 +395,19 @@ class StreamSettings : ThemedAppCompatActivity() {
             androidx.core.graphics.ColorUtils.setAlphaComponent(UiHelper.accentColor(this), 69))
     }
 
+    /** Refreshes settings surfaces and system icon contrast for in-place theme changes. */
     private fun applySettingsThemeSurfaces() {
+        findViewById<View>(R.id.settingsBackgroundImage)?.setBackgroundColor(
+                ContextCompat.getColor(this, R.color.settings_page_background)
+        )
         findViewById<View>(R.id.settingsBackgroundOverlay)?.setBackgroundColor(
                 ContextCompat.getColor(this, R.color.settings_background_overlay)
         )
-        // 横屏侧栏背景在布局创建时解析。深浅切换不重建 Activity，需要按当前主题重设。
+        // 竖屏抽屉覆盖内容，需要比并排显示的横屏侧栏更实的底色。
         findViewById<View>(R.id.drawer_menu)?.setBackgroundColor(
-                ContextCompat.getColor(this, R.color.settings_drawer_background_landscape)
+                ContextCompat.getColor(this,
+                    if (resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE)
+                        R.color.settings_group_surface else R.color.settings_drawer_background)
         )
         findViewById<ImageView>(R.id.settings_back)?.setColorFilter(
                 ContextCompat.getColor(this, R.color.ui_shell_text_primary)
@@ -391,16 +423,22 @@ class StreamSettings : ThemedAppCompatActivity() {
     /** 搜索框的底色、描边、图标和文字都在创建时解析，深浅切换时按当前主题重设。 */
     private fun applySearchBarTheme() {
         val searchBar = findViewById<View>(R.id.settings_search_bar) ?: return
-        val background = GradientDrawable().apply {
+
+        // 焦点态写在背景 selector 里：未聚焦 1dp、聚焦 2dp，和返回/菜单按钮共用一套“描边=焦点”的语汇
+        fun barBackground(focused: Boolean) = GradientDrawable().apply {
             shape = GradientDrawable.RECTANGLE
             cornerRadius = resources.getDimension(R.dimen.corner_radius_extra_large)
             setColor(ContextCompat.getColor(this@StreamSettings, R.color.ui_shell_surface_elevated))
+            val widthDp = if (focused) 2f else 1f
             setStroke(
-                (resources.displayMetrics.density).toInt().coerceAtLeast(1),
+                (widthDp * resources.displayMetrics.density).toInt().coerceAtLeast(1),
                 UiHelper.accentFocusColor(this@StreamSettings)
             )
         }
-        searchBar.background = background
+        searchBar.background = StateListDrawable().apply {
+            addState(intArrayOf(android.R.attr.state_focused), barBackground(focused = true))
+            addState(intArrayOf(), barBackground(focused = false))
+        }
         val accent = ColorStateList.valueOf(UiHelper.accentColor(this))
         searchBar.findViewById<ImageView>(R.id.settings_search_icon)?.imageTintList = accent
         searchBar.findViewById<ImageView>(R.id.settings_search_close)?.imageTintList = accent
@@ -474,7 +512,15 @@ class StreamSettings : ThemedAppCompatActivity() {
 
         if (searchBar == null || searchInput == null) return
 
-        searchToggle?.setOnClickListener { showSearchBar() }
+        // 触摸点搜索按钮：展开后直接进输入；手柄确认键走 key 监听，先落到整条搜索栏上
+        searchToggle?.setOnClickListener { showSearchBar(enterInput = true) }
+        searchToggle?.setOnKeyListener { _, keyCode, event ->
+            if (event.action != KeyEvent.ACTION_UP || !isSearchConfirmKey(keyCode)) {
+                return@setOnKeyListener false
+            }
+            showSearchBar(enterInput = false)
+            true
+        }
         closeBtn?.setOnClickListener {
             if (searchToggle == null) {
                 clearSearchQuery()
@@ -483,6 +529,20 @@ class StreamSettings : ThemedAppCompatActivity() {
             }
         }
 
+        // 整条搜索栏就是手柄焦点：确认键进输入，左右键到关闭按钮，其余方向回列表
+        searchBar?.setOnClickListener { enterSearchInput() }
+        searchBar?.setOnKeyListener { _, keyCode, event ->
+            if (event.action != KeyEvent.ACTION_UP || !isSearchConfirmKey(keyCode)) {
+                return@setOnKeyListener false
+            }
+            enterSearchInput()
+            true
+        }
+        searchInput?.setOnClickListener { enterSearchInput() }
+        searchInput?.showSoftInputOnFocus = false
+        searchInput?.setOnFocusChangeListener { _, hasFocus ->
+            if (!hasFocus) leaveSearchInput()
+        }
         searchInput?.doAfterTextChanged { applyFilterToFragment(it?.toString().orEmpty()) }
 
         // IME 回车：仅收起键盘，保留过滤结果
@@ -494,8 +554,7 @@ class StreamSettings : ThemedAppCompatActivity() {
         }
     }
 
-    private val isSearchBarVisible: Boolean
-        get() = searchToggle != null && searchBar?.visibility == View.VISIBLE
+    private var searchBarExpanded = false
 
     private fun fadeIn(v: View?) {
         v ?: return
@@ -509,20 +568,81 @@ class StreamSettings : ThemedAppCompatActivity() {
         v.animate().alpha(0f).setDuration(140L).withEndAction { v.visibility = View.GONE }.start()
     }
 
-    private fun showSearchBar() {
+    private fun showSearchBar(enterInput: Boolean = false) {
+        searchBarExpanded = true
         fadeOut(searchToggle)
         fadeOut(menuToggleView)
         fadeIn(searchBar)
-        searchInput?.requestFocus()
+        updateSearchFocusRoutes()
+        if (enterInput) {
+            searchBar?.post { enterSearchInput() }
+        } else {
+            // 手柄展开时不弹键盘：焦点落在整条搜索栏上，再按一次确认键才进输入
+            searchBar?.requestFocus()
+        }
+    }
+
+    private fun isSearchConfirmKey(keyCode: Int): Boolean {
+        return keyCode == KeyEvent.KEYCODE_DPAD_CENTER ||
+            keyCode == KeyEvent.KEYCODE_ENTER ||
+            keyCode == KeyEvent.KEYCODE_NUMPAD_ENTER ||
+            keyCode == KeyEvent.KEYCODE_BUTTON_A
+    }
+
+    private fun enterSearchInput() {
+        val input = searchInput ?: return
+        // 只有真正要打字时才让输入框可聚焦，这样手柄在搜索栏上时不会被输入框抢走焦点
+        input.isFocusable = true
+        input.isFocusableInTouchMode = true
+        input.showSoftInputOnFocus = true
+        input.requestFocus()
         val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
-        imm?.showSoftInput(searchInput, InputMethodManager.SHOW_IMPLICIT)
+        input.post { imm?.showSoftInput(input, InputMethodManager.SHOW_IMPLICIT) }
+    }
+
+    private fun leaveSearchInput() {
+        val input = searchInput ?: return
+        input.showSoftInputOnFocus = false
+        input.isFocusable = false
+        input.isFocusableInTouchMode = false
+        val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+        imm?.hideSoftInputFromWindow(input.windowToken, 0)
     }
 
     private fun hideSearchBar() {
+        val focusInsideBar = searchBar?.hasFocus() == true
+        searchBarExpanded = false
+        // 收起时无条件复位输入态，不依赖输入框的 onFocusChange 回调
+        searchInput?.clearFocus()
+        searchBar?.clearFocus()
         clearSearchQuery()
         fadeOut(searchBar)
         fadeIn(searchToggle)
         fadeIn(menuToggleView)
+        updateSearchFocusRoutes()
+        if (focusInsideBar) searchToggle?.requestFocus()
+    }
+
+    /** 收起时焦点目标是搜索按钮，展开（或横屏常驻）时是搜索栏本身。 */
+    private fun searchFocusTargetId(): Int {
+        return if (searchBarExpanded || searchToggle == null) {
+            R.id.settings_search_bar
+        } else {
+            R.id.settings_search_toggle
+        }
+    }
+
+    /**
+     * 只维护“分类第一项向上回到搜索”这一条边界路径。
+     * 设置列表里的上下/左右都交给默认的几何寻焦，避免抢掉行内控件的方向键语义。
+     */
+    private fun updateSearchFocusRoutes() {
+        val targetId = searchFocusTargetId()
+        val firstCategory = categoryList
+            ?.findViewHolderForAdapterPosition(0)
+            ?.itemView
+            ?.findViewById<View>(R.id.category_item_root)
+        firstCategory?.nextFocusUpId = targetId
     }
 
     private fun clearSearchQuery() {
@@ -623,6 +743,19 @@ class StreamSettings : ThemedAppCompatActivity() {
      */
     class CategoryItem(var key: String, var title: String, var iconRes: Int)
 
+    private fun showCrownInfo() {
+        crownInfoDialog?.dismiss()
+        crownInfoDialog = showAppInfoSheet(
+            context = this,
+            title = getString(R.string.settings_crown_info_content_description),
+            text = getString(R.string.settings_crown_info_tooltip),
+            actionLabel = getString(R.string.settings_crown_author_github),
+            onAction = { BrowserOnlyLauncher.open(this, "https://github.com/WACrown") }
+        ).apply {
+            setOnDismissListener { crownInfoDialog = null }
+        }
+    }
+
     /**
      * 分类菜单适配器
      */
@@ -648,13 +781,13 @@ class StreamSettings : ThemedAppCompatActivity() {
             // Phosphor 矢量图标 + 文本（图标颜色随选中态在 updateItemAppearance 中切换）
             holder.icon.setImageResource(item.iconRes)
             holder.title.text = item.title
-
             // 高亮选中项
             val isSelected = position == selectedCategoryIndex
             updateItemAppearance(holder, isSelected, false)
 
             // 点击事件
             holder.root.setOnClickListener { selectCategory(holder.bindingAdapterPosition, item) }
+            holder.root.nextFocusUpId = if (position == 0) searchFocusTargetId() else View.NO_ID
 
             // 焦点变化事件（控制器支持）
             holder.root.setOnFocusChangeListener { _, hasFocus ->
@@ -824,7 +957,8 @@ class StreamSettings : ThemedAppCompatActivity() {
             drawerLayout?.closeDrawer(drawerMenu, false)
         }
 
-        menuToggle?.visibility = View.VISIBLE
+        // 搜索栏展开时菜单按钮必须保持隐藏：它会被搜索栏盖住，但仍留在焦点链和无障碍树里
+        menuToggle?.visibility = if (searchBarExpanded) View.GONE else View.VISIBLE
     }
 
     override fun onAttachedToWindow() {
@@ -845,6 +979,7 @@ class StreamSettings : ThemedAppCompatActivity() {
 
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
+        crownInfoDialog?.dismiss()
 
         val isUsingPortraitDrawerLayout = findViewById<View>(R.id.drawer_layout) is DrawerLayout
         val shouldUsePortraitDrawerLayout = newConfig.orientation != Configuration.ORIENTATION_LANDSCAPE
@@ -993,10 +1128,11 @@ class StreamSettings : ThemedAppCompatActivity() {
         // 保存选中的分类索引，用于屏幕旋转后恢复
         outState.putInt(KEY_SELECTED_CATEGORY, selectedCategoryIndex)
         outState.putString(KEY_SEARCH_QUERY, searchInput?.text?.toString())
-        outState.putBoolean(KEY_SEARCH_VISIBLE, isSearchBarVisible)
+        outState.putBoolean(KEY_SEARCH_VISIBLE, searchBarExpanded)
     }
 
     override fun onDestroy() {
+        crownInfoDialog?.dismiss()
         PreferenceManager.getDefaultSharedPreferences(this).unregisterOnSharedPreferenceChangeListener(backgroundPrefsListener)
         if (backgroundReceiverRegistered) {
             unregisterReceiver(backgroundReceiver)
@@ -1015,12 +1151,12 @@ class StreamSettings : ThemedAppCompatActivity() {
     private fun handleSettingsBack() {
         if ((supportFragmentManager.findFragmentById(R.id.preference_container) as? SettingsFragment)
                 ?.closeSettingsScreen() == true) return
-        // 搜索栏可见时，优先关闭搜索而不是退出
-        if (isSearchBarVisible) {
+        // 搜索栏展开时，优先关闭搜索而不是退出
+        if (searchBarExpanded) {
             hideSearchBar()
             return
         }
-        // 横屏常驻搜索框没有展开按钮，isSearchBarVisible 恒 false；
+        // 横屏常驻搜索框没有展开态，searchBarExpanded 恒 false；
         // 有查询内容时返回先清搜索再退出，与竖屏行为一致
         if (!searchInput?.text?.toString().isNullOrBlank()) {
             clearSearchQuery()
@@ -1099,6 +1235,7 @@ class StreamSettings : ThemedAppCompatActivity() {
         }
         private val configSyncPreferenceChangeListener =
             SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+                if (SettingsResetManager.isResetting) return@OnSharedPreferenceChangeListener
                 refreshSettingsPresentation(key)
                 if (!suppressConfigSyncPreferenceChanges) {
                     handleConfigSyncPreferenceChanged(key)
@@ -1182,6 +1319,7 @@ class StreamSettings : ThemedAppCompatActivity() {
         private var developerForegroundPollRunning = false
         private var developerDeviceCodeDialog: AlertDialog? = null
         private var customResolutionsDialog: android.app.Dialog? = null
+        private var customFrameRatesDialog: android.app.Dialog? = null
         private var settingsChoiceDialog: android.app.Dialog? = null
         private var settingsChoiceGeneration = 0
         private var settingsChoiceViewDestroyed = false
@@ -1303,6 +1441,42 @@ class StreamSettings : ThemedAppCompatActivity() {
                 choiceValues,
                 saved
             )
+            pref.setAction(getString(R.string.display_custom_frame_rate_action))
+        }
+
+        private fun openCustomFrameRatesEditor(pref: DisplayChoicePreference, restoreHardwareFocus: Boolean) {
+            val context = requireContext()
+            val saved = savedSelection(pref, PreferenceConfiguration.DEFAULT_FPS)
+            val favorites = CustomFrameRatesStore.loadFavorites(context)
+            val allFrameRates = DisplayChoiceLists.frameRateValues(
+                resources.getStringArray(R.array.fps_values).toList(),
+                displayLimits().maxRefreshRate,
+                listOf(saved)
+            )
+            customFrameRatesDialog = CustomFrameRatesDialog.show(
+                context,
+                frameRates = allFrameRates,
+                initialSelected = favorites?.takeIf { it.isNotEmpty() } ?: allFrameRates.toSet(),
+                onCommit = { selected ->
+                    // 全选或全不选都等同于未配置(清除),游戏菜单展示全部
+                    val toSave = if (selected.isEmpty() || allFrameRates.all { it in selected }) null else selected
+                    CustomFrameRatesStore.saveFavorites(context, toSave)
+                },
+                requestInitialFocus = restoreHardwareFocus,
+                onClosed = {
+                    customFrameRatesDialog = null
+                    if (isAdded && !settingsChoiceViewDestroyed) {
+                        replaceSavedFrameRateEntries()
+                        visibilityController.refreshSearch()
+                        refreshSearchPresentation()
+                        listView?.post {
+                            if (isAdded && !settingsChoiceViewDestroyed && findAdapterPositionForPreference(pref) >= 0) {
+                                showListChoiceSheet(pref, MANAGE_DISPLAY_RESOLUTIONS_ACTION, restoreHardwareFocus)
+                            }
+                        }
+                    }
+                }
+            )
         }
 
         private fun showListChoiceSheet(
@@ -1355,7 +1529,11 @@ class StreamSettings : ThemedAppCompatActivity() {
                     onAction = { action ->
                         if (!settingsChoiceViewDestroyed) {
                             if (action.id == MANAGE_DISPLAY_RESOLUTIONS_ACTION && displayPref != null) {
-                                openCustomResolutionsEditor(displayPref, hasHardwareInput())
+                                if (pref.key == PreferenceConfiguration.FPS_PREF_STRING) {
+                                    openCustomFrameRatesEditor(displayPref, hasHardwareInput())
+                                } else {
+                                    openCustomResolutionsEditor(displayPref, hasHardwareInput())
+                                }
                             } else {
                                 values.getOrNull(action.id)?.let { value ->
                                     if (displayPref != null) {
@@ -1454,7 +1632,8 @@ class StreamSettings : ThemedAppCompatActivity() {
             val recycler = listView ?: return
             recycler.post {
                 if (!isAdded || settingsChoiceViewDestroyed || generation != settingsChoiceGeneration ||
-                    settingsChoiceDialog != null || customResolutionsDialog != null) return@post
+                    settingsChoiceDialog != null || customResolutionsDialog != null ||
+                    customFrameRatesDialog != null) return@post
                 val position = findAdapterPositionForPreference(pref)
                 if (position < 0) return@post
                 // The row normally remains visible under the sheet; keep its scroll offset.
@@ -1580,7 +1759,6 @@ class StreamSettings : ThemedAppCompatActivity() {
                 val recyclerView = listView
                 if (recyclerView != null) {
                     setupScrollListener(recyclerView, settingsActivity)
-
                 }
             }
             val pendingKey = savedInstanceState?.getString(MULTI_CHOICE_KEY)
@@ -1655,6 +1833,9 @@ class StreamSettings : ThemedAppCompatActivity() {
 
                 val replacement = SearchablePreferenceCategory(requireContext())
                 replacement.key = category.key
+                if (category.key == "category_crown_features") {
+                    replacement.infoClickHandler = { (activity as? StreamSettings)?.showCrownInfo() }
+                }
                 replacement.title = category.title
                 replacement.summary = category.summary
                 replacement.layoutResource = category.layoutResource
@@ -1953,7 +2134,14 @@ class StreamSettings : ThemedAppCompatActivity() {
                 ?: throw IOException("Unable to open output stream")
         }
 
+        /** Binds backup, sync and reset actions, then refreshes their directory and status summaries. */
         private fun setupConfigSyncPreferences() {
+            findPreference<Preference>(ResetSettingsDialogFragment.TAG)?.setOnPreferenceClickListener {
+                if (parentFragmentManager.findFragmentByTag(ResetSettingsDialogFragment.TAG) == null) {
+                    ResetSettingsDialogFragment().showNow(parentFragmentManager, ResetSettingsDialogFragment.TAG)
+                }
+                true
+            }
             findPreference<Preference>("config_sync_export")?.setOnPreferenceClickListener {
                 exportConfigSyncPackage()
                 true
@@ -2646,6 +2834,8 @@ class StreamSettings : ThemedAppCompatActivity() {
             configSyncSnapshotHandler.removeCallbacks(configSyncSnapshotRunnable)
             customResolutionsDialog?.dismiss()
             customResolutionsDialog = null
+            customFrameRatesDialog?.dismiss()
+            customFrameRatesDialog = null
             cachedDisplayLimits = null
             // 注销 adapter observer，避免泄漏
             val obs = adapterDataObserver
@@ -2975,6 +3165,7 @@ class StreamSettings : ThemedAppCompatActivity() {
                 else SettingsPreferenceAdapter(preferenceScreen)
         }
 
+        /** Initializes device defaults and binds the preference schema while restoring navigation. */
         override fun onCreatePreferences(savedInstanceState: Bundle?, rootKey: String?) {
             val navigation = savedInstanceState ?: arguments
             activeSettingsScreenKey = navigation?.getString(DETAIL_SCREEN)
@@ -2986,16 +3177,7 @@ class StreamSettings : ThemedAppCompatActivity() {
             // 添加阴影主题
             AppTheme.applyStyle(requireActivity(), R.style.PreferenceThemeWithShadow)
 
-            MicrophoneButtonPreferences(requireContext()).migrateLegacyVisibilityIfNeeded()
-            initializeTouchModeDefaultsIfNeeded()
-            val bitratePrefs = PreferenceManager.getDefaultSharedPreferences(requireContext())
-            if (!bitratePrefs.contains(PreferenceConfiguration.AUTO_ADJUST_BITRATE_PREF_STRING)) {
-                val recommended = PreferenceConfiguration.getDefaultBitrate(requireContext())
-                bitratePrefs.edit {
-                    putBoolean(PreferenceConfiguration.AUTO_ADJUST_BITRATE_PREF_STRING,
-                        bitratePrefs.getInt(PreferenceConfiguration.BITRATE_PREF_STRING, recommended) == recommended)
-                }
-            }
+            PreferenceConfiguration.initializeDeviceDefaults(requireContext())
             setPreferencesFromResource(R.xml.preferences, null)
             val screen = preferenceScreen
             replaceSearchableCategories(screen)
@@ -3003,6 +3185,14 @@ class StreamSettings : ThemedAppCompatActivity() {
             setupFramegenPreferences()
             setupConfigSyncPreferences()
             setupMicVolumeProcessingPreferences()
+            findPreference<Preference>("preference_mic_test")?.let { preference ->
+                preference.isVisible = resources.getBoolean(R.bool.enable_mic_test)
+                if (preference.isVisible) {
+                    preference.setOnPreferenceClickListener {
+                        MicrophoneTestLauncher.launch(requireContext())
+                    }
+                }
+            }
             setupInputModePresetPreference()
             setupPerfOverlayPreferences()
             setupMicrophoneButtonPositionPreference()
@@ -3460,13 +3650,6 @@ class StreamSettings : ThemedAppCompatActivity() {
                 }
                 .setNegativeButton(android.R.string.cancel, null)
                 .showStyled()
-        }
-
-        private fun initializeTouchModeDefaultsIfNeeded() {
-            val context = requireContext()
-            modeStore.ensureTouchDefaults(
-                context.packageManager.hasSystemFeature(PackageManager.FEATURE_TOUCHSCREEN)
-            )
         }
 
         override fun onRequestPermissionsResult(
@@ -4793,21 +4976,12 @@ class StreamSettings : ThemedAppCompatActivity() {
         }
         val (width, height) = size
 
-        // 模糊 + theme-aware 蒙版，单次解码完成（合并到一个 Glide pipeline）
+        // Theme tint comes from the shared full-page overlay, including detail pages.
         // 强制 RGB_565：每像素 2 字节，整张图内存减半，模糊背景视觉无损
-        val filterColor = if (isNightMode()) {
-            Color.argb(120, 0, 0, 0)
-        } else {
-            Color.argb(96, 255, 255, 255)
-        }
-        val transformations = MultiTransformation<Bitmap>(
-                BlurTransformation(2, 3),
-                ColorFilterTransformation(filterColor)
-        )
         val options = RequestOptions()
                 .override(width, height)
                 .format(DecodeFormat.PREFER_RGB_565)
-                .transform(transformations)
+                .transform(BlurTransformation(2, 3))
                 .signature(ObjectKey(resolved.cacheKey))
                 .diskCacheStrategy(DiskCacheStrategy.ALL)
 

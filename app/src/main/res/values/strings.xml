@@ -229,8 +229,9 @@
     <string name="title_add_pc">Add PC Manually</string>
     <string name="title_add_pc_choose">Add Computer</string>
     <string name="addpc_manual">Enter IP Address</string>
+    <string name="addpc_manual_description">Use the IP address of your host computer</string>
     <string name="addpc_qr_scan">Scan QR Code</string>
-    <string name="qr_scan_prompt">Scan the QR code from Sunshine Web UI</string>
+    <string name="qr_scan_prompt">Scan the QR code from Foundation Sunshine Web UI</string>
     <string name="qr_invalid_code">Unrecognized QR code</string>
     <string name="qr_pairing">QR pairing…</string>
     <string name="qr_pair_success">Paired successfully!</string>
@@ -692,15 +693,15 @@
     <string name="summary_checkbox_clipboard_sync_text">Forward text copied on this device to the PC and vice versa. Warning: anything you copy (including passwords and 2FA codes) will leave this device.</string>
     <string name="title_checkbox_clipboard_sync_image">Sync clipboard images with PC</string>
     <string name="summary_checkbox_clipboard_sync_image">Forward images copied on this device to the PC. Large screenshots may use significant bandwidth.</string>
-    <string name="title_screen_combination_mode">Host display arrangement</string>
+    <string name="title_screen_combination_mode">Screen Layout</string>
     <string name="summary_screen_combination_mode">Choose how Foundation Sunshine arranges or combines host displays. Requires a compatible Foundation Sunshine host.</string>
     <string name="screen_combination_mode_dialog_subtitle">Applies to Foundation Sunshine display control</string>
-    <string name="screen_mode_host_default">Follow host</string>
-    <string name="screen_mode_no_operation">No operation mode</string>
-    <string name="screen_mode_auto_activate">Activate mode</string>
-    <string name="screen_mode_primary_streaming">Primary streaming mode</string>
-    <string name="screen_mode_secondary_streaming">Secondary streaming mode</string>
-    <string name="screen_mode_exclusive_streaming">Exclusive display streaming mode</string>
+    <string name="screen_mode_host_default">Follow Host</string>
+    <string name="screen_mode_no_operation">No Action</string>
+    <string name="screen_mode_auto_activate">Activate</string>
+    <string name="screen_mode_primary_streaming">Primary</string>
+    <string name="screen_mode_secondary_streaming">Secondary</string>
+    <string name="screen_mode_exclusive_streaming">Exclusive</string>
     <string name="screen_mode_host_default_desc">Use the Sunshine host setting without overriding it.</string>
     <string name="screen_mode_no_operation_desc">Send no-operation mode and keep the current display layout.</string>
     <string name="screen_mode_auto_activate_desc">Activate the selected display for streaming.</string>
@@ -760,7 +761,7 @@
     <string name="title_enable_host_cadence_precise_sync">Extra smoothness for Precise Sync</string>
     <string name="summary_enable_host_cadence_precise_sync">Helps reduce tiny repeated stutters on stable networks, especially at 90/120 FPS. May add about 1-3 ms of latency.</string>
     <string name="title_perf_overlay_orientation">Performance stats layout</string>
-    <string name="summary_perf_overlay_orientation">Choose a horizontal row or vertical column.</string>
+    <string name="summary_perf_overlay_orientation">Classic: horizontal row or vertical column. HUD: applies to the Standard style while floating.</string>
     <string name="title_perf_overlay_clock_format">Clock format</string>
     <string name="summary_perf_overlay_clock_format">Choose the clock format. Enable Clock in Performance stats metrics first.</string>
     <string name="perf_overlay_clock_format_system_minutes">System format, hours and minutes</string>
@@ -770,7 +771,7 @@
     <string name="perf_overlay_clock_format_12_minutes">12-hour format, hours and minutes</string>
     <string name="perf_overlay_clock_format_12_seconds">12-hour format, including seconds</string>
     <string name="title_perf_overlay_position">Performance stats position</string>
-    <string name="summary_perf_overlay_position">Place a horizontal layout at the top or bottom, or a vertical layout in a corner.</string>
+    <string name="summary_perf_overlay_position">Initial position before you drag it. Classic: top/bottom or a corner. In portrait the HUD docks below the video when there is room.</string>
     <string name="title_perf_overlay_display_items">Performance stats metrics</string>
     <string name="summary_perf_overlay_display_items">Choose which stream, decoder, network, host, and device metrics to show.</string>
     <string name="title_perf_overlay_bg_opacity">Performance stats background opacity</string>
@@ -1151,7 +1152,71 @@
     <string name="tip_hdr_colors">💡 Tip: Adjusting resolution can balance quality and performance, find the perfect settings~</string>
     <string name="tip_touch_modes">💡 Tip: You can switch touch modes in the game menu. Enhanced multi-touch is suitable for mobile games, trackpad mode is great for office work. Find the operation method that suits you best~</string>
     <string name="tip_custom_keys">💡 Tip: You can add custom key combinations, like Ctrl+Shift+Esc to quickly open Task Manager, making operations more convenient~</string>
-    <string name="tip_performance_overlay">💡 Tip: The performance overlay can be dragged to any position, double-tap to switch between horizontal and vertical layouts, and click on various metrics to view detailed explanations~</string>
+    <string name="tip_performance_overlay">💡 Tip: tap the performance HUD to cycle Mini / Standard / Detailed, double-tap to flip it, long-press a metric for an explanation, and drag it anywhere~ Can\'t manage that? What a weakling ♡</string>
+    <string name="title_perf_overlay_style">Overlay style</string>
+    <string name="perf_overlay_style_mini">Mini</string>
+    <string name="perf_overlay_style_standard">Standard</string>
+    <string name="perf_overlay_style_detailed">Detailed</string>
+    <string name="perf_overlay_style_classic">Classic</string>
+    <string name="game_menu_perf_overlay_style">Overlay style</string>
+    <string name="perf_hud_style_changed">Switched to %1$s, weakling~</string>
+    <string name="perf_hud_long_press_hint">Long-press a metric to see what it means, weakling~</string>
+    <string name="perf_hud_hint">💡 Streaming 101: tap to change detail, double-tap to flip, long-press a metric to see what it means, drag to move~ Forget that and you\'re a weakling, meow ♡</string>
+    <string name="perf_hud_dock_orientation_hint">Docked below the video, there\'s no orientation here, weakling~ Turn to landscape, then double-tap ♡</string>
+    <string name="tip_performance_overlay_classic">💡 Tip: drag the overlay anywhere, double-tap to flip between horizontal and vertical, and tap a metric for details~ I made it this easy, so say thanks, weakling ♡</string>
+    <string name="perf_hud_label_one_percent_low" formatted="false">1%L</string>
+    <string name="perf_hud_label_latency">Latency</string>
+    <string name="perf_hud_label_latency_chain">Latency chain (est.)</string>
+    <string name="perf_hud_label_network">Net</string>
+    <string name="perf_hud_label_host">Host</string>
+    <string name="perf_hud_label_decode">Decode</string>
+    <string name="perf_hud_label_render">Render</string>
+    <string name="perf_hud_label_loss">Loss</string>
+    <string name="perf_hud_label_bandwidth">Bandwidth</string>
+    <string name="perf_hud_label_battery">Battery</string>
+    <string name="perf_hud_label_decoder">Decoder</string>
+    <string name="perf_hud_label_resolution">Stream</string>
+    <string name="perf_hud_label_clock">Time</string>
+    <string name="perf_hud_label_fps_history">FPS history</string>
+    <string name="perf_hud_drain_per_hour">%.0f%%/h</string>
+    <string name="perf_hud_mood_warming_up">🌙 Warming up, hold on, weakling~</string>
+    <string name="perf_hud_mood_smooth">Full frames, lucky you, weakling ♡</string>
+    <string name="perf_hud_mood_full_moon">Full moon blessing, full frames ♡</string>
+    <string name="perf_hud_mood_hot_decode">🥵 Your decoder\'s burning up, weakling~</string>
+    <string name="perf_hud_mood_lossy">📶 Dropping packets, weak network~</string>
+    <string name="perf_hud_mood_fps_drop">Frames dropping, meow~ weakling</string>
+    <string name="perf_hud_mood_laggy">🐢 Latency so high, weakling~</string>
+    <string name="perf_hud_mood_low_battery">🔋 Almost dead, go charge, weakling ♡</string>
+    <string name="perf_latency_chain_title">⛓️ Latency chain (estimate)</string>
+    <string name="perf_latency_chain_content">Network (RTT / 2): %1$s\nHost processing: %2$s\nDecode: %3$s\nRender: %4$s\n────────\nTotal ≈ %5$s\n\nThis just adds up each stage. It\'s an estimate, not a measured button-to-photon latency, so don\'t take it too seriously, weakling~ The network stage uses half the round-trip time as a one-way approximation.\n\n🥵 shows up when decoding takes 15 ms or more: lower the resolution or switch codecs.\n🧋 means the host didn\'t report its processing time; a host with Ver.V+ support fills it in ♡</string>
+    <string name="perf_latency_chain_no_host">🧋 not reported</string>
+    <string name="perf_diag_title">🍥 Stream check-up</string>
+    <string name="perf_diag_line_fps">Frame rate: %1$s / %2$d FPS</string>
+    <string name="perf_diag_line_loss">Packet loss: %1$s</string>
+    <string name="perf_diag_line_rtt">Network RTT: %1$d ms (±%2$d)</string>
+    <string name="perf_diag_line_decode">Decode: %1$s</string>
+    <string name="perf_diag_line_battery">Battery: %1$d%%</string>
+    <string name="perf_diag_tip_fps">Not hitting your target frame rate, weakling~ Lower the resolution or frame rate, and check whether the game itself is dropping frames on the host.</string>
+    <string name="perf_diag_tip_loss">So much packet loss, weak network~ Use 5 GHz Wi‑Fi or Ethernet, get closer to the router, or lower the bitrate.</string>
+    <string name="perf_diag_tip_rtt">Latency as slow as a turtle 🐢, weakling~ Avoid 2.4 GHz and Wi‑Fi repeaters; for remote play, pick a closer network route.</string>
+    <string name="perf_diag_tip_decode">🥵 Your decoder can\'t keep up, weakling device~ Switch to HEVC/AV1 or lower the resolution, and close background apps.</string>
+    <string name="perf_diag_tip_battery">🔋 Battery\'s nearly empty, hurry up and feed it a charger, weakling ♡</string>
+    <string name="perf_diag_all_good">All good, you got lucky today, weakling. Enjoy your game (๑•̀ㅂ•́)و✧</string>
+    <string name="perf_diag_footer">💡 Streaming 101: tap to change detail, double-tap to flip, long-press a metric for an explanation~ Can\'t remember that? Weakling ♡</string>
+    <string name="perf_diag_moon_button">%1$s Tonight\'s moon</string>
+    <string name="perf_hud_fps_row_rx">Rx Received</string>
+    <string name="perf_hud_fps_row_rd">Rd Rendered</string>
+    <string name="perf_hud_fps_row_fg">FG Frame gen</string>
+    <string name="perf_hud_fps_verdict_ok">Rx and Rd are both maxed out. Lucky run, weakling ♡</string>
+    <string name="perf_hud_fps_verdict_remote">Rx isn\'t full, so the host or network isn\'t sending enough frames. Not your device\'s fault~</string>
+    <string name="perf_hud_fps_verdict_local">Frames arrive fine but Rd drops, so this device can\'t keep up decoding and rendering. Weakling device 🥵</string>
+    <string name="perf_hud_fps_verdict_surplus">The host sends more frames than get shown. The extras are skipped and the picture is fine, relax weakling~</string>
+    <string name="perf_hud_fps_info" formatted="false">The frame-rate group on the HUD shows Rd, Rx and FG. The mini capsule and the big number show Rd, the frames actually drawn on screen.\n\nReading the rows above:\n• Rx Received: frames sent by the host. Grey when fine, yellow or red when the host falls short\n• Rd Rendered: frames shown after decoding\n• FG Frame gen: only appears with frame generation on\n\nRd colors vs target:\n• Green: 95% and up\n• Yellow: 80–95%\n• Red: below 80%\n\n💡 Streaming 101: low Rx means check the host and network; full Rx but low Rd means local decoding~</string>
+    <string name="perf_hud_network_latency_info">RTT on the HUD is the round trip between host and device. The ± part is jitter, smaller is steadier.\n\nColors:\n• Green: under 40 ms\n• Yellow: 40–80 ms\n• Red: 80 ms and up, the mood turns into 🐢\n\nBandwidth:\n• Only shown in Detailed and the docked card\n• The current real transfer rate of the video stream\n\n💡 Streaming 101: the latency chain uses half the RTT as the one-way network stage~</string>
+    <string name="perf_hud_decode_latency_info">Decode on the HUD is how long this device\'s hardware decoder takes per frame.\n\nColors:\n• Green: shorter than one frame (about 8.3 ms at 120 FPS)\n• Yellow: longer than one frame but under 15 ms, frames start to lag\n• Red: 15 ms and up, with a 🥵 attached\n\nFactors:\n• Resolution and codec, HEVC and AV1 are usually lighter\n• Device heat and background load\n\n💡 Streaming 101: under 10 ms, leave decoding alone and look at frame rate and quality instead~</string>
+    <string name="perf_hud_host_latency_info">Host on the HUD is the time the host spends on one frame (capture plus encode), reported by the host.\n\nReference:\n• Under 5 ms: the host is relaxed\n• 5–10 ms: normal\n• Over 10 ms: the host is busy, check the game or background apps\n\nWhat\'s 🧋:\n• Shown when the host doesn\'t report this, so grab a milk tea\n• A host with Ver.V+ support fills it in ♡</string>
+    <string name="perf_hud_packet_loss_info" formatted="false">Loss on the HUD is the share of video packets the network dropped recently.\n\nColors:\n• Green: under 1%\n• Yellow: 1–5%, occasional artifacts or hitches\n• Red: 5% and up, the mood turns into 📶\n\nFactors:\n• Wi‑Fi signal and band, 2.4GHz drops the most\n• Router performance\n• Bitrate above what the network can carry\n\n💡 Streaming 101: long-press the moon for a stream check-up and I\'ll tell you how to fix it, weakling ♡</string>
+    <string name="perf_hud_one_percent_low_info" formatted="false">1%L on the HUD is the frame rate of the slowest 1% of frames. It catches micro-stutter the average hides.\n\nHow it\'s computed:\n• Record each frame\'s render interval\n• Take the 99th percentile, the slowest 1%\n• Convert to FPS: 1000 ÷ that interval\n\nColors vs target:\n• Green: 85% and up\n• Yellow: 65–85%, occasional hitches\n• Red: below 65%, clear stutter\n\n💡 Streaming 101: full average FPS but low 1%L usually means network jitter or a host hiccup~</string>
     <string name="tip_audio_config">💡 Tip: Enabling Dolby Atmos or DTS:X provides a more immersive audio experience, and you need to enable the system equalizer for the best effect~</string>
     <string name="tip_external_display">💡 Tip: When connecting an external display, you can choose to display the stream on the external display in settings, making big screen gaming even more enjoyable~</string>
     <string name="tip_virtual_display">💡 Tip: Virtual display function can create independent display spaces, especially suitable for multi-tasking scenarios, making streaming more flexible~</string>
@@ -1176,7 +1241,7 @@
     <string name="game_menu_touch_mode_native_mouse_summary">For Bluetooth, USB mice, and keyboard touchpads</string>
     <string name="game_menu_touch_mode_ds5">DS5 touchpad</string>
     <string name="game_menu_touch_mode_ds5_short">DS5</string>
-    <string name="game_menu_touch_mode_ds5_summary">Screen becomes a DualSense touchpad; tap or firm press to click</string>
+    <string name="game_menu_touch_mode_ds5_summary">A zone acts as the DualSense pad while the rest stays multi-touch. Double-tap to click; hold the second tap to hold the button. Firm press also clicks; drag edges to resize.</string>
     <string name="game_menu_touch_mode_primary_group">Primary input mode (choose one)</string>
     <string name="game_menu_touch_mode_compatible_group">Compatible options</string>
     <string name="game_menu_touch_pointer_speed">Pointer-zone speed</string>
@@ -1341,25 +1406,33 @@
 
     <!-- App Last Settings strings -->
     <string name="app_last_settings_title">Last Settings</string>
-    <string name="app_last_settings_none">No last settings</string>
-    <string name="app_last_settings_use_checkbox">Use last settings</string>
-    <string name="app_last_settings_apply_success">Applied last settings</string>
     <string name="app_last_settings_start_with_last">Started with last settings</string>
+    <string name="app_last_settings_reuse">Reuse</string>
+    <string name="app_last_settings_reuse_description">Reuse last settings when launching</string>
+    <string name="app_last_settings_pill_description">Last settings, %1$s, %2$s</string>
+    <string name="app_last_settings_expand">Show details</string>
+    <string name="app_last_settings_collapse">Hide details</string>
+    <string name="app_last_settings_row_video">Video</string>
+    <string name="app_last_settings_row_encoding">Encoding</string>
+    <string name="app_last_settings_row_audio">Audio</string>
+    <string name="app_last_settings_row_input">Input</string>
+    <string name="app_last_settings_row_cards">Menu cards</string>
+    <string name="app_last_settings_hdr_on">HDR on</string>
+    <string name="app_last_settings_hdr_off">HDR off</string>
+    <string name="app_last_settings_mic_on">Mic on, %1$d kbps</string>
+    <string name="app_last_settings_mic_off">Mic off</string>
+    <string name="app_last_settings_native_mouse_on">Native mouse</string>
+    <string name="app_last_settings_cards_none">No cards enabled</string>
+    <string name="app_last_settings_scale">Scale %1$d%%</string>
+    <string name="app_last_settings_card_bitrate">Bitrate</string>
+    <string name="app_last_settings_card_display">Display</string>
+    <string name="app_last_settings_card_audio_haptics">Audio haptics</string>
+    <string name="app_last_settings_card_gyro">Gyro</string>
+    <string name="app_last_settings_card_quick_key">Quick keys</string>
+    <string name="app_last_settings_card_waveform">Waveform</string>
 
     <!-- Setting detail strings -->
-    <string name="setting_resolution">Resolution: %1$dx%2$d</string>
-    <string name="setting_fps">Frame Rate: %1$dfps</string>
-    <string name="setting_bitrate">Bitrate: %1$dkbps</string>
-    <string name="setting_scale">Scale: %1$d%%</string>
-    <string name="setting_format">Video Codec: %1$s</string>
-    <string name="setting_hdr_enabled">HDR: Enabled</string>
-    <string name="setting_mic_enabled">Microphone: %1$dkbps</string>
-    <string name="setting_native_mouse_enabled">Native Mouse: Enabled</string>
     <string name="setting_gyro_sensitivity">Gyroscope: %1$.1fx</string>
-    <string name="setting_bitrate_card_enabled">Bitrate Card: Enabled</string>
-    <string name="setting_audio_haptics_card_enabled">Audio Haptics Card: Enabled</string>
-    <string name="setting_gyro_card_enabled">Gyro Card: Enabled</string>
-    <string name="setting_QuickKey_card_enabled">Special key card: Activate</string>
 
     <!-- Time format strings -->
     <string name="time_just_now">Just now</string>
@@ -1600,19 +1673,12 @@ Tap again to replace it.</string>
     <string name="appview_background_mode_title">Background</string>
     <string name="appview_quick_settings_title">Quick Settings</string>
     <string name="appview_full_settings">Full Settings</string>
-    <string name="appview_screen_combination_title">Screen Combination</string>
     <string name="appview_open_screen_combination_picker">Open screen combination picker</string>
-    <string name="appview_screen_mode_host_short">Follow Host</string>
-    <string name="appview_screen_mode_noop_short">No Action</string>
-    <string name="appview_screen_mode_activate_short">Activate</string>
-    <string name="appview_screen_mode_primary_short">Primary</string>
-    <string name="appview_screen_mode_secondary_short">Secondary</string>
-    <string name="appview_screen_mode_exclusive_short">Exclusive</string>
     <string name="appview_display_selection_virtual">Virtual</string>
     <string name="appview_background_mode_artwork">App artwork</string>
     <string name="appview_background_mode_acrylic">Acrylic</string>
     <string name="appview_background_mode_soft_color">Soft color</string>
-    <string name="appview_display_selection_title">Display Selection</string>
+    <string name="appview_display_selection_title">Displays</string>
     <string name="appview_display_selection_default">Default</string>
 
 
@@ -1689,6 +1755,7 @@ Tap again to replace it.</string>
     <string name="layout_item_key_value_hint_dd44f">Section name, defaults to key name if empty</string>
     <string name="layout_item_page_super_menu_text_ce0e8">Edit Mode</string>
     <string name="layout_page_device_text_mmo">Move Only</string>
+    <string name="layout_page_device_text_dsc">DS5 Touchpad</string>
     <string name="layout_page_device_text_mmo_true_text">Mouse movement only</string>
     <string name="layout_page_device_text_mmo_false_text">Mouse movement + click</string>
     <string name="layout_keyboard_mini_text_3ae7b">Back to Keyboard</string>
@@ -1889,7 +1956,12 @@ Tap again to replace it.</string>
     <string name="toast_crown_not_enabled">Crown is off</string>
     <string name="game_menu_toggle_touch">Touch Input</string>
     <string name="ds5_touchpad_active_title">DS5 touchpad active</string>
-    <string name="ds5_touchpad_active_subtitle">Touch to move · Tap to click</string>
+    <string name="ds5_touchpad_active_subtitle_zone">Double-tap to click · Hold the second tap to hold</string>
+    <string name="ds5_touchpad_active_subtitle_single_tap">Tap to click · Drag the zone edge to resize</string>
+    <string name="title_ds5_single_tap_to_click">DS5 single-tap click (legacy)</string>
+    <string name="summary_ds5_single_tap_to_click">Off: double-tap to click, holding the second tap holds the button. On: a single tap clicks. Firm press works in either mode.</string>
+    <string name="toast_ds5_touchpad_on">DS5 touchpad on</string>
+    <string name="toast_ds5_touchpad_off">DS5 touchpad off</string>
     <string name="toast_touch_enabled">Touch enabled</string>
     <string name="toast_touch_disabled">Touch disabled</string>
     <string name="toast_cannot_access_controller">Cannot access controller</string>
@@ -2156,6 +2228,7 @@ Tap again to replace it.</string>
     <string name="quick_btn_controller">Gamepad</string>
     <string name="quick_btn_perf">Stats</string>
     <string name="quick_btn_remote_mouse">Remote mouse</string>
+    <string name="quick_btn_ds5_touchpad">DS5 touchpad</string>
 
     <!-- Quick action editor -->
     <string name="quick_button_editor_title">Quick Actions</string>
@@ -2224,7 +2297,7 @@ Tap again to replace it.</string>
     <string name="appview_guide_resume_body">While a session is running, tap the PC and app name to jump straight back in. No more taking the long way around.</string>
     <!-- Foundation Sunshine startup network probe -->
     <string name="network_quality_test_title">Streaming Quality Test</string>
-    <string name="network_quality_card_summary">%1$.0f ms · %2$.0f Mbps</string>
+    <string name="network_quality_card_summary">%1$.0f ms %2$.0f Mbps</string>
     <string name="network_quality_menu_summary">%1$s · %2$s</string>
     <string name="network_quality_measuring_response">Measuring response time</string>
     <string name="network_quality_measuring_bandwidth">Measuring stable bandwidth</string>
@@ -2336,6 +2409,9 @@ Tap again to replace it.</string>
     <string name="theme_accent_source">Accent color</string>
     <string name="theme_accent_pink">Brand pink</string>
     <string name="theme_accent_background">Follow home background</string>
+    <string name="theme_icon_style">App icon</string>
+    <string name="theme_icon_standard">Standard</string>
+    <string name="theme_icon_dark">Dark</string>
     <string name="theme_summary">%1$s · %2$s</string>
     <string name="title_experimental_haptic_protocols">Allow experimental haptic protocols</string>
     <string name="summary_experimental_haptic_protocols">Controllers are detected automatically. Allow attempts to use recognized but unverified waveform protocols. Unknown protocols keep ordinary vibration. Reconnect the stream after changing.</string>
@@ -2418,6 +2494,11 @@ Tap again to replace it.</string>
     <string name="display_native_resolution_description">Follow the target display · %1$s</string>
     <string name="display_choice_unavailable">Unavailable on this device</string>
     <string name="display_custom_resolution_action">Manage resolutions…</string>
+    <string name="display_custom_frame_rate_action">Edit favorite frame rates…</string>
+    <string name="title_custom_frame_rates">Favorite frame rates</string>
+    <string name="custom_frame_rate_hint">Favorites only change what the in-game menu shows. They never change the current stream frame rate, and Settings always keeps the full list.</string>
+    <string name="custom_frame_rate_add_favorite">Add to favorites</string>
+    <string name="frame_rate_show_all">All frame rates…</string>
     <string name="title_float_ball_settings">Floating ball</string>
     <string name="float_ball_appearance">Display</string>
     <string name="float_ball_gestures">Gestures</string>

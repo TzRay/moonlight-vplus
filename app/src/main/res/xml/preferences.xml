@@ -493,6 +493,10 @@
             android:title="@string/title_checkbox_enable_mic"
             android:summary="@string/summary_checkbox_enable_mic"
             android:defaultValue="false" />
+          <Preference
+              android:key="preference_mic_test"
+              android:title="@string/title_mic_test"
+              android:summary="@string/summary_mic_test" />
         <ListPreference
             android:key="list_mic_initial_state"
             android:dependency="checkbox_enable_mic"
@@ -852,6 +856,11 @@
                     android:title="@string/title_checkbox_touchscreen_trackpad"
                     android:summary="@string/summary_checkbox_touchscreen_trackpad"
                     android:defaultValue="true" />
+                <CheckBoxPreference
+                    android:key="checkbox_screen_ds5_single_tap_to_click"
+                    android:title="@string/title_ds5_single_tap_to_click"
+                    android:summary="@string/summary_ds5_single_tap_to_click"
+                    android:defaultValue="false" />
                 <CheckBoxPreference
                     android:key="pref_enable_double_click_drag"
                     android:title="@string/title_enable_double_click_drag"
@@ -1254,6 +1263,14 @@
                 android:title="@string/title_enable_perf_overlay"
                 android:summary="@string/summary_enable_perf_overlay"
                 android:defaultValue="false"/>
+            <ListPreference
+                android:key="list_perf_overlay_style"
+                android:title="@string/title_perf_overlay_style"
+                android:summary="%s"
+                android:entries="@array/perf_overlay_style_names"
+                android:entryValues="@array/perf_overlay_style_values"
+                android:defaultValue="standard"
+                android:dependency="checkbox_enable_perf_overlay" />
             <com.limelight.preferences.PerfOverlayDisplayItemsPreference
                 android:key="perf_overlay_display_items"
                 android:title="@string/title_perf_overlay_display_items"
@@ -1338,6 +1355,11 @@
             android:summary="@string/summary_config_sync_background_sync"
             android:defaultValue="false"
             android:enabled="false" />
+        <Preference
+            android:key="reset_all_settings"
+            android:persistent="false"
+            android:title="@string/title_reset_settings"
+            android:summary="@string/summary_reset_settings" />
     </PreferenceCategory>
     <PreferenceCategory android:title="@string/category_help"
         android:key="category_help"

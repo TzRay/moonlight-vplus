@@ -54,10 +54,13 @@ import com.limelight.binding.input.advance_setting.config.PageConfigController
 import com.limelight.binding.input.advance_setting.element.ElementController
 import com.limelight.nvstream.NvConnection
 import com.limelight.nvstream.http.NvApp
+import com.limelight.perfhud.PerfHudDensity
+import com.limelight.preferences.CustomFrameRatesStore
 import com.limelight.preferences.PreferenceConfiguration
 import com.limelight.preferences.TouchModePreset
 import com.limelight.ui.UiDismissKeyHandler
 import com.limelight.ui.isGamepadNavigationSource
+import com.limelight.ui.showAppInfoSheet
 import com.limelight.utils.AppActionSheet
 import com.limelight.utils.KeyCodeMapper
 import org.json.JSONArray
@@ -260,6 +263,22 @@ class GameMenu(
     private val waveformHapticsCardController = WaveformHapticsCardController(game)
     private val gyroCardController = GyroCardController(game)
     private val touchPointerSensitivityController = TouchPointerSensitivityController(game)
+    private val microphoneMenuController = MicrophoneMenuController(game)
+    private var microphoneScrollBy: ((Float) -> Unit)? = null
+    private val microphoneScrollSources = mutableMapOf<Int, MenuAxisNavigationState>()
+    private var microphoneScrollSource: Int? = null
+    private var microphoneScrollTime = 0L
+    private val microphoneScroll = object : Runnable {
+        override fun run() {
+            if (!usesMicrophoneInput() || activeDialog?.window?.decorView?.hasWindowFocus() != true) return
+            val key = microphoneScrollSources[microphoneScrollSource]?.activeKeyCode ?: return
+            val now = SystemClock.uptimeMillis()
+            val delta = (now - microphoneScrollTime).coerceIn(0, 50) * game.resources.displayMetrics.density * 0.4f
+            microphoneScrollTime = now
+            microphoneScrollBy?.invoke(if (key == KeyEvent.KEYCODE_DPAD_UP) -delta else delta)
+            handler.postDelayed(this, 16L)
+        }
+    }
     private val touchpadSensitivityController = TouchpadSensitivityController(game)
     private val renderingProfile = GameMenuRenderingProfile.from(game)
     private val systemHapticsEnabled = Settings.System.getInt(
@@ -380,15 +399,29 @@ class GameMenu(
 
     fun dispatchControllerAxes(
         sourceId: Int,
-        axisPairs: List<Pair<Float, Float>>
+        axisPairs: List<Pair<Float, Float>>,
+        rightStickY: Float = 0f
     ): Boolean {
         val dialog = currentInputDialog() ?: return false
         if (!dialog.isShowing) return false
         val state = axisNavigationStates.getOrPut(sourceId) { MenuAxisNavigationState() }
 
+        if (usesMicrophoneInput()) {
+            val scrollState = microphoneScrollSources.getOrPut(sourceId) { MenuAxisNavigationState() }
+            if (sourceId !in axisSourcesAwaitingNeutral && dialog.window?.decorView?.hasWindowFocus() == true) {
+                val update = scrollState.update(listOf(0f to rightStickY))
+                if (update.changed && update.pressedKeyCode != null) {
+                    microphoneScrollSource = sourceId
+                    microphoneScrollTime = SystemClock.uptimeMillis()
+                    handler.removeCallbacks(microphoneScroll)
+                    handler.post(microphoneScroll)
+                }
+            }
+        }
+
         if (sourceId in axisSourcesAwaitingNeutral) {
             state.reset()
-            if (state.isNeutral(axisPairs)) {
+            if (state.isNeutral(axisPairs) && kotlin.math.abs(rightStickY) < 0.35f) {
                 axisSourcesAwaitingNeutral.remove(sourceId)
             }
             return true
@@ -410,6 +443,11 @@ class GameMenu(
     }
 
     fun releaseControllerAxisSource(sourceId: Int) {
+        microphoneScrollSources.remove(sourceId)
+        if (microphoneScrollSource == sourceId) {
+            microphoneScrollSource = null
+            handler.removeCallbacks(microphoneScroll)
+        }
         axisSourcesAwaitingNeutral.remove(sourceId)
         axisNavigationStates.remove(sourceId)
         controllerDirectionsAwaitingRelease.removeAll { it.first == sourceId }
@@ -481,6 +519,8 @@ class GameMenu(
     }
 
     private fun prepareForInputOwnerChange() {
+        microphoneScrollSources.filterValues { it.activeKeyCode != null }.keys.let(axisSourcesAwaitingNeutral::addAll)
+        stopMicrophoneScroll()
         releaseHeldControllerDirections(awaitForPhysicalRelease = true)
         axisNavigationStates.forEach { (sourceId, state) ->
             if (state.activeKeyCode != null) {
@@ -627,8 +667,8 @@ class GameMenu(
      */
     private fun showTouchModeMenu() {
         touchpadSensitivityController.refresh()
-        // While the DS5 touchpad captures screen touches, the trackpad-specific
-        // options below are inert, so treat trackpad mode as inactive.
+        // While the DS5 pad captures zone touches the trackpad-specific options
+        // below are inert, so treat trackpad mode as inactive.
         val isTouchscreenTrackpad = game.prefConfig.touchscreenTrackpad &&
             !game.prefConfig.screenDs5Touchpad
         val touchModeOptionsList = buildTouchModeSegments().mapTo(mutableListOf()) { segment ->
@@ -642,6 +682,28 @@ class GameMenu(
                 subtitle = segment.subtitle,
                 selected = segment.selected,
                 presentation = GameMenuOptionPresentation.PRIMARY_MODE
+            )
+        }
+
+        if (game.prefConfig.screenDs5Touchpad) {
+            val toggleSingleTap = Runnable {
+                game.screenDs5Touchpad.setSingleTapToClick(!game.prefConfig.screenDs5SingleTapToClick)
+            }
+            touchModeOptionsList.add(
+                MenuOption(
+                    label = getString(R.string.title_ds5_single_tap_to_click),
+                    isWithGameFocus = false,
+                    runnable = toggleSingleTap,
+                    iconKey = null,
+                    isShowIcon = false,
+                    isKeepDialog = true,
+                    subtitle = getString(R.string.summary_ds5_single_tap_to_click),
+                    inlineControl = InlineControl.Toggle(
+                        checked = game.prefConfig.screenDs5SingleTapToClick,
+                        toggleAction = toggleSingleTap,
+                    ),
+                    presentation = GameMenuOptionPresentation.COMPATIBLE_ACTION,
+                )
             )
         }
 
@@ -771,14 +833,14 @@ class GameMenu(
         val isEnhancedTouch = game.prefConfig.enableEnhancedTouch
         val isTrackpad = game.prefConfig.touchscreenTrackpad
         val isNativePointer = game.prefConfig.enableNativeMousePointer
-        val isScreenDs5Touchpad = game.prefConfig.screenDs5Touchpad
+        val isDs5Pad = game.prefConfig.screenDs5Touchpad
 
         val segments = mutableListOf(
             SegmentOption(
                 label = getString(if (compactLabels) R.string.game_menu_touch_mode_enhanced_short else R.string.game_menu_touch_mode_enhanced),
-                selected = isEnhancedTouch && !isTrackpad && !isNativePointer && !isScreenDs5Touchpad,
+                selected = isEnhancedTouch && !isTrackpad && !isNativePointer && !isDs5Pad,
                 runnable = Runnable {
-                    game.setScreenDs5TouchpadEnabled(false)
+                    game.screenDs5Touchpad.setEnabled(false)
                     game.prefConfig.enableEnhancedTouch = true
                     game.prefConfig.enableNativeMousePointer = false
                     game.enableNativeMousePointer(false)
@@ -791,9 +853,9 @@ class GameMenu(
             ),
             SegmentOption(
                 label = getString(if (compactLabels) R.string.game_menu_touch_mode_classic_short else R.string.game_menu_touch_mode_classic),
-                selected = !isEnhancedTouch && !isTrackpad && !isNativePointer && !isScreenDs5Touchpad,
+                selected = !isEnhancedTouch && !isTrackpad && !isNativePointer && !isDs5Pad,
                 runnable = Runnable {
-                    game.setScreenDs5TouchpadEnabled(false)
+                    game.screenDs5Touchpad.setEnabled(false)
                     game.prefConfig.enableEnhancedTouch = false
                     game.prefConfig.enableNativeMousePointer = false
                     game.enableNativeMousePointer(false)
@@ -806,9 +868,9 @@ class GameMenu(
             ),
             SegmentOption(
                 label = getString(if (compactLabels) R.string.game_menu_touch_mode_trackpad_short else R.string.game_menu_touch_mode_trackpad),
-                selected = isTrackpad && !isNativePointer && !isScreenDs5Touchpad,
+                selected = isTrackpad && !isNativePointer && !isDs5Pad,
                 runnable = Runnable {
-                    game.setScreenDs5TouchpadEnabled(false)
+                    game.screenDs5Touchpad.setEnabled(false)
                     game.prefConfig.enableEnhancedTouch = false
                     game.prefConfig.enableNativeMousePointer = false
                     game.enableNativeMousePointer(false)
@@ -821,9 +883,9 @@ class GameMenu(
             ),
             SegmentOption(
                 label = getString(if (compactLabels) R.string.game_menu_touch_mode_native_mouse_short else R.string.game_menu_touch_mode_native_mouse),
-                selected = isNativePointer && !isScreenDs5Touchpad,
+                selected = isNativePointer && !isDs5Pad,
                 runnable = Runnable {
-                    game.setScreenDs5TouchpadEnabled(false)
+                    game.screenDs5Touchpad.setEnabled(false)
                     game.prefConfig.enableNativeMousePointer = true
                     game.prefConfig.enableEnhancedTouch = false
                     game.setTouchMode(false)
@@ -844,15 +906,17 @@ class GameMenu(
             PackageManager.FEATURE_TOUCHSCREEN
         )
         if (hasTouchscreen &&
-            (isScreenDs5Touchpad ||
+            (isDs5Pad ||
                 game.screenDs5TouchpadHostSupport != Game.ScreenDs5HostSupport.UNSUPPORTED)
         ) {
             segments.add(
                 SegmentOption(
                     label = getString(if (compactLabels) R.string.game_menu_touch_mode_ds5_short else R.string.game_menu_touch_mode_ds5),
-                    selected = isScreenDs5Touchpad,
+                    selected = isDs5Pad,
                     runnable = Runnable {
-                        game.setScreenDs5TouchpadEnabled(true)
+                        // setEnabled normalizes the touch mode (zone interior is the
+                        // pad, the rest is plain multi-touch) and persists it.
+                        game.screenDs5Touchpad.setEnabled(true)
                         touchPointerSensitivityController.refreshApplicability()
                         touchpadSensitivityController.refresh()
                     },
@@ -936,6 +1000,9 @@ class GameMenu(
     }
 
     private fun refreshCurrentMenuPage() {
+        if (composeUiState?.value?.pageLayout == GameMenuPageLayout.MICROPHONE) {
+            return
+        }
         if (composeUiState?.value?.pageLayout == GameMenuPageLayout.TOUCH_MODE) {
             showTouchModeMenu()
         } else {
@@ -1055,10 +1122,13 @@ class GameMenu(
     private fun showDisplayChoiceSheet(
         title: String,
         choices: List<DisplayChoice>,
+        showAllLabel: String? = null,
+        onShowAll: (() -> Unit)? = null,
         onSelected: (DisplayChoice) -> Unit
     ) {
         val availableChoices = choices.filter { it.enabled }
         if (availableChoices.isEmpty()) return
+        val showAllId = availableChoices.size
         val actions = availableChoices.mapIndexed { index, choice ->
             AppActionSheet.Action(
                 id = index,
@@ -1067,7 +1137,9 @@ class GameMenu(
                 checked = choice.selected,
                 emphasized = choice.emphasized
             )
-        }
+        } + listOfNotNull(showAllLabel?.takeIf { onShowAll != null }?.let {
+            AppActionSheet.Action(id = showAllId, title = it, sectionStart = true, opensSubmenu = true)
+        })
         registerChildDialog(
             AppActionSheet.show(
                 context = game,
@@ -1077,7 +1149,8 @@ class GameMenu(
                 initialActionId = availableChoices.indexOfFirst { it.selected }.takeIf { it >= 0 },
                 singleChoice = true,
                 onAction = { action ->
-                    availableChoices.getOrNull(action.id)?.let(onSelected)
+                    if (action.id == showAllId && onShowAll != null) onShowAll()
+                    else availableChoices.getOrNull(action.id)?.let(onSelected)
                 }
             )
         )
@@ -1085,7 +1158,7 @@ class GameMenu(
 
     private fun showInfoSheet(titleRes: Int, messageRes: Int) {
         registerChildDialog(
-            showGameMenuInfoSheet(game, getString(titleRes), getString(messageRes))
+            showAppInfoSheet(game, getString(titleRes), getString(messageRes))
         )
     }
 
@@ -1103,14 +1176,28 @@ class GameMenu(
 
     private fun showFrameRateSheet() {
         val state = bitrateCardController.snapshot()
-        showDisplayChoiceSheet(
-            title = getString(R.string.title_fps_list),
-            choices = state.frameRates,
-            onSelected = {
-                bitrateCardController.stageFrameRate(it.value)
-                bitrateCardController.applyDisplayDraft()
-            }
-        )
+        val onSelected: (DisplayChoice) -> Unit = {
+            bitrateCardController.stageFrameRate(it.value)
+            bitrateCardController.applyDisplayDraft()
+        }
+        // 常用帧率只影响展示：当前值始终保留，未配置时展示全部
+        val favorites = CustomFrameRatesStore.loadFavorites(game)
+        val shown = if (favorites.isNullOrEmpty()) state.frameRates
+        else state.frameRates.filter { it.value in favorites || it.selected }
+        val title = getString(R.string.title_fps_list)
+        if (shown.size < state.frameRates.size) {
+            showDisplayChoiceSheet(
+                title = title,
+                choices = shown,
+                showAllLabel = getString(R.string.frame_rate_show_all),
+                onShowAll = {
+                    showDisplayChoiceSheet(title = title, choices = state.frameRates, onSelected = onSelected)
+                },
+                onSelected = onSelected
+            )
+        } else {
+            showDisplayChoiceSheet(title = title, choices = state.frameRates, onSelected = onSelected)
+        }
     }
 
     private fun showScreenModeSheet() {
@@ -1134,6 +1221,9 @@ class GameMenu(
         superOptions: Array<MenuOption>,
         pageLayout: GameMenuPageLayout = GameMenuPageLayout.STANDARD
     ) {
+        if (game.prefConfig.screenDs5Touchpad) {
+            game.screenDs5Touchpad.cancelGesture()
+        }
         lateinit var dialog: ComponentDialog
 
         val state = mutableStateOf(
@@ -1233,9 +1323,7 @@ class GameMenu(
             onGyroEnabled = gyroCardController::setEnabled,
             onGyroMouseMode = gyroCardController::setMouseMode,
             onGyroActivationKey = {
-                gyroCardController.showActivationKeyDialog { childDialog ->
-                    registerChildDialog(childDialog)
-                }
+                registerChildDialog(gyroCardController.showActivationKeySheet())
             },
             onGyroSensitivity = gyroCardController::previewSensitivity,
             onGyroSensitivityFinished = gyroCardController::persistSensitivity,
@@ -1254,6 +1342,12 @@ class GameMenu(
                     ).show()
                 }
             },
+            onMicrophoneInput = { key ->
+                if (!microphoneMenuController.select(key)) {
+                    Toast.makeText(game, R.string.mic_input_failed, Toast.LENGTH_SHORT).show()
+                }
+            },
+            onMicrophoneScrollReady = { microphoneScrollBy = it },
             onManageTouchPointerSensitivityPresets = { showTouchPointerSensitivityPresetManager() },
             onTouchpadSensitivity = touchpadSensitivityController::preview,
             onTouchpadSensitivityFinished = touchpadSensitivityController::persist,
@@ -1291,10 +1385,15 @@ class GameMenu(
             }
         }
         dialog = object : ComponentDialog(game, R.style.GameMenuDialogStyle) {
+            override fun onWindowFocusChanged(hasFocus: Boolean) {
+                super.onWindowFocusChanged(hasFocus)
+                if (!hasFocus && usesMicrophoneInput()) prepareForInputOwnerChange()
+            }
             override fun dispatchGenericMotionEvent(event: MotionEvent): Boolean {
                 if (event.source and InputDevice.SOURCE_CLASS_JOYSTICK != 0) {
-                    val axisPairs = game.controllerHandler.getGameMenuNavigationAxisPairs(event)
-                    if (axisPairs != null && dispatchControllerAxes(event.deviceId, axisPairs)) {
+                    val axisPairs = game.controllerHandler.getGameMenuNavigationAxisPairs(event, includeRightStick = !usesMicrophoneInput())
+                    val rightY = if (usesMicrophoneInput()) game.controllerHandler.getMenuRightStickY(event) else 0f
+                    if (axisPairs != null && dispatchControllerAxes(event.deviceId, axisPairs, rightY)) {
                         return true
                     }
                 }
@@ -1373,9 +1472,13 @@ class GameMenu(
             waveformHapticsCardController.dispose()
             gyroCardController.dispose()
             touchPointerSensitivityController.dispose()
+            microphoneMenuController.stop()
+            stopMicrophoneScroll()
             touchpadSensitivityController.dispose()
             menuStack.clear()
             onDismiss(this)
+            // A zone switch made under this menu is only visible once it closes.
+            game.screenDs5Touchpad.revealPending()
         }
 
         dialog.show()
@@ -1919,11 +2022,18 @@ class GameMenu(
 
     private fun showMenuPage(page: MenuPage, pushCurrent: Boolean = false, replaceCurrent: Boolean = false) {
         val state = composeUiState ?: return
+        if (state.value.pageLayout == GameMenuPageLayout.MICROPHONE && page.layout != GameMenuPageLayout.MICROPHONE) {
+            microphoneMenuController.stop()
+            prepareForInputOwnerChange()
+        }
+        val restoreMicrophoneEntry = state.value.pageLayout == GameMenuPageLayout.MICROPHONE &&
+            page.layout == GameMenuPageLayout.STANDARD
         if (pushCurrent && !replaceCurrent) currentMenuPage()?.let(menuStack::push)
         state.value = state.value.copy(
             title = page.title,
             options = page.options,
             isSubmenu = menuStack.isNotEmpty(),
+            restoreMicrophoneEntry = restoreMicrophoneEntry,
             pageLayout = page.layout,
             pageGeneration = if (pushCurrent && !replaceCurrent) {
                 state.value.pageGeneration + 1
@@ -1941,6 +2051,28 @@ class GameMenu(
         val page = menuStack.pop()
         showMenuPage(page)
         return true
+    }
+
+    fun usesMicrophoneInput(): Boolean = activeChildDialog == null &&
+        composeUiState?.value?.pageLayout == GameMenuPageLayout.MICROPHONE
+
+    private fun stopMicrophoneScroll() {
+        handler.removeCallbacks(microphoneScroll)
+        microphoneScrollSources.clear()
+        microphoneScrollSource = null
+    }
+
+    private fun showMicrophoneMenu() {
+        if (!game.prefConfig.enableMic || game.microphoneManager == null) {
+            Toast.makeText(game, R.string.toast_enable_mic_redirect, Toast.LENGTH_SHORT).show()
+            return
+        }
+        prepareForInputOwnerChange()
+        microphoneMenuController.start { microphone ->
+            composeUiState?.let { it.value = it.value.copy(microphone = microphone) }
+        }
+        showSubMenu(getString(R.string.mic_button),
+            arrayOf(MenuOption(getString(R.string.mic_input_default), null)), GameMenuPageLayout.MICROPHONE)
     }
 
     /**
@@ -2354,6 +2486,18 @@ class GameMenu(
             inlineControl = InlineControl.Segmented(buildPerformanceOverlaySegments())
         ))
 
+        if (game.performanceOverlayMode != Game.PerformanceOverlayMode.HIDDEN) {
+            normalOptions.add(MenuOption(
+                label = getString(R.string.game_menu_perf_overlay_style).trim(),
+                isWithGameFocus = false,
+                runnable = null,
+                iconKey = "game_menu_perf_overlay_style",
+                isShowIcon = true,
+                isKeepDialog = true,
+                inlineControl = InlineControl.Segmented(buildPerfOverlayStyleSegments())
+            ))
+        }
+
         if (game.prefConfig.onscreenController) {
             normalOptions.add(MenuOption(
                 label = getString(R.string.game_menu_toggle_virtual_controller).trim(),
@@ -2370,6 +2514,12 @@ class GameMenu(
             false, { showSpecialKeysMenu() }, "game_menu_send_keys", isShowIcon = true, isKeepDialog = true,
             showChevron = true
         ))
+
+        if (game.prefConfig.enableMic) {
+            normalOptions.add(MenuOption(getString(R.string.mic_button), false,
+                { showMicrophoneMenu() }, "microphone_input", isShowIcon = true, isKeepDialog = true,
+                showChevron = true))
+        }
 
         normalOptions.add(MenuOption(getString(R.string.game_menu_disconnect), true,
             { game.disconnect() }, "game_menu_disconnect", true))
@@ -2409,6 +2559,22 @@ class GameMenu(
         runnable = Runnable { game.setPerformanceOverlayMode(mode) }
     )
 
+    private fun buildPerfOverlayStyleSegments(): List<SegmentOption> {
+        val current = game.perfOverlayStyle
+        return listOf(
+            PerfHudDensity.MINI to R.string.perf_overlay_style_mini,
+            PerfHudDensity.STANDARD to R.string.perf_overlay_style_standard,
+            PerfHudDensity.DETAILED to R.string.perf_overlay_style_detailed,
+            PerfHudDensity.CLASSIC to R.string.perf_overlay_style_classic
+        ).map { (style, labelRes) ->
+            SegmentOption(
+                label = getString(labelRes),
+                selected = style == current,
+                runnable = Runnable { game.setPerfOverlayStyle(style) }
+            )
+        }
+    }
+
     /**
      * 构建超级菜单选项
      */
@@ -2439,9 +2605,11 @@ class GameMenu(
         private const val HAPTIC_FEEDBACK_SETTING = "haptic_feedback_enabled"
 
         private val ICON_MAP = mapOf(
+            "microphone_input" to R.drawable.ic_mic_gm,
             "game_menu_change_resolution" to R.drawable.ic_resolution_cute,
             "game_menu_toggle_keyboard" to R.drawable.ic_candy_keyboard,
             "game_menu_toggle_performance_overlay" to R.drawable.ic_candy_performance,
+            "game_menu_perf_overlay_style" to R.drawable.ic_candy_performance,
             "game_menu_toggle_virtual_controller" to R.drawable.ic_candy_controller,
             "game_menu_disconnect" to R.drawable.ic_disconnect_cute,
             "game_menu_send_keys" to R.drawable.ic_candy_send_keys,
