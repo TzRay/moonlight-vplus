@@ -4,7 +4,10 @@ package com.limelight.binding.audio;
 public final class MatPlaybackSession implements MatCarrierConsumer, AutoCloseable {
     private final MatCarrierPlayer player;
     public MatPlaybackSession(MatCarrierPlayer.Sink sink) throws InterruptedException {
-        player = new MatCarrierPlayer(sink);
+        this(sink, false);
+    }
+    MatPlaybackSession(MatCarrierPlayer.Sink sink, boolean verifyWrites) throws InterruptedException {
+        player = new MatCarrierPlayer(sink, verifyWrites);
         player.start();
         try {
             if (!player.awaitReady(3000)) throw new IllegalStateException("MAT sink not ready: " + player.error());

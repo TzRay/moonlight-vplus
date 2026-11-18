@@ -33,7 +33,7 @@ class MatPassthroughRenderer(private val context: Context) : AudioRenderer, MatC
         session?.let { current ->
             current.close()
             val player = current.player()
-            LimeLog.info("MAT IEC final state=${player.state()} received=${player.receivedCycles()} written=${player.writtenCycles()} submittedBytes=${player.submittedBytes()} SHA256=${player.submittedSha256()} peakQueue=${player.peakQueue()} error=${player.error()}")
+            LimeLog.info("MAT IEC final state=${player.state()} received=${player.receivedCycles()} written=${player.writtenCycles()} submittedBytes=${player.submittedBytes()} peakQueue=${player.peakQueue()} error=${player.error()}")
             LimeLog.info("MAT IEC startup: firstPayloadNanos=${player.firstPayloadNanos()} playNanos=${player.playNanos()} firstObservedHeadNanos=${player.firstPlayedNanos()} primedCarrierFrames=${player.primedFrames()}")
         }
         session = null
@@ -54,7 +54,7 @@ class MatPassthroughRenderer(private val context: Context) : AudioRenderer, MatC
     override fun endMatStream(cycles: Long): Boolean {
         val current = session ?: return false
         val ok = current.endMatStream(cycles)
-        LimeLog.info("MAT IEC EOS drained=$ok submittedBytes=${current.player().submittedBytes()} SHA256=${current.player().submittedSha256()} error=${current.player().error()}")
+        LimeLog.info("MAT IEC EOS drained=$ok submittedBytes=${current.player().submittedBytes()} error=${current.player().error()}")
         return ok
     }
 }

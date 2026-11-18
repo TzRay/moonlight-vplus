@@ -141,8 +141,7 @@ public class MatCarrierPlayerTest {
             assertTrue(session.endMatStream(1));
             assertArrayEquals(expected, sink.accepted.toByteArray());
             assertEquals(expected.length, session.player().submittedBytes());
-            assertEquals(MatCarrierPlayer.hex(MessageDigest.getInstance("SHA-256").digest(expected)),
-                    session.player().submittedSha256());
+            assertEquals("", session.player().submittedSha256());
             assertEquals(MatCarrierPlayer.State.COMPLETED, session.player().state());
         }
         assertTrue(sink.closed);
@@ -355,7 +354,7 @@ public class MatCarrierPlayerTest {
             ByteArrayOutputStream expected = new ByteArrayOutputStream();
             int cycles = (capacityFrames + MatCarrierPlayer.FRAMES_PER_CYCLE - 1) /
                     MatCarrierPlayer.FRAMES_PER_CYCLE + 1;
-            try (MatPlaybackSession session = new MatPlaybackSession(sink)) {
+            try (MatPlaybackSession session = new MatPlaybackSession(sink, true)) {
                 for (int i = 0; i < cycles; i++) {
                     byte[] input = carrier(i);
                     expected.write(input);
@@ -444,7 +443,7 @@ public class MatCarrierPlayerTest {
                 return super.write(words, offset, count);
             }
         };
-        try (MatCarrierPlayer player = new MatCarrierPlayer(sink)) {
+        try (MatCarrierPlayer player = new MatCarrierPlayer(sink, true)) {
             player.start();
             assertTrue(offer(player, carrier(3), 0));
             assertFalse(player.awaitCompletion(1000));

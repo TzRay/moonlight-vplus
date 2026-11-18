@@ -23,10 +23,15 @@ public final class MatCarrierPlayer implements MatCarrierConsumer, AutoCloseable
     }
     public enum State { NEW, RUNNING, DRAINING, COMPLETED, FAILED, STOPPED }
     private static final class Slot {
-        final byte[] bytes = new byte[CYCLE_BYTES];
         final short[] words = new short[CYCLE_BYTES / 2];
+        final byte[] diagnosticBytes;
+
+        Slot(boolean verifyWrites) {
+            diagnosticBytes = verifyWrites ? new byte[CYCLE_BYTES] : null;
+        }
     }
     private final Sink sink;
+    private final boolean verifyWrites;
     private final ArrayBlockingQueue<Slot> pending, free;
     private final long stallNanos, drainNanos;
     private final CountDownLatch done = new CountDownLatch(1);
@@ -60,14 +65,19 @@ public final class MatCarrierPlayer implements MatCarrierConsumer, AutoCloseable
     }
     private long epoch, domain;
 
-    public MatCarrierPlayer(Sink sink) { this(sink, 4, 1000, 3000); }
+    public MatCarrierPlayer(Sink sink) { this(sink, false); }
+    MatCarrierPlayer(Sink sink, boolean verifyWrites) { this(sink, 4, 1000, 3000, verifyWrites); }
     public MatCarrierPlayer(Sink sink, int capacity, long stallMs, long drainMs) {
+        this(sink, capacity, stallMs, drainMs, false);
+    }
+    private MatCarrierPlayer(Sink sink, int capacity, long stallMs, long drainMs, boolean verifyWrites) {
         if (sink == null || capacity < 1 || capacity > 16 || stallMs < 1 || drainMs < 1)
             throw new IllegalArgumentException("Invalid MAT output bounds");
         this.sink = sink;
+        this.verifyWrites = verifyWrites;
         pending = new ArrayBlockingQueue<>(capacity);
         free = new ArrayBlockingQueue<>(capacity + 2);
-        for (int i = 0; i < capacity + 2; i++) free.add(new Slot());
+        for (int i = 0; i < capacity + 2; i++) free.add(new Slot(verifyWrites));
         stallNanos = TimeUnit.MILLISECONDS.toNanos(stallMs);
         drainNanos = TimeUnit.MILLISECONDS.toNanos(drainMs);
         writer = new Thread(this::run, "mat-iec-writer");
@@ -91,7 +101,7 @@ public final class MatCarrierPlayer implements MatCarrierConsumer, AutoCloseable
                 (receivedCycles != 0 && (e != epoch || d != domain))) return fail("Invalid MAT cycle metadata");
         Slot slot = free.poll();
         if (slot == null) return fail("MAT buffer pool exhausted");
-        System.arraycopy(b, 0, slot.bytes, 0, CYCLE_BYTES);
+        if (verifyWrites) System.arraycopy(b, 0, slot.diagnosticBytes, 0, CYCLE_BYTES);
         // Lossless little-endian reinterpretation, NOT another IEC byte swap.
         for (int i = 0; i < slot.words.length; i++)
             slot.words[i] = (short) ((b[2 * i] & 255) | ((b[2 * i + 1] & 255) << 8));
@@ -145,7 +155,7 @@ public final class MatCarrierPlayer implements MatCarrierConsumer, AutoCloseable
     private void run() {
         MessageDigest digest = null;
         try {
-            digest = MessageDigest.getInstance("SHA-256");
+            if (verifyWrites) digest = MessageDigest.getInstance("SHA-256");
             sink.prepare();
             long startThresholdFrames = sink.startThresholdFrames();
             ready.countDown();
@@ -173,9 +183,7 @@ public final class MatCarrierPlayer implements MatCarrierConsumer, AutoCloseable
                             Thread.sleep(1);
                         } else {
                             if (submittedBytes <= lastHead * 16) stallSince = now;
-                            // Hash only accepted bytes, using the owned input copy rather
-                            // than converting every short write back into bytes.
-                            digest.update(slot.bytes, offset * 2, n * 2);
+                            if (digest != null) digest.update(slot.diagnosticBytes, offset * 2, n * 2);
                             offset += n; submittedBytes += n * 2L; lastWrite = now;
                         }
                         if (active() && playNanos == 0 && submittedBytes > 0 &&

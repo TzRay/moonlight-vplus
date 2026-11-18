@@ -76,7 +76,7 @@ public final class MatCarrierDiagnosticActivity extends Activity {
             LimeLog.info("MAT_DIAGNOSTIC_BEGIN " + result);
             update("MAT sample comparison\n" + sample + "\nSkip cycles: " + skip +
                     "\nPlaying " + (count * .02) + " seconds\nReceiver Atmos recognition is not measured here.");
-            session = new MatPlaybackSession(new MatAudioTrackSink(this));
+            session = new MatPlaybackSession(new MatAudioTrackSink(this), true);
             byte[] cycle = new byte[MatCarrierPlayer.CYCLE_BYTES];
             for (int index = 0; index < count; index++) {
                 if (Thread.currentThread().isInterrupted()) throw new InterruptedException("Diagnostic cancelled");
