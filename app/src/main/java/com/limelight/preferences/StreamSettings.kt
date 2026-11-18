@@ -1800,6 +1800,13 @@ class StreamSettings : ThemedAppCompatActivity() {
                     child is DisplayChoicePreference -> applyHighlightedSummary(child, valueText, disabledAccent) {
                         it.currentLabel
                     }
+                    child is ListPreference && child.key == PreferenceConfiguration.AUDIO_CODEC_PREF_STRING ->
+                        applyHighlightedSummary(child, valueText, disabledAccent, {
+                            it.entry?.toString()?.takeIf(String::isNotBlank) ?: "—"
+                        }) {
+                            getString(if (it.value == "mat_live") R.string.summary_audio_codec_mat_live
+                                else R.string.summary_list_audio_codec)
+                        }
                     child is ListPreference -> applyHighlightedSummary(child, valueText, disabledAccent) {
                         val entry = it.entry?.toString()
                         if (entry.isNullOrBlank()) "—" else entry
@@ -3887,7 +3894,8 @@ class StreamSettings : ThemedAppCompatActivity() {
                 val fixed = findPreference<ListPreference>("list_fec_mode")?.value == "fixed"
                 updateRuntimeVisibility(findPreference("seekbar_fec_percentage"), fixed)
             }
-            if (changedKey == null || changedKey == "checkbox_enable_audio_passthrough") {
+            if (changedKey == null || changedKey == "checkbox_enable_audio_passthrough" ||
+                changedKey == PreferenceConfiguration.AUDIO_CODEC_PREF_STRING) {
                 updateAudioPipelineVisibility()
             }
             if (changedKey == null || changedKey == "checkbox_stretch_video") {
@@ -4071,6 +4079,11 @@ class StreamSettings : ThemedAppCompatActivity() {
         private fun updateAudioPipelineVisibility() {
             val passthrough = findPreference<CheckBoxPreference>("checkbox_enable_audio_passthrough")
                 ?: return
+            val codec = findPreference<ListPreference>(PreferenceConfiguration.AUDIO_CODEC_PREF_STRING)
+            val liveMat = passthrough.isChecked && codec?.value == "mat_live"
+            // MAT uses its own carrier buffers and never enters the AC3 wrapper.
+            updateRuntimeVisibility(findPreference("list_audio_passthrough_buffer"), !liveMat)
+            updateRuntimeVisibility(findPreference("checkbox_ac3_iec61937"), !liveMat)
             val audioEffects = findPreference<Preference>("checkbox_enable_audiofx")
             val spatializer = findPreference<Preference>("checkbox_enable_spatializer")
 

@@ -6,8 +6,8 @@ interface AudioRenderer {
     /**
      * @param codec one of [MoonBridge.AUDIO_CODEC_OPUS] / AC3 / EAC3 (see
      *  `LiGetNegotiatedAudioCodec`). For non-OPUS codecs the native layer
-     *  bypasses Opus decoding and instead delivers raw encoded frames via
-     *  [playEncodedAudio]; [playDecodedAudio] is never called.
+     *  bypasses Opus decoding. AC3/E-AC3 and PCM passthrough use [playEncodedAudio];
+     *  live MAT uses complete cycles through MatCarrierConsumer.
      * @param bitrate Negotiated bitrate in bits/sec (only meaningful for AC3/E-AC3),
      *  0 when not applicable.
      */

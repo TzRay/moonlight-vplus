@@ -2,6 +2,7 @@
 
 #include <pthread.h>
 #include <string.h>
+#include <stdatomic.h>
 
 #include <Limelight.h>
 
@@ -11,6 +12,7 @@
 #include <cpu-features.h>
 
 #include "audio_haptics_android_adapter_bridge.h"
+#include "mat_carrier_bridge.h"
 
 #define AUDIO_BACKLOG_DROP_THRESHOLD_MS 40
 
@@ -34,6 +36,10 @@ static jmethodID BridgeArStopMethod;
 static jmethodID BridgeArCleanupMethod;
 static jmethodID BridgeArPlaySampleMethod;
 static jmethodID BridgeArPlayEncodedSampleMethod;
+static jmethodID BridgeArGetMatConsumerMethod;
+static jmethodID BridgeMatAudioThreadStartMethod;
+static void* LiveMatBridge;
+static atomic_bool MatAudioLifecycleFailed;
 static jmethodID BridgeClStageStartingMethod;
 static jmethodID BridgeClStageCompleteMethod;
 static jmethodID BridgeClStageFailedMethod;
@@ -121,6 +127,8 @@ Java_com_limelight_nvstream_jni_MoonBridge_init(JNIEnv *env, jclass clazz) {
     BridgeArCleanupMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeArCleanup", "()V");
     BridgeArPlaySampleMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeArPlaySample", "([S)V");
     BridgeArPlayEncodedSampleMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeArPlayEncodedSample", "([BI)V");
+    BridgeArGetMatConsumerMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeArGetMatConsumer", "()Lcom/limelight/binding/audio/MatCarrierConsumer;");
+    BridgeMatAudioThreadStartMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeMatAudioThreadStart", "(I)V");
     BridgeClStageStartingMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeClStageStarting", "(I)V");
     BridgeClStageCompleteMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeClStageComplete", "(I)V");
     BridgeClStageFailedMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeClStageFailed", "(II)V");
@@ -272,6 +280,44 @@ int BridgeDrSubmitDecodeUnit(PDECODE_UNIT decodeUnit) {
     }
 }
 
+static int BridgeMatCycle(void* context, const unsigned char* bytes, int length,
+                          uint64_t epoch, uint64_t domain, uint64_t index, uint64_t pts) {
+    if (MatAudioLifecycleFailed) return 0;
+    return MatPlaybackBridgeCycle(context, GetThreadEnv(), bytes, length, epoch, domain, index, pts);
+}
+
+static int BridgeMatEnd(void* context, uint64_t cycles) {
+    if (MatAudioLifecycleFailed) return 0;
+    return MatPlaybackBridgeEnd(context, GetThreadEnv(), cycles);
+}
+
+static int BridgeMatProgress(void* context, uint64_t epoch, uint64_t domain) {
+    if (MatAudioLifecycleFailed) return -1;
+    return MatPlaybackBridgeProgress(context, GetThreadEnv(), epoch, domain);
+}
+
+static void BridgeMatThreadStart(void* context, int role) {
+    (void)context;
+    JNIEnv* env = GetThreadEnv();
+    (*env)->CallStaticVoidMethod(env, GlobalBridgeClass, BridgeMatAudioThreadStartMethod, role);
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionDescribe(env);
+        (*env)->ExceptionClear(env);
+        __android_log_print(ANDROID_LOG_WARN, "moonlight-jni", "MAT audio scheduling setup failed (role=%d); continuing", role);
+    }
+}
+
+static void ClearMatAudioLifecycleException(JNIEnv* env, const char* operation) {
+    if (LiGetNegotiatedAudioCodec() == AUDIO_CODEC_MAT_LIVE && (*env)->ExceptionCheck(env)) {
+        // Recovery invokes these callbacks from a native worker with no Java caller.
+        MatAudioLifecycleFailed = true;
+        LiBlockMatAudioRecovery();
+        (*env)->ExceptionDescribe(env);
+        (*env)->ExceptionClear(env);
+        __android_log_print(ANDROID_LOG_ERROR, "moonlight-jni", "MAT audio %s threw an exception", operation);
+    }
+}
+
 int BridgeArInit(int audioConfiguration, POPUS_MULTISTREAM_CONFIGURATION opusConfig, void* context, int flags) {
     JNIEnv* env = GetThreadEnv();
     int err;
@@ -279,11 +325,23 @@ int BridgeArInit(int audioConfiguration, POPUS_MULTISTREAM_CONFIGURATION opusCon
     int negotiatedCodec = LiGetNegotiatedAudioCodec();
     int negotiatedBitrate = LiGetNegotiatedAudioBitrate();
 
+    if (negotiatedCodec == AUDIO_CODEC_MAT_LIVE && MatAudioLifecycleFailed) {
+        __android_log_print(ANDROID_LOG_ERROR, "moonlight-jni",
+                            "MAT audio rebuild refused after lifecycle failure; reconnect required");
+        return -1;
+    }
+
     err = (*env)->CallStaticIntMethod(env, GlobalBridgeClass, BridgeArInitMethod,
                                       audioConfiguration, opusConfig->sampleRate, opusConfig->samplesPerFrame,
                                       negotiatedCodec, negotiatedBitrate);
     if ((*env)->ExceptionCheck(env)) {
-        // This is called on a Java thread, so it's safe to return
+        // Ordinary init has a Java caller. MAT may also reinitialize on the native
+        // recovery worker, so return failure with a clean JNI exception state.
+        if (negotiatedCodec == AUDIO_CODEC_MAT_LIVE) {
+            ClearMatAudioLifecycleException(env, "init");
+            (*env)->CallStaticVoidMethod(env, GlobalBridgeClass, BridgeArCleanupMethod);
+            ClearMatAudioLifecycleException(env, "init cleanup");
+        }
         err = -1;
     }
     if (err == 0) {
@@ -307,6 +365,23 @@ int BridgeArInit(int audioConfiguration, POPUS_MULTISTREAM_CONFIGURATION opusCon
 
             audio_haptics_android_adapter_init(
                 opusConfig->sampleRate, opusConfig->channelCount);
+        } else if (negotiatedCodec == AUDIO_CODEC_MAT_LIVE) {
+            // common-c owns authentication and reassembly. Copy complete cycles
+            // to a dedicated JNI array; never use the 16 KiB encoded callback.
+            Decoder = NULL;
+            jobject consumer = (*env)->CallStaticObjectMethod(env, GlobalBridgeClass, BridgeArGetMatConsumerMethod);
+            if (!(*env)->ExceptionCheck(env) && consumer) {
+                LiveMatBridge = MatPlaybackBridgeCreate(env, consumer);
+            }
+            if (consumer) (*env)->DeleteLocalRef(env, consumer);
+            if (!LiveMatBridge || (*env)->ExceptionCheck(env)) {
+                ClearMatAudioLifecycleException(env, "consumer creation");
+                (*env)->CallStaticVoidMethod(env, GlobalBridgeClass, BridgeArCleanupMethod);
+                ClearMatAudioLifecycleException(env, "consumer cleanup");
+                return -1;
+            }
+            LI_MAT_PLAYBACK_CALLBACKS callbacks = {BridgeMatCycle, BridgeMatEnd, LiveMatBridge, BridgeMatThreadStart, BridgeMatProgress};
+            LiSetMatPlaybackCallbacks(&callbacks);
         } else {
             // Encoded passthrough (AC3 / E-AC3): skip Opus decoder, allocate raw byte buffer.
             Decoder = NULL;
@@ -324,16 +399,23 @@ void BridgeArStart(void) {
     JNIEnv* env = GetThreadEnv();
 
     (*env)->CallStaticVoidMethod(env, GlobalBridgeClass, BridgeArStartMethod);
+    ClearMatAudioLifecycleException(env, "start");
 }
 
 void BridgeArStop(void) {
     JNIEnv* env = GetThreadEnv();
 
     (*env)->CallStaticVoidMethod(env, GlobalBridgeClass, BridgeArStopMethod);
+    ClearMatAudioLifecycleException(env, "stop");
 }
 
 void BridgeArCleanup() {
     JNIEnv* env = GetThreadEnv();
+
+    // common-c has joined its audio workers before releasing this consumer.
+    LiSetMatPlaybackCallbacks(NULL);
+    MatPlaybackBridgeDestroy(LiveMatBridge, env);
+    LiveMatBridge = NULL;
 
     audio_haptics_android_adapter_cleanup();
 
@@ -353,9 +435,15 @@ void BridgeArCleanup() {
     }
 
     (*env)->CallStaticVoidMethod(env, GlobalBridgeClass, BridgeArCleanupMethod);
+    ClearMatAudioLifecycleException(env, "cleanup");
 }
 
 void BridgeArDecodeAndPlaySample(char* sampleData, int sampleLength) {
+    if (AUDIO_CODEC_IS_MAT(LiGetNegotiatedAudioCodec())) {
+        __android_log_print(ANDROID_LOG_ERROR, "moonlight-jni", "MAT reached the ordinary audio callback");
+        LiInterruptConnection();
+        return;
+    }
     JNIEnv* env = GetThreadEnv();
 
     // Encoded passthrough path (AC3 / E-AC3): hand the raw bitstream to Java
@@ -426,6 +514,9 @@ void BridgeArDecodeAndPlaySample(char* sampleData, int sampleLength) {
 
 void BridgeClStageStarting(int stage) {
     JNIEnv* env = GetThreadEnv();
+
+    // This stage occurs only for a fresh connection, never an audio-only rebuild.
+    if (stage == STAGE_AUDIO_STREAM_INIT) MatAudioLifecycleFailed = false;
 
     (*env)->CallStaticVoidMethod(env, GlobalBridgeClass, BridgeClStageStartingMethod, stage);
 }

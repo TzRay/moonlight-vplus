@@ -841,7 +841,7 @@ class PreferenceConfiguration {
         const val ENABLE_KEYBOARD_TOGGLE_IN_NATIVE_TOUCH = "checkbox_enable_keyboard_toggle_in_native_touch"
         const val NATIVE_TOUCH_FINGERS_TO_TOGGLE_KEYBOARD_PREF_STRING = "seekbar_keyboard_toggle_fingers_native_touch"
         const val AUDIO_CONFIG_PREF_STRING = "list_audio_config"
-        /** Audio codec preference: "auto" | "opus" | "ac3" | "eac3" */
+        /** Audio codec preference: "auto" | "opus" | "ac3" | "eac3" | "pcm" | "mat_live". */
         const val AUDIO_CODEC_PREF_STRING = "list_audio_codec"
         const val DEFAULT_AUDIO_CODEC = "auto"
         /** "low" (8KB ~96ms) | "normal" (16KB ~160ms) | "high" (32KB ~320ms) */
@@ -1535,7 +1535,8 @@ class PreferenceConfiguration {
             //   * 7.1+ -> AC3/E-AC3 clamp to 5.1 first; PCM_S16 can carry
             //             LPCM 7.1 / 7.1.4 if the Android HDMI route accepts it.
             val audioCodec = prefs.getString(AUDIO_CODEC_PREF_STRING, DEFAULT_AUDIO_CODEC) ?: DEFAULT_AUDIO_CODEC
-            if (!enableAudioPassthrough || audioCodec == "opus") {
+            if (!enableAudioPassthrough || audioCodec == "opus" || audioCodec == "mat_live") {
+                // MAT AUTO can negotiate Opus when the host has no live source.
                 config.audioConfiguration = coerceSupportedAudioConfiguration(config.audioConfiguration)
             } else if ((audioCodec == "ac3" || audioCodec == "eac3") &&
                 config.audioConfiguration.channelCount > 6) {
@@ -1546,6 +1547,7 @@ class PreferenceConfiguration {
                 "eac3" -> MoonBridge.AUDIO_CODEC_EAC3
                 "pcm" -> MoonBridge.AUDIO_CODEC_PCM_S16
                 "opus" -> MoonBridge.AUDIO_CODEC_OPUS
+                "mat_live" -> MoonBridge.AUDIO_CODEC_MAT_AUTO
                 else -> when (config.audioConfiguration.channelCount) {
                     2 -> MoonBridge.AUDIO_CODEC_PCM_S16
                     6 -> MoonBridge.AUDIO_CODEC_AC3

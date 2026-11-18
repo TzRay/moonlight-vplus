@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="audio_codec_mat_live">MAT / Atmos (эксперимент, HDMI)</string>
+    <string name="summary_audio_codec_mat_live">Требуются совместимый источник захвата MAT в Sunshine и аудиовыход HDMI. Если хост не предоставляет MAT, используется Opus; неподдерживаемое устройство вывода приведёт к ошибке подключения. Для применения переподключитесь. Эффекты и пространственная обработка не применяются.</string>
+</resources>

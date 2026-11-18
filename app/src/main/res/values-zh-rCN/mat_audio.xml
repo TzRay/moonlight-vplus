@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="audio_codec_mat_live">MAT / Atmos（实验，HDMI）</string>
+    <string name="summary_audio_codec_mat_live">需要兼容的 Sunshine MAT 采集源和 HDMI 音频输出。主机未提供 MAT 时使用 Opus；播放设备不支持时连接会失败。重新连接后生效，绕过音效和空间化处理。</string>
+</resources>

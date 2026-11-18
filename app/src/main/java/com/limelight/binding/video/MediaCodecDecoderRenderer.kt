@@ -260,6 +260,7 @@ class MediaCodecDecoderRenderer(
     private val activeWindowVideoStats = VideoStats()
     private val lastWindowVideoStats = VideoStats()
     private val globalVideoStats = VideoStats()
+    private var lastPerformanceLogMs = 0L
     private val frameIntervalTracker = FrameIntervalTracker(600)
 
     private var lastTimestampUs: Long = 0
@@ -2846,6 +2847,7 @@ class MediaCodecDecoderRenderer(
             perfListener.onPerfUpdateWG(performanceInfo)
 
             globalVideoStats.add(activeWindowVideoStats)
+            logPerformanceSnapshot(performanceInfo)
             lastWindowVideoStats.copy(activeWindowVideoStats)
             activeWindowVideoStats.clear()
             activeWindowVideoStats.measurementStartTimestamp = SystemClock.uptimeMillis()
@@ -3138,6 +3140,24 @@ class MediaCodecDecoderRenderer(
             averageEndToEndLatency = getAverageEndToEndLatency(),
             averageDecoderLatency = getAverageDecoderLatency(),
         )
+    }
+
+    private fun logPerformanceSnapshot(info: PerformanceInfo) {
+        if (!BuildConfig.DEBUG) return
+        val now = SystemClock.uptimeMillis()
+        if (now - lastPerformanceLogMs < 5000L) return
+        lastPerformanceLogMs = now
+        LimeLog.info(String.format(java.util.Locale.ROOT,
+            "STREAM_PERF uptimeMs=%d rxFps=%.2f rdFps=%.2f lossPct=%.4f " +
+                "rxFrames=%d rdFrames=%d lostFrames=%d lossEvents=%d " +
+                "rttMs=%d rttVarMs=%d decodeMs=%.3f renderMs=%.3f clientTotalMs=%.3f " +
+                "low1Fps=%.2f hostMs=%.3f bandwidth=%s",
+            now, info.receivedFps, info.renderedFps, info.lostFrameRate,
+            globalVideoStats.totalFramesReceived, globalVideoStats.totalFramesRendered,
+            globalVideoStats.framesLost, globalVideoStats.frameLossEvents,
+            (info.rttInfo ushr 32).toInt(), info.rttInfo.toInt(),
+            info.decodeTimeMs, info.renderingLatencyMs, info.totalTimeMs,
+            info.onePercentLowFps, info.aveHostProcessingLatency, info.bandWidth ?: "unknown"))
     }
 
     fun getAverageEndToEndLatency(): Int {

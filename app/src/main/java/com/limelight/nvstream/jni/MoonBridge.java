@@ -31,6 +31,9 @@ public class MoonBridge {
     public static final int AUDIO_CODEC_AC3  = 1;
     public static final int AUDIO_CODEC_EAC3 = 2;
     public static final int AUDIO_CODEC_PCM_S16 = 3;
+    // Codec IDs 4/5 are retired. AUTO selects live MAT or Opus before ANNOUNCE.
+    public static final int AUDIO_CODEC_MAT_AUTO = 6;
+    public static final int AUDIO_CODEC_MAT_LIVE = 7;
 
     public static final int VIDEO_FORMAT_H264 = 0x0001;
     // Local-only receive policy, matching Limelight.h. Defaults are unchanged.
@@ -392,6 +395,28 @@ public class MoonBridge {
     public static void bridgeArPlayEncodedSample(byte[] encodedData, int length) {
         if (audioRenderer != null) {
             audioRenderer.playEncodedAudio(encodedData, length);
+        }
+    }
+
+    public static com.limelight.binding.audio.MatCarrierConsumer bridgeArGetMatConsumer() {
+        return audioRenderer instanceof com.limelight.binding.audio.MatCarrierConsumer
+                ? (com.limelight.binding.audio.MatCarrierConsumer) audioRenderer : null;
+    }
+
+    /** Called on the native receive/decode worker, or the Java IEC writer (role 2). */
+    public static void bridgeMatAudioThreadStart(int role) {
+        String worker = role == 0 ? "receive" : role == 1 ? "decode" : "writer";
+        int tid = android.os.Process.myTid();
+        try {
+            int previous = android.os.Process.getThreadPriority(tid);
+            android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_AUDIO);
+            int effective = android.os.Process.getThreadPriority(tid);
+            com.limelight.LimeLog.info("MAT audio thread: role=" + worker + "; tid=" + tid +
+                    "; previous=" + previous + "; requested=" + android.os.Process.THREAD_PRIORITY_AUDIO +
+                    "; effective=" + effective);
+        } catch (SecurityException | IllegalArgumentException e) {
+            com.limelight.LimeLog.warning("MAT audio thread priority unavailable: role=" + worker +
+                    "; tid=" + tid + "; continuing with platform priority: " + e);
         }
     }
 
