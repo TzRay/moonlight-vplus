@@ -363,6 +363,11 @@ Java_com_limelight_nvstream_jni_MoonBridge_getRtpVideoBytesReceived(JNIEnv *env,
     return (jlong)LiGetRTPVideoBytesReceived();
 }
 
+JNIEXPORT jlong JNICALL
+Java_com_limelight_nvstream_jni_MoonBridge_getObservedVideoDataPackets(JNIEnv *env, jclass clazz) {
+    return (jlong)LiGetObservedVideoDataPackets();
+}
+
 JNIEXPORT jstring JNICALL
 Java_com_limelight_nvstream_jni_MoonBridge_getLaunchUrlQueryParameters(JNIEnv *env, jclass clazz) {
     return (*env)->NewStringUTF(env, LiGetLaunchUrlQueryParameters());

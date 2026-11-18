@@ -25,8 +25,34 @@ class AdaptiveBitrateService(
         val packetLoss: Float,    // %
         val rttMs: Int,           // 网络 RTT
         val decodeFps: Float,     // 解码 FPS
-        val droppedFrames: Int    // 累计丢帧
+        val droppedFrames: Int    // 本次上报间隔内观察到的视频帧序号缺口
     )
+
+    internal class StatsSampler {
+        private data class Sample(val packets: Long, val decoded: Int, val lostFrames: Long, val timeMs: Long)
+        private var previous: Sample? = null
+
+        fun sample(packets: Long, decoded: Int, lostFrames: Long, timeMs: Long, rttInfo: Long): AbrStats? {
+            val current = Sample(packets, decoded, lostFrames, timeMs)
+            val last = previous
+            if (last == null || decoded < last.decoded || lostFrames < last.lostFrames || timeMs <= last.timeMs) {
+                previous = current
+                return null
+            }
+            // The two native 32-bit packet counters wrap independently.
+            val expected = (packets - last.packets) and 0xffffffffL
+            val missing = ((packets ushr 32) - (last.packets ushr 32)) and 0xffffffffL
+            if (expected == 0L) return null
+            previous = current
+            if (missing > expected) return null
+            return AbrStats(
+                packetLoss = missing * 100f / expected,
+                rttMs = (rttInfo ushr 32).toInt().coerceAtLeast(0),
+                decodeFps = (decoded - last.decoded) * 1000f / (timeMs - last.timeMs),
+                droppedFrames = (lostFrames - last.lostFrames).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+            )
+        }
+    }
 
     private val executor: ScheduledExecutorService = Executors.newSingleThreadScheduledExecutor { r ->
         Thread(r, "AdaptiveBitrateService").apply { isDaemon = true }

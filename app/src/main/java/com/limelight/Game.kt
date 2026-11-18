@@ -189,7 +189,6 @@ class Game : ThemedComponentActivity(), SurfaceHolder.Callback,
 
     // 智能码率
     var adaptiveBitrateService: AdaptiveBitrateService? = null
-    @Volatile private var latestPerfInfo: PerformanceInfo? = null
 
     // Sunshine clipboard sync — null until pref toggles enable it.
     private var clipboardSyncManager: ClipboardSyncManager? = null
@@ -2615,17 +2614,15 @@ class Game : ThemedComponentActivity(), SurfaceHolder.Callback,
         if (!prefConfig.enableAdaptiveBitrate) return
         if (adaptiveBitrateService != null) return
         val c = conn ?: return
+        val renderer = decoderRenderer ?: return
+        val sampler = AdaptiveBitrateService.StatsSampler()
         val service = AdaptiveBitrateService(
             nvHttpFactory = { c.createNvHttp() },
             statsProvider = {
-                latestPerfInfo?.let { p ->
-                    AdaptiveBitrateService.AbrStats(
-                        packetLoss = p.lostFrameRate,
-                        rttMs = (p.rttInfo shr 32).toInt(),
-                        decodeFps = p.totalFps,
-                        droppedFrames = 0
-                    )
-                }
+                sampler.sample(
+                    MoonBridge.getObservedVideoDataPackets(), renderer.numFramesOut, renderer.missingVideoFrames,
+                    SystemClock.elapsedRealtime(), MoonBridge.getEstimatedRttInfo()
+                )
             },
             onBitrateChanged = { kbps, _ ->
                 // service 已成功通知服务端，仅同步本地配置
@@ -3324,8 +3321,6 @@ class Game : ThemedComponentActivity(), SurfaceHolder.Callback,
 
     override fun onPerfUpdateWG(performanceInfo: PerformanceInfo) {
         enrichFramegenPerformanceInfo(performanceInfo)
-        // 缓存最新性能数据，供 ABR 服务使用
-        latestPerfInfo = performanceInfo
 
         runOnUiThread {
             if (controllerManager != null && performanceInfoDisplays.isNotEmpty()) {

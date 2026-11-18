@@ -309,7 +309,10 @@ class MediaCodecDecoderRenderer(
     private var numPpsIn = 0
     private var numVpsIn = 0
     private var numFramesIn = 0
-    private var numFramesOut = 0
+    @Volatile internal var numFramesOut = 0
+        private set
+    @Volatile internal var missingVideoFrames = 0L
+        private set
 
     private fun findAvcDecoder(): MediaCodecInfo? {
         var decoder = MediaCodecHelper.findProbableSafeDecoder("video/avc", MediaCodecInfo.CodecProfileLevel.AVCProfileHigh)
@@ -2692,6 +2695,7 @@ class MediaCodecDecoderRenderer(
             if (lastFrameNumber != 0 && frameNumber > lastFrameNumber + 1) {
                 val framesLost = frameNumber - lastFrameNumber - 1
                 activeWindowVideoStats.framesLost += framesLost
+                missingVideoFrames += framesLost
                 activeWindowVideoStats.totalFrames += framesLost
                 activeWindowVideoStats.frameLossEvents++
                 perfListener.onVideoFrameLoss(framesLost, frameNumber)
@@ -2700,6 +2704,7 @@ class MediaCodecDecoderRenderer(
             activeWindowVideoStats.totalFramesReceived++
             activeWindowVideoStats.totalFrames++
             activeWindowVideoStats.totalFramesRendered++
+            numFramesOut++
             val pyrowaveTimings = pyrowaveDecoder.latestFrameTimings
             if (pyrowaveTimings.isValid) {
                 activeWindowVideoStats.pyrowaveDecodeTimeUs += pyrowaveTimings.decodeTimeUs
@@ -2758,6 +2763,7 @@ class MediaCodecDecoderRenderer(
             // In that case, each frame start NALU is submitted independently.
             val framesLost = frameNumber - lastFrameNumber - 1
             activeWindowVideoStats.framesLost += framesLost
+            missingVideoFrames += framesLost
             activeWindowVideoStats.totalFrames += framesLost
             activeWindowVideoStats.frameLossEvents++
             perfListener.onVideoFrameLoss(framesLost, frameNumber)
