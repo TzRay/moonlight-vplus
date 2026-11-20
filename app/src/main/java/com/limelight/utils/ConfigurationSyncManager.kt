@@ -3298,6 +3298,7 @@ class ConfigurationSyncManager(private val context: Context) {
             "background_image_url",
             "background_source",
             "checkbox_adaptive_bitrate",
+            "checkbox_interleave_video_fec",
             "auto_adjust_bitrate",
             "checkbox_absolute_mouse_mode",
             "list_mouse_axis_correction",

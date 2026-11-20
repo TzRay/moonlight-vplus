@@ -109,6 +109,7 @@ class PreferenceConfiguration {
     var resolutionScale = 0
     var bitrate = 0
     var fecPercentage = -2
+    var interleaveVideoFec = false
     var enableAdaptiveBitrate = false
     var abrMode: String = "balanced"  // quality | balanced | lowLatency
     var longPressflatRegionPixels = 0 //Assigned to NativeTouchContext.INTIAL_ZONE_PIXELS
@@ -571,6 +572,7 @@ class PreferenceConfiguration {
         copy.fps = this.fps
         copy.bitrate = this.bitrate
         copy.fecPercentage = this.fecPercentage
+        copy.interleaveVideoFec = this.interleaveVideoFec
         copy.enableAdaptiveBitrate = this.enableAdaptiveBitrate
         copy.abrMode = this.abrMode
         copy.videoFormat = this.videoFormat
@@ -1567,6 +1569,7 @@ class PreferenceConfiguration {
                 config.bitrate = getDefaultBitrate(context)
             }
 
+            config.interleaveVideoFec = prefs.getBoolean("checkbox_interleave_video_fec", false)
             config.fecPercentage = when (prefs.getString("list_fec_mode", "host")) {
                 "automatic" -> -1
                 "fixed" -> prefs.getInt("seekbar_fec_percentage", 20).coerceIn(0, 100)

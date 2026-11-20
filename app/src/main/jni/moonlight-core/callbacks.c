@@ -1071,7 +1071,8 @@ Java_com_limelight_nvstream_jni_MoonBridge_startConnection(JNIEnv *env, jclass c
             .fps = fps,
             .bitrate = bitrate,
             .videoFecPercentage = fecPercentage,
-            .videoReceiveOptions = videoReceiveOptions & (VIDEO_RECEIVE_AVOID_CPU0 | VIDEO_RECEIVE_TIMING_STATS),
+            .videoReceiveOptions = videoReceiveOptions &
+                (VIDEO_RECEIVE_AVOID_CPU0 | VIDEO_RECEIVE_TIMING_STATS | VIDEO_RECEIVE_INTERLEAVED_FEC),
             .packetSize = packetSize,
             .streamingRemotely = streamingRemotely,
             .audioConfiguration = audioConfiguration,

@@ -25,7 +25,7 @@ class StreamConfiguration private constructor() {
     var bitrate: Int = 10000
     var fecPercentage: Int = -2
         private set
-    /** Local receive-thread experiments; never sent to the host. */
+    /** Per-session receive options, including the negotiated video packet order. */
     var videoReceiveOptions: Int = 0
         private set
     private var hostResolutionScaleX100: Int = 100
@@ -110,10 +110,12 @@ class StreamConfiguration private constructor() {
         fun setLaunchRefreshRate(refreshRate: Int): Builder = apply { config.launchRefreshRate = refreshRate }
         fun setBitrate(bitrate: Int): Builder = apply { config.bitrate = bitrate }
         fun setSmoothHostVideoPacing(enabled: Boolean): Builder = apply { config.smoothHostVideoPacing = enabled }
-        fun setVideoReceiveOptions(avoidCpu0: Boolean, diagnostics: Boolean): Builder = apply {
+        @JvmOverloads
+        fun setVideoReceiveOptions(avoidCpu0: Boolean, diagnostics: Boolean, interleaveFec: Boolean = false): Builder = apply {
             config.videoReceiveOptions =
                 (if (avoidCpu0) MoonBridge.VIDEO_RECEIVE_AVOID_CPU0 else 0) or
-                (if (diagnostics) MoonBridge.VIDEO_RECEIVE_TIMING_STATS else 0)
+                (if (diagnostics) MoonBridge.VIDEO_RECEIVE_TIMING_STATS else 0) or
+                (if (interleaveFec) MoonBridge.VIDEO_RECEIVE_INTERLEAVED_FEC else 0)
         }
         fun setFecPercentage(percentage: Int): Builder = apply {
             require(percentage in -2..100)

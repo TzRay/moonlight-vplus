@@ -36,9 +36,10 @@ public class MoonBridge {
     public static final int AUDIO_CODEC_MAT_LIVE = 7;
 
     public static final int VIDEO_FORMAT_H264 = 0x0001;
-    // Local-only receive policy, matching Limelight.h. Defaults are unchanged.
+    // Per-session video receive options, matching Limelight.h.
     public static final int VIDEO_RECEIVE_AVOID_CPU0 = 0x1;
     public static final int VIDEO_RECEIVE_TIMING_STATS = 0x2;
+    public static final int VIDEO_RECEIVE_INTERLEAVED_FEC = 0x4;
     public static final int VIDEO_FORMAT_H265 = 0x0100;
     public static final int VIDEO_FORMAT_H265_MAIN10 = 0x0200;
     public static final int VIDEO_FORMAT_AV1_MAIN8 = 0x1000;

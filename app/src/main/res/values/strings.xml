@@ -2467,6 +2467,8 @@ Tap again to replace it.</string>
     <string name="pyrowave_diag_copy_success">Report copied to clipboard</string>
     <string name="pyrowave_diag_unavailable">Unavailable</string>
     <string name="title_fec_mode">Packet loss protection (FEC)</string>
+    <string name="title_interleave_video_fec">Interleave large video frames (experimental)</string>
+    <string name="summary_interleave_video_fec">A compatible Sunshine host sends parts of large frames across FEC blocks to deliver picture data sooner. Recovery varies with the loss pattern. Reconnect to apply.</string>
     <string name="summary_fec_mode">Host default, automatic protection, or a fixed percentage. Applied on the next connection to a supported Sunshine host.</string>
     <string name="title_fec_percentage">Fixed FEC percentage</string>
     <string name="summary_fec_percentage" formatted="false">Redundancy relative to video data. 0% disables FEC. Compatible hosts share the target bitrate between picture quality and protection. Higher protection leaves less bitrate for picture quality; actual traffic may vary.</string>

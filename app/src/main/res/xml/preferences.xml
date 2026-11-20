@@ -60,6 +60,11 @@
             seekbar:min="0"
             android:max="100"
             seekbar:step="1" />
+        <CheckBoxPreference
+            android:key="checkbox_interleave_video_fec"
+            android:title="@string/title_interleave_video_fec"
+            android:summary="@string/summary_interleave_video_fec"
+            android:defaultValue="false" />
         <com.limelight.preferences.SeekBarPreference
             android:key="seekbar_resolutions_scale"
             android:dialogMessage="@string/summary_seekbar_scale"
