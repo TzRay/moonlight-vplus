@@ -16,50 +16,68 @@ import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
 
 class AdaptiveBitrateService(
-    private val nvHttpFactory: () -> NvHTTP,
+    private val nvHttpFactory: () -> AbrEndpoint,
     private val statsProvider: () -> AbrStats?,
     /** 码率成功调整后的回调（已在 service 线程发到服务端）。仅用于更新本地 prefConfig / UI。*/
-    private val onBitrateChanged: (bitrateKbps: Int, reason: String) -> Unit
-) {
-    data class AbrStats(
-        val packetLoss: Float,    // %
-        val rttMs: Int,           // 网络 RTT
-        val decodeFps: Float,     // 解码 FPS
-        val droppedFrames: Int    // 本次上报间隔内观察到的视频帧序号缺口
-    )
-
-    internal class StatsSampler {
-        private data class Sample(val packets: Long, val decoded: Int, val lostFrames: Long, val timeMs: Long)
-        private var previous: Sample? = null
-
-        fun sample(packets: Long, decoded: Int, lostFrames: Long, timeMs: Long, rttInfo: Long): AbrStats? {
-            val current = Sample(packets, decoded, lostFrames, timeMs)
-            val last = previous
-            if (last == null || decoded < last.decoded || lostFrames < last.lostFrames || timeMs <= last.timeMs) {
-                previous = current
-                return null
-            }
-            // The two native 32-bit packet counters wrap independently.
-            val expected = (packets - last.packets) and 0xffffffffL
-            val missing = ((packets ushr 32) - (last.packets ushr 32)) and 0xffffffffL
-            if (expected == 0L) return null
-            previous = current
-            if (missing > expected) return null
-            return AbrStats(
-                packetLoss = missing * 100f / expected,
-                rttMs = (rttInfo ushr 32).toInt().coerceAtLeast(0),
-                decodeFps = (decoded - last.decoded) * 1000f / (timeMs - last.timeMs),
-                droppedFrames = (lostFrames - last.lostFrames).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
-            )
-        }
-    }
-
+    private val onBitrateChanged: (bitrateKbps: Int, reason: String) -> Unit,
+    private val resetSampler: () -> Unit = {},
+    private val nowMs: () -> Long = { System.nanoTime() / 1_000_000L },
     private val executor: ScheduledExecutorService = Executors.newSingleThreadScheduledExecutor { r ->
         Thread(r, "AdaptiveBitrateService").apply { isDaemon = true }
     }
+) {
+    data class AbrStats(
+        val packetLoss: Float,
+        val rttMs: Int,
+        val decodeFps: Float,
+        val droppedFrames: Int,
+        val packets: AbrPacketSample
+    )
+
+    internal class StatsSampler {
+        private data class Sample(val packets: Long, val decoded: Int, val delivered: Int, val lostFrames: Long,
+                                  val gaps: Long, val timeMs: Long, val generation: Int)
+        private var previous: Sample? = null
+        private var newWindow = true
+        fun reset() { previous = null; newWindow = true }
+
+        fun sample(packets: Long, decoded: Int, lostFrames: Long, timeMs: Long, rttInfo: Long,
+                   gaps: Long, delivered: Int, generation: Int): AbrStats? {
+            val current = Sample(packets, decoded, delivered, lostFrames, gaps, timeMs, generation)
+            val last = previous
+            previous = current
+            if (last == null || generation != last.generation || decoded < last.decoded ||
+                delivered < last.delivered || lostFrames < last.lostFrames || timeMs <= last.timeMs) {
+                newWindow = true
+                return null
+            }
+            val expected = ((packets and UINT_MASK) - (last.packets and UINT_MASK)) and UINT_MASK
+            val missing = ((packets ushr 32) - (last.packets ushr 32)) and UINT_MASK
+            val coverage = (gaps - last.gaps) and UINT_MASK
+            if (missing > expected) { newWindow = true; return null }
+            val observation = AbrPacketSample(expected, missing, coverage, delivered - last.delivered,
+                expected >= 100 && coverage == 0L, newWindow)
+            newWindow = false
+            return AbrStats(
+                if (expected > 0) missing * 100f / expected else 0f,
+                (rttInfo ushr 32).toInt().coerceAtLeast(0),
+                (decoded - last.decoded) * 1000f / (timeMs - last.timeMs),
+                (lostFrames - last.lostFrames).coerceAtMost(Int.MAX_VALUE.toLong()).toInt(),
+                observation
+            )
+        }
+        private companion object { const val UINT_MASK = 0xffffffffL }
+    }
+
+    private data class ObservedTick(val ms: Long, val stats: AbrStats)
+    private val history = java.util.ArrayDeque<ObservedTick>()
+    private val revision = java.util.concurrent.atomic.AtomicLong()
+    private val resetSampling = java.util.concurrent.atomic.AtomicBoolean(true)
+    @Volatile private var suspended = false
+    private var packetFeedback = false
     private var future: ScheduledFuture<*>? = null
 
-    @Volatile private var nvHttp: NvHTTP? = null
+    @Volatile private var nvHttp: AbrEndpoint? = null
     @Volatile var enabled: Boolean = false
         private set
     @Volatile var serverSupported: Boolean = false
@@ -103,6 +121,7 @@ class AdaptiveBitrateService(
                 val http = nvHttpFactory()
                 nvHttp = http
                 val caps = http.getAbrCapabilities()
+                packetFeedback = "packet_sample_v2" in caps.features
                 serverSupported = caps.supported
                 if (caps.supported) serverEnableRetries = 1
                 LimeLog.info("[ABR] 启动: bitrate=${initialBitrate}kbps, mode=$mode, server=${caps.supported} (v${caps.version})")
@@ -123,19 +142,40 @@ class AdaptiveBitrateService(
         }, START_DELAY_SECONDS, 1, TimeUnit.SECONDS)
     }
 
-    /** 用户手动调了码率（如游戏菜单滑块），ABR 同步基准并重置探测状态。*/
-    fun notifyManualOverride(kbps: Int) {
-        if (!enabled) return
-        currentBitrate = kbps
-        stableSeconds = 0
-        lossStreak = 0
-        lastAdjustWallClock = System.currentTimeMillis()
-        LimeLog.info("[ABR] 手动覆盖码率 -> ${kbps}kbps")
+    fun setSuspended(value: Boolean) {
+        if (!enabled || suspended == value) return
+        suspended = value
+        revision.incrementAndGet()
+        resetSampling.set(true)
     }
+
+    // Every user bitrate change uses the same executor as feedback and its
+    // resulting HTTP write. Invalidate the in-flight recommendation immediately.
+    fun setManualBitrate(kbps: Int, finished: (Boolean) -> Unit): Boolean {
+        if (!enabled) return false
+        revision.incrementAndGet()
+        executor.execute {
+            val ok = applyBitrateInternal(kbps, "manual")
+            if (ok) {
+                applyModePreset(mode, kbps)
+                if (serverSupported) {
+                    serverEnableRetries = 1
+                    serverRetryTickCounter = 0
+                }
+                lastAdjustWallClock = nowMs()
+                resetSampling.set(true)
+            }
+            finished(ok)
+        }
+        return true
+    }
+
+    private fun current(ticket: Long) = enabled && !suspended && revision.get() == ticket
 
     fun stop() {
         if (!enabled) return
         enabled = false
+        revision.incrementAndGet()
         future?.cancel(false)
         future = null
 
@@ -171,8 +211,8 @@ class AdaptiveBitrateService(
     // 内部
     // -----------------------------------------------------------------------
 
-    private fun applyModePreset(mode: String) {
-        val range = bitrateRange(initialBitrate, mode)
+    private fun applyModePreset(mode: String, baseline: Int = initialBitrate) {
+        val range = bitrateRange(baseline, mode)
         minBitrate = range.first
         maxBitrate = range.last
     }
@@ -186,13 +226,21 @@ class AdaptiveBitrateService(
         serverRetryTickCounter = 0
     }
 
-    private fun tick() {
+    internal fun tick() {
+        val ticket = revision.get()
+        if (!current(ticket)) return
         val http = nvHttp ?: return
+        if (resetSampling.getAndSet(false)) {
+            resetSampler()
+            history.clear()
+            stableSeconds = 0
+            lossStreak = 0
+        }
         val stats = statsProvider() ?: return
 
         // 服务端启用惰性重试
         if (serverSupported && serverEnableRetries > 0) {
-            if (++serverRetryTickCounter >= SERVER_RETRY_INTERVAL_TICKS) {
+            if (++serverRetryTickCounter >= SERVER_RETRY_INTERVAL_TICKS || serverEnableRetries == 1 && serverRetryTickCounter == 1) {
                 serverRetryTickCounter = 0
                 val ok = http.setAbrMode(AbrConfig(true, minBitrate, maxBitrate, mode))
                 if (ok) {
@@ -206,33 +254,47 @@ class AdaptiveBitrateService(
         }
 
         if (serverSupported && serverEnableRetries == 0) {
-            tickServer(http, stats)
+            tickServer(http, stats, ticket)
         } else {
-            tickLocal(stats)
+            tickLocal(stats, ticket)
         }
     }
 
-    private fun tickServer(http: NvHTTP, stats: AbrStats) {
+    private fun tickServer(http: AbrEndpoint, stats: AbrStats, ticket: Long) {
+        if (!current(ticket) || (!packetFeedback && !stats.packets.trusted)) return
         val feedback = NetworkFeedback(
             packetLoss = stats.packetLoss,
             rttMs = stats.rttMs,
             decodeFps = stats.decodeFps,
             droppedFrames = stats.droppedFrames,
-            currentBitrate = currentBitrate
+            currentBitrate = currentBitrate,
+            packets = stats.packets.takeIf { packetFeedback }
         )
         val action = http.reportNetworkFeedback(feedback) ?: return
         val newBitrate = action.newBitrate ?: return
+        if (!current(ticket)) {
+            // Legacy hosts apply their decision before replying. The current
+            // connection must retain its foreground rate through a suspension.
+            val restore = if (enabled) currentBitrate else initialBitrate
+            if (!packetFeedback && newBitrate != restore) http.setBitrate(restore)
+            return
+        }
         if (newBitrate == currentBitrate) return
         val clamped = newBitrate.coerceIn(minBitrate, maxBitrate)
-        applyBitrateInternal(clamped, action.reason ?: "server", source = "server")
+        applyBitrateInternal(clamped, action.reason ?: "server", source = "server", ticket = ticket)
     }
 
     /** 内部统一码率应用：复用缓存的 nvHttp 实例，避免每次新建 OkHttpClient + TLS。*/
-    private fun applyBitrateInternal(kbps: Int, reason: String, source: String = "local"): Boolean {
+    private fun applyBitrateInternal(kbps: Int, reason: String, source: String = "local", ticket: Long? = null): Boolean {
+        if (ticket != null && !current(ticket)) return false
         val http = nvHttp ?: return false
         val from = currentBitrate
         return try {
             if (http.setBitrate(kbps)) {
+                if (ticket != null && !current(ticket)) {
+                    http.setBitrate(if (enabled) currentBitrate else initialBitrate)
+                    return false
+                }
                 currentBitrate = kbps
                 LimeLog.info("[ABR][$source] ${from}kbps -> ${kbps}kbps ($reason)")
                 onBitrateChanged(kbps, reason)
@@ -245,8 +307,34 @@ class AdaptiveBitrateService(
         }
     }
 
-    private fun tickLocal(stats: AbrStats) {
-        val now = System.currentTimeMillis()
+    private fun tickLocal(stats: AbrStats, ticket: Long) {
+        val now = nowMs()
+        if (stats.packets.resetWindow) {
+            history.clear()
+            stableSeconds = 0
+            lossStreak = 0
+        }
+        while (history.peekFirst()?.let { now - it.ms > 4000 } == true) history.removeFirst()
+        history.addLast(ObservedTick(now, stats))
+        var affected = 0
+        var missing = false
+        var incomplete = false
+        var risingRtt = false
+        var previousRtt = 0
+        for ((_, tick) in history) {
+            if (tick.droppedFrames > 0) affected++
+            missing = missing || tick.packets.missing > 0
+            incomplete = incomplete || tick.packets.coverageGaps > 0
+            risingRtt = risingRtt || previousRtt > 0 && tick.rttMs >= previousRtt + 15 && tick.rttMs >= previousRtt * 1.5
+            if (tick.rttMs > 0) previousRtt = tick.rttMs
+        }
+        val damage = stats.droppedFrames > 0 && (incomplete || stats.droppedFrames >= 3 ||
+            affected >= 3 || affected >= 2 && (missing || risingRtt))
+        if (!stats.packets.trusted || stats.droppedFrames > 0) stableSeconds = 0
+        if (!stats.packets.trusted && !damage) {
+            lossStreak = 0
+            return
+        }
         val cooldown = if (mode == MODE_LOW_LATENCY) 1500 else 2000
         if (now - lastAdjustWallClock < cooldown) return
 
@@ -254,11 +342,16 @@ class AdaptiveBitrateService(
         var reason = ""
 
         when {
-            stats.packetLoss > 5f -> {
+            stats.packets.trusted && stats.packetLoss > 5f -> {
                 newBitrate = currentBitrate * 0.7
                 reason = "loss=%.1f%% emergency".format(stats.packetLoss)
                 stableSeconds = 0
                 lossStreak++
+            }
+            damage -> {
+                newBitrate = currentBitrate * 0.9
+                reason = "delivery_loss"
+                lossStreak = 0
             }
             stats.packetLoss > 2f -> {
                 lossStreak++
@@ -278,6 +371,7 @@ class AdaptiveBitrateService(
             }
             else -> {
                 lossStreak = 0
+                if (stats.droppedFrames > 0) return
                 stableSeconds++
                 val probeThreshold = if (mode == MODE_QUALITY) 3 else 5
                 if (stableSeconds >= probeThreshold && currentBitrate < maxBitrate) {
@@ -292,7 +386,7 @@ class AdaptiveBitrateService(
         val target = newBitrate.toInt().coerceIn(minBitrate, maxBitrate)
         if (target != currentBitrate) {
             val direction = if (target > currentBitrate) DIR_UP else DIR_DOWN
-            if (applyBitrateInternal(target, reason, source = "local")) {
+            if (applyBitrateInternal(target, reason, source = "local", ticket = ticket)) {
                 lastDirection = direction
                 lastAdjustWallClock = now
             }

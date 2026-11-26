@@ -22,12 +22,22 @@ class AdaptiveBitrateRangeTest {
         fun packets(missing: Long, expected: Long) = (missing shl 32) or expected
         val sampler = AdaptiveBitrateService.StatsSampler()
         val rtt = 9L shl 32
-        assertEquals(null, sampler.sample(packets(0xffffffffL, 0xfffffffeL), 10, 4, 1000, rtt))
-        val first = sampler.sample(packets(1, 98), 65, 5, 2000, rtt)!!
-        assertEquals(AdaptiveBitrateService.AbrStats(2f, 9, 55f, 1), first)
-        assertEquals(null, sampler.sample(packets(1, 98), 70, 5, 2500, rtt))
-        assertEquals(AdaptiveBitrateService.AbrStats(0f, 9, 30f, 2),
-            sampler.sample(packets(1, 148), 95, 7, 3000, rtt))
+        fun sample(p: Long, n: Int, lost: Long, ms: Long, gaps: Long = 0, generation: Int = 1) =
+            sampler.sample(p, n, lost, ms, rtt, gaps, n, generation)
+        assertEquals(null, sample(packets(0xffffffffL, 0xfffffffeL), 10, 4, 1000))
+        val first = sample(packets(1, 98), 65, 5, 2000)!!
+        assertEquals(AbrPacketSample(100, 2, 0, 55, true, true), first.packets)
+        assertEquals(2f, first.packetLoss, 0f)
+        val idle = sample(packets(1, 98), 70, 5, 2500)!!
+        assertEquals(0L, idle.packets.expected)
+        assertTrue(!idle.packets.trusted)
+        val resumed = sample(packets(1, 148), 95, 7, 3000, 1)!!
+        assertEquals(50f, resumed.decodeFps, 0f)
+        assertEquals(2, resumed.droppedFrames)
+        assertEquals(AbrPacketSample(50, 0, 1, 25, false, false), resumed.packets)
+        assertEquals(null, sample(packets(1, 148), 96, 7, 3500, 1, 2))
+        sampler.reset()
+        assertEquals(null, sample(packets(1, 148), 99, 7, 4000))
     }
 
     @Test

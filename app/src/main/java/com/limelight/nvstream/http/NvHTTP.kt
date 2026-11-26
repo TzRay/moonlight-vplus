@@ -80,7 +80,7 @@ class NvHTTP(
     serverCert: X509Certificate?,
     private val cryptoProvider: LimelightCryptoProvider,
     private val timeoutConfig: TimeoutConfig = TimeoutConfig.DEFAULT
-) {
+) : AbrEndpoint {
     private var uniqueId: String = "0123456789ABCDEF"
     val pairingManager: PairingManager
     private var clientName: String? = null
@@ -995,7 +995,7 @@ class NvHTTP(
 
     @SuppressLint("DefaultLocale")
     @Throws(IOException::class, XmlPullParserException::class, InterruptedException::class)
-    fun setBitrate(bitrateKbps: Int): Boolean {
+    override fun setBitrate(bitrateKbps: Int): Boolean {
         val deadline = HttpRequestDeadline(timeoutConfig.bitrateCallTimeoutMs.toLong(), TimeUnit.MILLISECONDS)
         val query = String.format("bitrate=%d", bitrateKbps)
         val xmlStr = openHttpConnectionToString(
@@ -1030,7 +1030,7 @@ class NvHTTP(
     } catch (e: Exception) { null }
 
     /** 查询服务端 ABR 能力。失败返回 supported=false 的占位对象。*/
-    fun getAbrCapabilities(): AbrCapabilities {
+    override fun getAbrCapabilities(): AbrCapabilities {
         val body = abrGet("api/abr/capabilities").takeUnless { it.isNullOrEmpty() }
             ?: return AbrCapabilities(false, 0, emptyList())
         return try {
@@ -1184,7 +1184,7 @@ class NvHTTP(
     }
 
     /** 通知服务端启用/关闭 ABR。*/
-    fun setAbrMode(config: AbrConfig): Boolean {
+    override fun setAbrMode(config: AbrConfig): Boolean {
         val payload = JSONObject().apply {
             put("enabled", config.enabled)
             put("minBitrate", config.minBitrate)
@@ -1195,9 +1195,19 @@ class NvHTTP(
     }
 
     /** 上报客户端网络指标，可能返回服务端建议的新码率。*/
-    fun reportNetworkFeedback(feedback: NetworkFeedback): AbrAction? {
+    override fun reportNetworkFeedback(feedback: NetworkFeedback): AbrAction? {
         val payload = JSONObject().apply {
-            put("packetLoss", feedback.packetLoss)
+            feedback.packets?.let { sample ->
+                put("packetSample", JSONObject().apply {
+                    put("expected", sample.expected)
+                    put("missing", sample.missing)
+                    put("coverageGaps", sample.coverageGaps)
+                    put("deliveredFrames", sample.deliveredFrames)
+                    put("trusted", sample.trusted)
+                    put("resetWindow", sample.resetWindow)
+                })
+            }
+            if (feedback.packets?.expected != 0L) put("packetLoss", feedback.packetLoss)
             put("rttMs", feedback.rttMs)
             put("decodeFps", feedback.decodeFps)
             put("droppedFrames", feedback.droppedFrames)
@@ -1585,12 +1595,23 @@ data class AbrConfig(
     val mode: String  // "quality" | "balanced" | "lowLatency"
 )
 
+interface AbrEndpoint {
+    fun getAbrCapabilities(): AbrCapabilities
+    fun setAbrMode(config: AbrConfig): Boolean
+    fun reportNetworkFeedback(feedback: NetworkFeedback): AbrAction?
+    fun setBitrate(bitrateKbps: Int): Boolean
+}
+
+data class AbrPacketSample(val expected: Long, val missing: Long, val coverageGaps: Long,
+                           val deliveredFrames: Int, val trusted: Boolean, val resetWindow: Boolean)
+
 data class NetworkFeedback(
     val packetLoss: Float,
     val rttMs: Int,
     val decodeFps: Float,
     val droppedFrames: Int,
-    val currentBitrate: Int
+    val currentBitrate: Int,
+    val packets: AbrPacketSample? = null
 )
 
 data class AbrAction(

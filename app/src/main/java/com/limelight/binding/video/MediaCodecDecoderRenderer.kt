@@ -264,7 +264,10 @@ class MediaCodecDecoderRenderer(
     private val frameIntervalTracker = FrameIntervalTracker(600)
 
     private var lastTimestampUs: Long = 0
-    private var lastFrameNumber = 0
+    private val frameSequence = VideoFrameSequence()
+    internal val abrGeneration get() = frameSequence.generation
+    fun resetAbrFrameWindow() = frameSequence.reset()
+
     private var refreshRate = 0
 
     // Fixed primitive ring: local codec PTS -> enqueue time and host cadence PTS.
@@ -308,7 +311,8 @@ class MediaCodecDecoderRenderer(
     private var numSpsIn = 0
     private var numPpsIn = 0
     private var numVpsIn = 0
-    private var numFramesIn = 0
+    @Volatile internal var numFramesIn = 0
+        private set
     @Volatile internal var numFramesOut = 0
         private set
     @Volatile internal var missingVideoFrames = 0L
@@ -527,6 +531,7 @@ class MediaCodecDecoderRenderer(
 
     private fun recreatePyrowaveDecoder(width: Int = initialWidth, height: Int = initialHeight): Boolean {
         val hdrMode = pyrowaveHdrMode()
+        resetAbrFrameWindow()
         return pyrowaveDecoder.create(
             width,
             height,
@@ -1061,6 +1066,7 @@ class MediaCodecDecoderRenderer(
     }
 
     private fun configureAndStartDecoder(format: MediaFormat) {
+        resetAbrFrameWindow()
         hdr10PlusOutputObserver.restartCodecConfiguration()
         stableOutputFormatTracker.reset()
 
@@ -2367,7 +2373,7 @@ class MediaCodecDecoderRenderer(
                 return
             }
             firstFrameDelivered = false
-            lastFrameNumber = 0
+            resetAbrFrameWindow()
             activeWindowVideoStats.clear()
             activeWindowVideoStats.measurementStartTimestamp = SystemClock.uptimeMillis()
             LimeLog.info("PyroWave decoder recreated for ${width}x$height")
@@ -2673,6 +2679,7 @@ class MediaCodecDecoderRenderer(
                 PyrowaveDecoderSession.SubmitResult.RECOVERED,
                 PyrowaveDecoderSession.SubmitResult.RETRYING,
                 PyrowaveDecoderSession.SubmitResult.FATAL -> {
+                    resetAbrFrameWindow()
                     LimeLog.warning("PyroWave decode/present failed for frame $frameNumber")
                     // The session has already bounded the recovery attempt and
                     // recreated the handle when possible. Ask the host for a
@@ -2692,6 +2699,7 @@ class MediaCodecDecoderRenderer(
             if (activeWindowVideoStats.measurementStartTimestamp == 0L) {
                 activeWindowVideoStats.measurementStartTimestamp = nowMs
             }
+            val lastFrameNumber = frameSequence.accept(frameNumber)
             if (lastFrameNumber != 0 && frameNumber > lastFrameNumber + 1) {
                 val framesLost = frameNumber - lastFrameNumber - 1
                 activeWindowVideoStats.framesLost += framesLost
@@ -2700,7 +2708,6 @@ class MediaCodecDecoderRenderer(
                 activeWindowVideoStats.frameLossEvents++
                 perfListener.onVideoFrameLoss(framesLost, frameNumber)
             }
-            lastFrameNumber = frameNumber
             activeWindowVideoStats.totalFramesReceived++
             activeWindowVideoStats.totalFrames++
             activeWindowVideoStats.totalFramesRendered++
@@ -2756,6 +2763,7 @@ class MediaCodecDecoderRenderer(
             needsIdrOnResume = false
         }
 
+        val lastFrameNumber = frameSequence.accept(frameNumber)
         if (lastFrameNumber == 0) {
             activeWindowVideoStats.measurementStartTimestamp = SystemClock.uptimeMillis()
         } else if (frameNumber > lastFrameNumber + 1) {
@@ -2776,7 +2784,6 @@ class MediaCodecDecoderRenderer(
             ppsBuffers.clear()
         }
 
-        lastFrameNumber = frameNumber
 
         // Flip stats windows roughly every second
         if (SystemClock.uptimeMillis() >= activeWindowVideoStats.measurementStartTimestamp + 1000) {

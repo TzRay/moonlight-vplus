@@ -775,7 +775,6 @@ internal class BitrateCardController(
         if (errorMessage == null) {
             game.prefConfig.bitrate = confirmedBitrateKbps
             game.prefConfig.writeDisplayPreferences(game)
-            game.adaptiveBitrateService?.notifyManualOverride(confirmedBitrateKbps)
         }
         state = state.copy(
             progress = if (completion.settleSelection) {

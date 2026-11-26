@@ -55,4 +55,39 @@ class AudioWriteLoopTest {
     fun rejectsInvalidRouteBufferSize() {
         alignedPcmBufferSize(-2, 8192, 8)
     }
+
+    @Test fun pauseInterruptsPartialWritesBeforeFlushingAndForegroundStartsANewFrame() {
+        for (next in listOf(3, 0, -6)) {
+            val gate = AudioWriteGate()
+            val inside = java.util.concurrent.CountDownLatch(1)
+            val interrupted = java.util.concurrent.CountDownLatch(1)
+            val offsets = mutableListOf<Int>()
+            var flushed = false
+            val executor = java.util.concurrent.Executors.newSingleThreadExecutor()
+            try {
+                val inFlight = executor.submit {
+                    gate.frame {
+                        writeAudioFully(8, { !gate.paused }) { offset, _ ->
+                            offsets.add(offset)
+                            if (offset == 0) 2 else {
+                                inside.countDown()
+                                check(interrupted.await(2, java.util.concurrent.TimeUnit.SECONDS))
+                                next
+                            }
+                        }
+                    }
+                }
+                check(inside.await(2, java.util.concurrent.TimeUnit.SECONDS))
+                gate.pause({ interrupted.countDown() }, { flushed = true })
+                inFlight.get(2, java.util.concurrent.TimeUnit.SECONDS)
+                assertEquals(listOf(0, 2), offsets)
+                gate.frame { assertEquals(0, writeAudioFully(8, { !gate.paused }) { _, _ -> error("background write") }) }
+                gate.resume { check(flushed) }
+                gate.frame { assertEquals(8, writeAudioFully(8, { !gate.paused }) { offset, size ->
+                    assertEquals(0, offset)
+                    size
+                }) }
+            } finally { executor.shutdownNow() }
+        }
+    }
 }

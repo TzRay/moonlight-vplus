@@ -799,6 +799,7 @@ public class MoonBridge {
     /** Returns wire-level bytes received by the active video RTP stream. */
     public static native long getRtpVideoBytesReceived();
     public static native long getObservedVideoDataPackets();
+    public static native long getVideoPacketCoverageGaps();
 
     // Consumed by the next native start; coordinated/device routes accept authored IR.
     public static native void setAuthoredHapticsEnabled(boolean enabled);

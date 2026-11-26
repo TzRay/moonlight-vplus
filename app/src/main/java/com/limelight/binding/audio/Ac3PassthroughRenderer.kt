@@ -40,7 +40,8 @@ class Ac3PassthroughRenderer(
     private val bufferBytes: Int = 16 * 1024
 ) : AudioRenderer {
 
-    private var track: AudioTrack? = null
+    private val writes = AudioWriteGate()
+    @Volatile private var track: AudioTrack? = null
     private var encoding: Int = 0
     private var codecName: String = ""
 
@@ -169,7 +170,7 @@ class Ac3PassthroughRenderer(
             // first frame without a startup glitch.
             track!!.pause()
             track!!.flush()
-            track!!.play()
+            writes.resume { track!!.play() }
 
             val bufferMs = if (frameBytes > 0) bufferSize.toLong() * 32 / frameBytes else 0
             LimeLog.info("Ac3PassthroughRenderer: $codecName initialized @${sampleRate} Hz, ${audioConfiguration.channelCount}ch (mask=$channelMaskName), bitrate=$bitrate bps, buffer=${bufferSize}B (~${bufferMs} ms, min=$minBuffer, frame=$frameBytes)")
@@ -188,40 +189,36 @@ class Ac3PassthroughRenderer(
         // play() already called in setup(); nothing additional.
     }
 
+    fun pauseProcessing() {
+        writes.pause({ track?.pause() }, { track?.flush() })
+    }
+
+    fun resumeProcessing() {
+        writes.resume { track?.play() }
+    }
+
     override fun stop() {
-        try {
-            track?.pause()
-            track?.flush()
-        } catch (_: Exception) {}
+        try { pauseProcessing() } catch (_: Exception) {}
     }
 
-    override fun playDecodedAudio(audioData: ShortArray) {
-        // Unused: native side never calls this for non-Opus codecs.
-    }
+    override fun playDecodedAudio(audioData: ShortArray) {}
 
-    override fun playEncodedAudio(audioData: ByteArray, length: Int) {
-        val t = track ?: return
-        if (length <= 0) return
+    override fun playEncodedAudio(audioData: ByteArray, length: Int) = writes.frame {
+        val output = track ?: return@frame
+        if (writes.paused || length !in 1..audioData.size) return@frame
         try {
-            // AC3 is frame-aligned (sync word 0x0B77 marks frame start). A short
-            // write would desync the receiver / AVR. Loop with WRITE_BLOCKING
-            // semantics until the entire frame is committed (or the track
-            // returns an error).
-            var offset = 0
-            while (offset < length) {
-                val written = t.write(audioData, offset, length - offset, AudioTrack.WRITE_BLOCKING)
-                if (written <= 0) {
-                    LimeLog.warning("Ac3PassthroughRenderer.write returned $written, dropping rest of frame")
-                    break
-                }
-                offset += written
+            // Sunshine sends one complete AC3/EAC3 access unit per RTP payload.
+            val written = writeAudioFully(length, { !writes.paused }) { offset, remaining ->
+                output.write(audioData, offset, remaining, AudioTrack.WRITE_BLOCKING)
             }
+            if (written != length && !writes.paused) LimeLog.warning("AC3 write accepted $written/$length bytes")
         } catch (e: Exception) {
             LimeLog.warning("Ac3PassthroughRenderer.write failed: ${e.message}")
         }
     }
 
     override fun cleanup() {
+        stop()
         try {
             track?.stop()
             track?.release()

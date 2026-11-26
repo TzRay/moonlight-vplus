@@ -30,6 +30,7 @@ class PcmPassthroughRenderer(
 
     @Volatile private var track: AudioTrack? = null
     @Volatile private var stopped = true
+    private val writes = AudioWriteGate()
     private var sampleFrameBytes = 0
     private val systemAudioHaptics = SystemAudioHapticsSession(
         enableSystemAudioHaptics,
@@ -102,7 +103,7 @@ class PcmPassthroughRenderer(
                     AudioTrack.MODE_STREAM, AudioManager.AUDIO_SESSION_ID_GENERATE)
             }
             systemAudioHaptics.attach(track!!)
-            track!!.play()
+            writes.resume { track!!.play() }
             stopped = false
             val frameBytes = audioConfiguration.channelCount * samplesPerFrame * 2
             val capacityMs = bufferSize * 1000.0 / (sampleRate * sampleFrameBytes)
@@ -127,9 +128,16 @@ class PcmPassthroughRenderer(
         stopped = true
         try {
             systemAudioHaptics.detach()
-            track?.pause()
-            track?.flush()
+            pauseProcessing()
         } catch (_: Exception) {}
+    }
+
+    fun pauseProcessing() {
+        writes.pause({ track?.pause() }, { track?.flush() })
+    }
+
+    fun resumeProcessing() {
+        if (!stopped) writes.resume { track?.play() }
     }
 
     fun detachSystemAudioHaptics(): Boolean {
@@ -146,11 +154,11 @@ class PcmPassthroughRenderer(
         // Unused.
     }
 
-    override fun playEncodedAudio(audioData: ByteArray, length: Int) {
-        val t = track ?: return
-        if (stopped || length <= 0 || length > audioData.size || sampleFrameBytes <= 0 || length % sampleFrameBytes != 0) return
+    override fun playEncodedAudio(audioData: ByteArray, length: Int) = writes.frame {
+        val t = track ?: return@frame
+        if (writes.paused || stopped || length <= 0 || length > audioData.size || sampleFrameBytes <= 0 || length % sampleFrameBytes != 0) return@frame
         try {
-            val written = writeAudioFully(length, { !stopped && track === t }) { offset, remaining ->
+            val written = writeAudioFully(length, { !stopped && !writes.paused && track === t }) { offset, remaining ->
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                     t.write(audioData, offset, remaining, AudioTrack.WRITE_BLOCKING)
                 } else {
@@ -158,7 +166,7 @@ class PcmPassthroughRenderer(
                     t.write(audioData, offset, remaining)
                 }
             }
-            if (written != length && !stopped) LimeLog.warning("PcmPassthroughRenderer: accepted $written/$length bytes")
+            if (written != length && !stopped && !writes.paused) LimeLog.warning("PcmPassthroughRenderer: accepted $written/$length bytes")
         } catch (e: Exception) {
             LimeLog.warning("PcmPassthroughRenderer.write failed: ${e.message}")
         }
@@ -168,6 +176,7 @@ class PcmPassthroughRenderer(
         stopped = true
         try {
             systemAudioHaptics.close()
+            pauseProcessing()
             track?.stop()
             track?.release()
         } catch (_: Exception) {}

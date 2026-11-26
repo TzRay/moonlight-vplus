@@ -16,6 +16,29 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class NvHttpBitrateTimeoutTest {
+    @Test(timeout = 10000) fun feedbackWireDistinguishesIdleFromLegacyZeroLoss() {
+        withHost { host ->
+            val http = host.client()
+            host.warmUp(http)
+            val idle = AbrPacketSample(0, 0, 1, 2, false, true)
+            for (packets in listOf(idle, null)) {
+                host.https.enqueue(MockResponse.Builder().body("{}").build())
+                http.reportNetworkFeedback(NetworkFeedback(0f, 9, 2f, 1, 20000, packets))
+                val request = host.https.takeRequest(1, TimeUnit.SECONDS)!!
+                assertEquals("/api/abr/feedback", request.url.encodedPath)
+                val body = org.json.JSONObject(request.body!!.utf8())
+                assertEquals(packets == null, body.has("packetLoss"))
+                assertEquals(packets != null, body.has("packetSample"))
+                assertEquals(1, body.getInt("droppedFrames"))
+                if (packets != null) {
+                    val sample = body.getJSONObject("packetSample")
+                    assertEquals(1L, sample.getLong("coverageGaps"))
+                    assertEquals(false, sample.getBoolean("trusted"))
+                }
+            }
+        }
+    }
+
     @Test(timeout = 10_000)
     fun slowResponseIsBoundedAndNextAdjustmentSucceeds() {
         withHost { host ->

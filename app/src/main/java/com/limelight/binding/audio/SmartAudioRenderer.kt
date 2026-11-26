@@ -26,6 +26,23 @@ class SmartAudioRenderer(
 ) : AudioRenderer, MatCarrierConsumer {
 
     @Volatile private var delegate: AudioRenderer? = null
+    private var backgroundPaused = false
+    private var stopped = false
+
+    @Synchronized private fun install(output: AudioRenderer) {
+        stopped = false
+        if (backgroundPaused) pauseOutput(output)
+        delegate = output
+    }
+
+    private fun pauseOutput(output: AudioRenderer?) {
+        when (output) {
+            is AndroidAudioRenderer -> output.pauseProcessing()
+            is PcmPassthroughRenderer -> output.pauseProcessing()
+            is Ac3PassthroughRenderer -> output.pauseProcessing()
+            is Ac3Iec61937Renderer -> output.pauseProcessing()
+        }
+    }
 
     override fun setup(
         audioConfiguration: MoonBridge.AudioConfiguration,
@@ -38,7 +55,7 @@ class SmartAudioRenderer(
         if (codec == MoonBridge.AUDIO_CODEC_MAT_LIVE) {
             val mat = MatPassthroughRenderer(context)
             val result = mat.setup(audioConfiguration, sampleRate, samplesPerFrame, codec, bitrate)
-            if (result == 0) delegate = mat else mat.cleanup()
+            if (result == 0) install(mat) else mat.cleanup()
             return result
         }
         // Route by negotiated codec:
@@ -59,7 +76,7 @@ class SmartAudioRenderer(
             val res = pcmThru.setup(audioConfiguration, sampleRate, samplesPerFrame, codec, bitrate)
             if (res == 0) {
                 LimeLog.info("SmartAudioRenderer: using PcmPassthroughRenderer")
-                delegate = pcmThru
+                install(pcmThru)
                 return 0
             }
             LimeLog.warning("SmartAudioRenderer: PcmPassthroughRenderer setup failed ($res)")
@@ -71,14 +88,14 @@ class SmartAudioRenderer(
             if (useAc3Iec61937 && codec == MoonBridge.AUDIO_CODEC_AC3) {
                 val iec = Ac3Iec61937Renderer(passthroughBufferBytes)
                 val res = iec.setup(audioConfiguration, sampleRate, samplesPerFrame, codec, bitrate)
-                if (res == 0) delegate = iec else iec.cleanup()
+                if (res == 0) install(iec) else iec.cleanup()
                 return res
             }
             val passthrough = Ac3PassthroughRenderer(context, passthroughBufferBytes)
             val res = passthrough.setup(audioConfiguration, sampleRate, samplesPerFrame, codec, bitrate)
             if (res == 0) {
                 LimeLog.info("SmartAudioRenderer: using Ac3PassthroughRenderer (codec=$codec)")
-                delegate = passthrough
+                install(passthrough)
                 return 0
             }
             LimeLog.warning("SmartAudioRenderer: Ac3PassthroughRenderer setup failed ($res); native side already negotiated $codec, no PCM fallback available")
@@ -96,7 +113,7 @@ class SmartAudioRenderer(
         )
         val res = pcm.setup(audioConfiguration, sampleRate, samplesPerFrame, codec, bitrate)
         if (res == 0) {
-            delegate = pcm
+            install(pcm)
         }
         return res
     }
@@ -105,7 +122,8 @@ class SmartAudioRenderer(
         delegate?.start()
     }
 
-    override fun stop() {
+    @Synchronized override fun stop() {
+        stopped = true
         onAudioPresentationClock(-1L, -1L, 0)
         delegate?.stop()
     }
@@ -124,20 +142,28 @@ class SmartAudioRenderer(
         (delegate as? MatCarrierConsumer)?.offerMatCycle(bytes, length, epoch, domain, index, pts48k) ?: false
     override fun endMatStream(cycles: Long): Boolean = (delegate as? MatCarrierConsumer)?.endMatStream(cycles) ?: false
 
-    override fun cleanup() {
+    @Synchronized override fun cleanup() {
         onAudioPresentationClock(-1L, -1L, 0)
         delegate?.cleanup()
         delegate = null
     }
 
-    /** Forwarded for [AndroidAudioRenderer.pauseProcessing] when active. */
-    fun pauseProcessing() {
-        (delegate as? AndroidAudioRenderer)?.pauseProcessing()
+    @Synchronized fun pauseProcessing() {
+        if (backgroundPaused) return
+        backgroundPaused = true
+        if (!stopped) pauseOutput(delegate)
     }
 
-    /** Forwarded for [AndroidAudioRenderer.resumeProcessing] when active. */
-    fun resumeProcessing() {
-        (delegate as? AndroidAudioRenderer)?.resumeProcessing()
+    @Synchronized fun resumeProcessing() {
+        if (!backgroundPaused) return
+        backgroundPaused = false
+        if (stopped) return
+        when (val output = delegate) {
+            is AndroidAudioRenderer -> output.resumeProcessing()
+            is PcmPassthroughRenderer -> output.resumeProcessing()
+            is Ac3PassthroughRenderer -> output.resumeProcessing()
+            is Ac3Iec61937Renderer -> output.resumeProcessing()
+        }
     }
 
     fun detachSystemAudioHaptics(): Boolean = when (val current = delegate) {

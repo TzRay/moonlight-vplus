@@ -24,6 +24,7 @@ class AndroidAudioRenderer(
     onAudioPresentationClock: (framePosition: Long, systemNanoTime: Long, sampleRate: Int) -> Unit = { _, _, _ -> }
 ) : AudioRenderer {
 
+    private val decodedWriter = Any()
     @Volatile private var track: AudioTrack? = null
     private var spatializer: Spatializer? = null
     private val audioTimestamp = AudioTimestamp()
@@ -253,8 +254,10 @@ class AndroidAudioRenderer(
 
                 systemAudioHaptics.detach()
                 currentTrack.pause()
-                currentTrack.flush()
-                currentTrack.release()
+                synchronized(decodedWriter) {
+                    currentTrack.flush()
+                    currentTrack.release()
+                }
             } catch (e: Exception) {
                 LimeLog.warning("Error releasing audio track: " + e.message)
             }
@@ -315,7 +318,11 @@ class AndroidAudioRenderer(
         isProcessingPaused = false
     }
 
-    override fun playDecodedAudio(audioData: ShortArray) {
+    override fun playDecodedAudio(audioData: ShortArray) = synchronized(decodedWriter) {
+        writeDecodedAudio(audioData)
+    }
+
+    private fun writeDecodedAudio(audioData: ShortArray) {
         val frameCount = if (savedChannelCount > 0) {
             audioData.size.toLong() / savedChannelCount
         } else {
