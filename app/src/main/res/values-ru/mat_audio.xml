@@ -2,4 +2,6 @@
 <resources>
     <string name="audio_codec_mat_live">MAT / Atmos (эксперимент, HDMI)</string>
     <string name="summary_audio_codec_mat_live">Требуются совместимый источник захвата MAT в Sunshine и аудиовыход HDMI. Если хост не предоставляет MAT, используется Opus; неподдерживаемое устройство вывода приведёт к ошибке подключения. Для применения переподключитесь. Эффекты и пространственная обработка не применяются.</string>
+    <string name="mat_host_encoder_missing">На хосте Sunshine отсутствует компонент захвата MAT.</string>
+    <string name="mat_host_encoder_incompatible">Звуковой движок хоста или версия Dolby Access несовместимы с этим компонентом захвата MAT.</string>
 </resources>

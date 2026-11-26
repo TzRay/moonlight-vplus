@@ -45,7 +45,7 @@ class AndroidAudioRenderer(
     private var savedSampleRate = 0
     private var savedSamplesPerFrame = 0
     private var savedChannelCount = 0
-    private var decodedStreamFramePosition = 0L
+    private val decodedStreamFramePosition = java.util.concurrent.atomic.AtomicLong()
     private val presentationClock = AudioPresentationClock(onAudioPresentationClock)
 
     private fun createAudioTrack(channelConfig: Int, sampleRate: Int, bufferSize: Int, lowLatency: Boolean): AudioTrack {
@@ -103,7 +103,7 @@ class AndroidAudioRenderer(
     ): Int {
         // AudioTrack frame positions restart from zero whenever the track is
         // rebuilt. Keep them in the native IR stream's cumulative time origin.
-        val trackStreamFrameOffset = decodedStreamFramePosition
+        val trackStreamFrameOffset = decodedStreamFramePosition.get()
         val channelConfig: Int
         val bytesPerFrame: Int
 
@@ -225,7 +225,7 @@ class AndroidAudioRenderer(
         this.savedSampleRate = sampleRate
         this.savedSamplesPerFrame = samplesPerFrame
         this.savedChannelCount = audioConfiguration.channelCount
-        decodedStreamFramePosition = 0L
+        decodedStreamFramePosition.set(0L)
 
         return initializeAudioTrackInternal(audioConfiguration, sampleRate, samplesPerFrame)
     }
@@ -322,13 +322,13 @@ class AndroidAudioRenderer(
             0L
         }
         if (isProcessingPaused) {
-            decodedStreamFramePosition += frameCount
+            decodedStreamFramePosition.addAndGet(frameCount)
             return // 丢弃数据
         }
 
         val currentTrack = track
         if (currentTrack == null) {
-            decodedStreamFramePosition += frameCount
+            decodedStreamFramePosition.addAndGet(frameCount)
             return
         }
 
@@ -356,7 +356,7 @@ class AndroidAudioRenderer(
                 savedSampleRate
             )
         }
-        decodedStreamFramePosition += frameCount
+        decodedStreamFramePosition.addAndGet(frameCount)
     }
 
     override fun start() {
