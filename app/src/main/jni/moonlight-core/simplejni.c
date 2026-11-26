@@ -275,6 +275,16 @@ Java_com_limelight_nvstream_jni_MoonBridge_notifyMatPlaybackFailure(JNIEnv *env,
     if (epoch > 0 && domain > 0) LiNotifyMatPlaybackFailure((uint64_t)epoch, (uint64_t)domain);
 }
 
+JNIEXPORT jlong JNICALL
+Java_com_limelight_nvstream_jni_MoonBridge_getMatBackgroundSession(JNIEnv *env, jclass clazz) {
+    return (jlong)LiGetMatBackgroundSession();
+}
+
+JNIEXPORT void JNICALL
+Java_com_limelight_nvstream_jni_MoonBridge_setMatBackgroundPaused(JNIEnv *env, jclass clazz, jlong session, jboolean paused) {
+    LiSetMatBackgroundPaused((uint64_t)session, paused == JNI_TRUE);
+}
+
 JNIEXPORT void JNICALL
 Java_com_limelight_nvstream_jni_MoonBridge_interruptConnection(JNIEnv *env, jclass clazz) {
     LiInterruptConnection();

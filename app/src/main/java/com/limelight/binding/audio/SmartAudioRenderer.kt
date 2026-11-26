@@ -28,9 +28,12 @@ class SmartAudioRenderer(
     @Volatile private var delegate: AudioRenderer? = null
     private var backgroundPaused = false
     private var stopped = false
+    private var matSession = 0L
 
     @Synchronized private fun install(output: AudioRenderer) {
         stopped = false
+        matSession = if (output is MatPassthroughRenderer) MoonBridge.getMatBackgroundSession() else 0L
+        if (backgroundPaused && matSession != 0L) MoonBridge.setMatBackgroundPaused(matSession, true)
         if (backgroundPaused) pauseOutput(output)
         delegate = output
     }
@@ -151,12 +154,16 @@ class SmartAudioRenderer(
     @Synchronized fun pauseProcessing() {
         if (backgroundPaused) return
         backgroundPaused = true
+        if (matSession != 0L) MoonBridge.setMatBackgroundPaused(matSession, true)
         if (!stopped) pauseOutput(delegate)
     }
 
     @Synchronized fun resumeProcessing() {
         if (!backgroundPaused) return
         backgroundPaused = false
+        // The MAT worker may already have closed its suspended renderer.
+        // The common library matches the original connection epoch on resume.
+        if (matSession != 0L) MoonBridge.setMatBackgroundPaused(matSession, false)
         if (stopped) return
         when (val output = delegate) {
             is AndroidAudioRenderer -> output.resumeProcessing()
