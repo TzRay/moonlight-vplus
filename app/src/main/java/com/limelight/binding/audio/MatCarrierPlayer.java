@@ -1,6 +1,7 @@
 package com.limelight.binding.audio;
 
 import java.security.MessageDigest;
+import java.util.function.BooleanSupplier;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -16,6 +17,7 @@ public final class MatCarrierPlayer implements MatCarrierConsumer, AutoCloseable
     public interface Sink extends AutoCloseable {
         /** Open a paused track. Must not wait for input, which arrives after setup returns. */
         void prepare() throws Exception;
+        default void prepare(BooleanSupplier cancelled) throws Exception { prepare(); }
         default String preparationDetail() { return ""; }
         /** Carrier frames needed before play, or zero to prime until a short write. */
         default long startThresholdFrames() { return 0; }
@@ -25,6 +27,9 @@ public final class MatCarrierPlayer implements MatCarrierConsumer, AutoCloseable
         /** Carrier frames since this track was opened; implementation handles 32-bit wrap. */
         long playedFrames() throws Exception;
         void close() throws Exception;
+    }
+    public static final class CleanupPending extends IllegalStateException {
+        CleanupPending() { super("MAT writer did not stop"); }
     }
     public enum State { NEW, RUNNING, DRAINING, COMPLETED, FAILED, STOPPED }
     private static final class Slot {
@@ -36,6 +41,7 @@ public final class MatCarrierPlayer implements MatCarrierConsumer, AutoCloseable
         }
     }
     private final Sink sink;
+    private final BooleanSupplier cancelled;
     private final boolean verifyWrites;
     private final ArrayBlockingQueue<Slot> pending, free;
     private final long stallNanos, drainNanos;
@@ -43,7 +49,8 @@ public final class MatCarrierPlayer implements MatCarrierConsumer, AutoCloseable
     private final CountDownLatch ready = new CountDownLatch(1);
     private final Thread writer;
     private volatile State state = State.NEW;
-    private volatile String error = "", submittedSha256 = "";
+    private volatile String error = "", closeError = "", submittedSha256 = "";
+    private volatile boolean drained;
     private volatile long receivedCycles, writtenCycles, submittedBytes;
     private volatile int peakQueue;
     private volatile long maxCopyNanos, maxEnqueueNanos;
@@ -72,14 +79,18 @@ public final class MatCarrierPlayer implements MatCarrierConsumer, AutoCloseable
     private long epoch, domain;
 
     public MatCarrierPlayer(Sink sink) { this(sink, false); }
-    MatCarrierPlayer(Sink sink, boolean verifyWrites) { this(sink, OUTPUT_QUEUE_CYCLES, 1000, 3000, verifyWrites); }
-    public MatCarrierPlayer(Sink sink, int capacity, long stallMs, long drainMs) {
-        this(sink, capacity, stallMs, drainMs, false);
+    MatCarrierPlayer(Sink sink, boolean verifyWrites) { this(sink, verifyWrites, () -> false); }
+    MatCarrierPlayer(Sink sink, boolean verifyWrites, BooleanSupplier cancelled) {
+        this(sink, OUTPUT_QUEUE_CYCLES, 1000, 3000, verifyWrites, cancelled);
     }
-    private MatCarrierPlayer(Sink sink, int capacity, long stallMs, long drainMs, boolean verifyWrites) {
+    public MatCarrierPlayer(Sink sink, int capacity, long stallMs, long drainMs) {
+        this(sink, capacity, stallMs, drainMs, false, () -> false);
+    }
+    private MatCarrierPlayer(Sink sink, int capacity, long stallMs, long drainMs, boolean verifyWrites, BooleanSupplier cancelled) {
         if (sink == null || capacity < 1 || capacity > OUTPUT_QUEUE_CYCLES || stallMs < 1 || drainMs < 1)
             throw new IllegalArgumentException("Invalid MAT output bounds");
         this.sink = sink;
+        this.cancelled = cancelled;
         this.verifyWrites = verifyWrites;
         pending = new ArrayBlockingQueue<>(capacity);
         free = new ArrayBlockingQueue<>(capacity + 2);
@@ -105,47 +116,48 @@ public final class MatCarrierPlayer implements MatCarrierConsumer, AutoCloseable
         if (!validCarrier(b, 0, length) || e <= 0 || d <= 0 || index != receivedCycles ||
                 index >= Long.MAX_VALUE / 960 || pts48k != index * 960 ||
                 (receivedCycles != 0 && (e != epoch || d != domain))) return fail("Invalid MAT cycle metadata");
-        Slot slot = free.poll();
-        if (slot == null) return fail("MAT buffer pool exhausted");
-        long copyStart = System.nanoTime();
-        if (verifyWrites) System.arraycopy(b, 0, slot.diagnosticBytes, 0, CYCLE_BYTES);
-        // Lossless little-endian reinterpretation, NOT another IEC byte swap.
-        for (int i = 0; i < slot.words.length; i++)
-            slot.words[i] = (short) ((b[2 * i] & 255) | ((b[2 * i + 1] & 255) << 8));
-        boolean queued;
         long enqueueStart = System.nanoTime();
-        maxCopyNanos = Math.max(maxCopyNanos, enqueueStart - copyStart);
-        try {
-            if (receivedCycles == 0) firstPayloadNanos = System.nanoTime();
-            // The native decoder is separate from UDP reception. Let the device
-            // drain a short arrival burst without dropping an encoded cycle.
-            queued = pending.offer(slot, 100, TimeUnit.MILLISECONDS);
-        } catch (InterruptedException interrupted) {
-            free.add(slot);
-            Thread.currentThread().interrupt();
-            return fail("MAT enqueue interrupted");
+        long until = enqueueStart + TimeUnit.MILLISECONDS.toNanos(100);
+        while (pending.remainingCapacity() == 0 && state == State.RUNNING) {
+            long remaining = until - System.nanoTime();
+            if (remaining <= 0) return fail("MAT output queue overflow");
+            try { TimeUnit.NANOSECONDS.timedWait(this, remaining); }
+            catch (InterruptedException e1) {
+                Thread.currentThread().interrupt();
+                return fail("MAT enqueue interrupted");
+            }
         }
         maxEnqueueNanos = Math.max(maxEnqueueNanos, System.nanoTime() - enqueueStart);
-        if (!queued) {
-            free.add(slot);
-            return fail("MAT output queue overflow");
-        }
+        if (state != State.RUNNING) return false;
+        if (index != receivedCycles || (index != 0 && (e != epoch || d != domain)))
+            return fail("Invalid MAT cycle metadata");
+        Slot slot = free.remove();
+        long copyStart = System.nanoTime();
+        if (verifyWrites) System.arraycopy(b, 0, slot.diagnosticBytes, 0, CYCLE_BYTES);
+        for (int i = 0; i < slot.words.length; i++)
+            slot.words[i] = (short) ((b[2 * i] & 255) | ((b[2 * i + 1] & 255) << 8));
+        maxCopyNanos = Math.max(maxCopyNanos, System.nanoTime() - copyStart);
+        if (receivedCycles == 0) firstPayloadNanos = copyStart;
+        pending.add(slot);
         epoch = e; domain = d; receivedCycles++;
         peakQueue = Math.max(peakQueue, pending.size());
         return true;
     }
     @Override public synchronized boolean endMatStream(long cycles) {
-        if (state != State.RUNNING || cycles == 0 || cycles != receivedCycles) return fail("Invalid MAT EOS");
-        state = State.DRAINING; return true;
+        if (state != State.RUNNING) return false;
+        if (cycles == 0 || cycles != receivedCycles) return fail("Invalid MAT EOS");
+        state = State.DRAINING; notifyAll(); return true;
     }
     private synchronized boolean fail(String message) {
         if (state != State.FAILED && state != State.STOPPED) { error = message; state = State.FAILED; }
+        notifyAll();
+        ready.countDown();
         if (Thread.currentThread() != writer) writer.interrupt();
         return false;
     }
     private boolean active() { return state == State.RUNNING || state == State.DRAINING; }
     private void beginPlayback() throws Exception {
-        if (playNanos != 0) return;
+        if (!active() || cancelled.getAsBoolean() || playNanos != 0) return;
         primedFrames = submittedBytes / 16;
         sink.play();
         playNanos = System.nanoTime();
@@ -169,19 +181,19 @@ public final class MatCarrierPlayer implements MatCarrierConsumer, AutoCloseable
         MessageDigest digest = null;
         try {
             if (verifyWrites) digest = MessageDigest.getInstance("SHA-256");
-            sink.prepare();
+            sink.prepare(() -> !active() || cancelled.getAsBoolean());
+            if (!active() || cancelled.getAsBoolean()) return;
             long startThresholdFrames = sink.startThresholdFrames();
+            if (!active() || cancelled.getAsBoolean()) return;
             ready.countDown();
             while (active()) {
                 Slot slot = pending.poll(10, TimeUnit.MILLISECONDS);
                 if (slot == null) {
-                    // The volatile DRAINING publication follows every accepted
-                    // enqueue. Do not take offer's monitor here: a producer may
-                    // hold it while waiting for this writer to free queue space.
                     if (state == State.DRAINING && pending.isEmpty()) break;
                     checkPlayhead(System.nanoTime());
                     continue;
                 }
+                synchronized (this) { notifyAll(); }
                 try {
                     int offset = 0;
                     long lastWrite = System.nanoTime();
@@ -225,7 +237,7 @@ public final class MatCarrierPlayer implements MatCarrierConsumer, AutoCloseable
                 synchronized (this) {
                     if (state == State.DRAINING) {
                         if (writtenCycles != receivedCycles) throw new IllegalStateException("MAT EOS lost cycles");
-                        state = State.COMPLETED;
+                        drained = true;
                     }
                 }
             }
@@ -235,8 +247,22 @@ public final class MatCarrierPlayer implements MatCarrierConsumer, AutoCloseable
         } catch (Exception e) { fail(e.toString()); }
         finally {
             if (digest != null) submittedSha256 = hex(digest.digest());
-            try { sink.close(); } catch (Exception e) { fail("IEC close failed: " + e); }
-            pending.clear(); ready.countDown(); done.countDown();
+            try { sink.close(); }
+            catch (Exception e) {
+                StringBuilder detail = new StringBuilder(e.toString());
+                for (Throwable secondary : e.getSuppressed()) detail.append("; ").append(secondary);
+                closeError = detail.toString();
+                synchronized (this) {
+                    if (error.isEmpty()) error = "IEC close failed: " + closeError;
+                    state = State.FAILED;
+                }
+            }
+            synchronized (this) {
+                pending.drainTo(free);
+                if (drained && state == State.DRAINING) state = State.COMPLETED;
+                notifyAll();
+                ready.countDown(); done.countDown();
+            }
         }
     }
     public static String hex(byte[] b) {
@@ -248,9 +274,12 @@ public final class MatCarrierPlayer implements MatCarrierConsumer, AutoCloseable
         return done.await(timeoutMs, TimeUnit.MILLISECONDS) && state == State.COMPLETED;
     }
     public boolean awaitReady(long timeoutMs) throws InterruptedException {
-        return ready.await(timeoutMs, TimeUnit.MILLISECONDS) && active();
+        return ready.await(timeoutMs, TimeUnit.MILLISECONDS) && active() && !cancelled.getAsBoolean();
     }
     public State state() { return state; }
+    public boolean drained() { return drained; }
+    public String closeError() { return closeError; }
+    boolean writerAlive() { return writer.isAlive(); }
     public String error() { return error; }
     public String submittedSha256() { return submittedSha256; }
     public long maxCopyUs() { return TimeUnit.NANOSECONDS.toMicros(maxCopyNanos); }
@@ -272,6 +301,8 @@ public final class MatCarrierPlayer implements MatCarrierConsumer, AutoCloseable
         synchronized (this) {
             if (state == State.NEW) { state = State.STOPPED; ready.countDown(); done.countDown(); return; }
             if (active()) state = State.STOPPED;
+            ready.countDown();
+            notifyAll();
         }
         writer.interrupt();
         // Connection cancellation can interrupt its owner. Still join/release the sink,
@@ -286,6 +317,6 @@ public final class MatCarrierPlayer implements MatCarrierConsumer, AutoCloseable
                 catch (InterruptedException e) { interrupted = true; }
             }
         } finally { if (interrupted) Thread.currentThread().interrupt(); }
-        if (writer.isAlive()) throw new IllegalStateException("MAT writer did not stop");
+        if (writer.isAlive()) throw new CleanupPending();
     }
 }

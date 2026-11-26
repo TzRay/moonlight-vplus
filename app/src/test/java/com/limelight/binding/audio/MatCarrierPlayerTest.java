@@ -43,6 +43,17 @@ public class MatCarrierPlayerTest {
         thread.interrupt();
         assertTrue(wait.get(1, TimeUnit.SECONDS));
     }
+    @Test(timeout = 3000) public void attachedDeviceReprobesCapabilitiesWithoutANewId() throws Exception {
+        MatHdmiDevices.Availability state = new MatHdmiDevices.Availability();
+        state.update(new int[]{17}, false);
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+        long revision = state.await(-1, deadline);
+        assertTrue(revision >= 0);
+        long began = System.nanoTime();
+        assertEquals(revision, state.await(revision, deadline));
+        assertTrue(System.nanoTime() - began >= TimeUnit.MILLISECONDS.toNanos(100));
+    }
+
     private static class Sink implements MatCarrierPlayer.Sink {
         final ByteArrayOutputStream accepted = new ByteArrayOutputStream();
         final CountDownLatch entered = new CountDownLatch(1);
@@ -321,6 +332,83 @@ public class MatCarrierPlayerTest {
             assertEquals(MatCarrierPlayer.State.FAILED, player.state());
         }
         assertTrue(sink.closed);
+    }
+
+    @Test(timeout = 5000) public void writerPublishesFirstFailureWhileProducerWaitsForSpace() throws Exception {
+        CountDownLatch failWrite = new CountDownLatch(1);
+        Sink sink = new Sink() {
+            @Override public int write(short[] bytes, int offset, int count) {
+                entered.countDown();
+                try { failWrite.await(); } catch (InterruptedException e) { throw new AssertionError(e); }
+                throw new IllegalStateException("device removed mid-write");
+            }
+            @Override public void close() { throw new IllegalStateException("release failed"); }
+        };
+        try (MatCarrierPlayer player = new MatCarrierPlayer(sink, 1, 1000, 1000)) {
+            player.start();
+            byte[] bytes = carrier(0);
+            assertTrue(offer(player, bytes, 0));
+            assertTrue(sink.entered.await(1, TimeUnit.SECONDS));
+            assertTrue(offer(player, bytes, 1));
+            java.util.concurrent.FutureTask<Boolean> pending = new java.util.concurrent.FutureTask<>(() -> offer(player, bytes, 2));
+            Thread producer = new Thread(pending);
+            producer.start();
+            while (producer.getState() != Thread.State.TIMED_WAITING && !pending.isDone()) Thread.yield();
+            failWrite.countDown();
+            assertFalse(pending.get(1, TimeUnit.SECONDS));
+            assertFalse(player.awaitCompletion(1000));
+            assertTrue(player.error(), player.error().contains("device removed mid-write"));
+            assertTrue(player.closeError().contains("release failed"));
+            assertFalse(player.drained());
+        } finally { failWrite.countDown(); }
+    }
+
+    @Test(timeout = 5000) public void drainedMediaWithFailedCloseCannotComplete() throws Exception {
+        Sink sink = new PrimingSink(1, true) {
+            @Override public void close() { throw new IllegalStateException("release failed"); }
+        };
+        try (MatCarrierPlayer player = new MatCarrierPlayer(sink)) {
+            player.start();
+            assertTrue(offer(player, carrier(0), 0));
+            assertTrue(player.endMatStream(1));
+            assertFalse(player.awaitCompletion(1000));
+            assertTrue(player.drained());
+            assertTrue(player.error().contains("release failed"));
+            assertEquals(MatCarrierPlayer.State.FAILED, player.state());
+        }
+    }
+
+    @Test(timeout = 6000) public void lateCancelledConstructorRetainsWriterOwnershipUntilRelease() throws Exception {
+        CountDownLatch preparing = new CountDownLatch(1), release = new CountDownLatch(1), closedLatch = new CountDownLatch(1);
+        java.util.concurrent.atomic.AtomicBoolean cancel = new java.util.concurrent.atomic.AtomicBoolean();
+        Sink old = new Sink() {
+            @Override public void prepare(java.util.function.BooleanSupplier cancelled) {
+                preparing.countDown();
+                for (;;) {
+                    try { release.await(); break; } catch (InterruptedException ignored) {}
+                }
+                if (!cancelled.getAsBoolean()) prepared = true; // Late open may only acquire focus while active.
+            }
+            @Override public void close() { super.close(); closedLatch.countDown(); }
+        };
+        java.util.concurrent.FutureTask<MatPlaybackSession> setup = new java.util.concurrent.FutureTask<>(
+                () -> new MatPlaybackSession(old, false, cancel::get));
+        new Thread(setup).start();
+        Sink next = new Sink();
+        try {
+            assertTrue(preparing.await(1, TimeUnit.SECONDS));
+            cancel.set(true);
+            try { setup.get(3, TimeUnit.SECONDS); fail(); }
+            catch (java.util.concurrent.ExecutionException e) {
+                assertTrue(e.getCause() instanceof MatCarrierPlayer.CleanupPending);
+                assertEquals(1, e.getCause().getSuppressed().length);
+            }
+            try { new MatPlaybackSession(next); fail(); }
+            catch (MatCarrierPlayer.CleanupPending expected) { assertFalse(next.prepared); }
+        } finally { release.countDown(); }
+        assertTrue(closedLatch.await(1, TimeUnit.SECONDS));
+        assertFalse(old.prepared);
+        assertEquals(0, old.playCalls);
     }
 
     @Test(timeout = 5000) public void idleWriterCanDrainWhileProducerHoldsTheEnqueueMonitor() throws Exception {

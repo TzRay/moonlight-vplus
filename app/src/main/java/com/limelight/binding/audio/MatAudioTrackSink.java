@@ -13,6 +13,7 @@ import androidx.annotation.RequiresApi;
 import com.limelight.LimeLog;
 import com.limelight.nvstream.jni.MoonBridge;
 import java.util.Arrays;
+import java.util.function.BooleanSupplier;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -37,7 +38,12 @@ public final class MatAudioTrackSink implements MatCarrierPlayer.Sink {
     private boolean timestampValid;
     private int previousUnderruns;
     private final AudioTimestamp timestamp = new AudioTimestamp();
-    private boolean closed;
+    private boolean closed, focusOwned, listenerAttached;
+    private BooleanSupplier cancelled = () -> false;
+    private void checkCancelled() throws InterruptedException {
+        if (cancelled.getAsBoolean() || Thread.currentThread().isInterrupted())
+            throw new InterruptedException("MAT HDMI preparation cancelled");
+    }
     private volatile String diagnostics = "not opened";
     public MatAudioTrackSink(Context context) { this.context = context.getApplicationContext(); }
     private static AudioAttributes attributes() {
@@ -49,7 +55,10 @@ public final class MatAudioTrackSink implements MatCarrierPlayer.Sink {
                 .setSampleRate(MatCarrierPlayer.RATE).setChannelMask(AudioFormat.CHANNEL_OUT_7POINT1_SURROUND).build();
     }
     @Override public String preparationDetail() { return diagnostics; }
-    @Override public void prepare() throws InterruptedException {
+    @Override public void prepare() throws InterruptedException { prepare(() -> false); }
+    @Override public void prepare(BooleanSupplier cancelled) throws InterruptedException {
+        this.cancelled = cancelled;
+        checkCancelled();
         if (closed || track != null) throw new IllegalStateException("MAT sink cannot be reused");
         MoonBridge.bridgeMatAudioThreadStart(2);
         AudioManager manager = (AudioManager)context.getSystemService(Context.AUDIO_SERVICE);
@@ -59,47 +68,59 @@ public final class MatAudioTrackSink implements MatCarrierPlayer.Sink {
         diagnostics = "waiting for Android HDMI output";
         int min, buffer, direct;
         try (MatHdmiDevices devices = new MatHdmiDevices(manager)) {
-            long revision = devices.availability.await(-1, deadline);
-            if (revision < 0) throw new IllegalStateException(diagnostics);
+            long revision = -1;
             for (;;) {
+                checkCancelled();
+                revision = devices.availability.await(revision, deadline);
+                if (revision < 0) throw new IllegalStateException(diagnostics);
                 min = AudioTrack.getMinBufferSize(MatCarrierPlayer.RATE,
                         AudioFormat.CHANNEL_OUT_7POINT1_SURROUND, AudioFormat.ENCODING_IEC61937);
-                if (min <= 0) throw new IllegalStateException("192kHz/7.1/IEC61937 unsupported: " + min);
+                if (min <= 0) {
+                    diagnostics = "192kHz/7.1/IEC61937 minimum buffer unavailable: " + min;
+                    continue;
+                }
                 direct = -1;
                 if (Build.VERSION.SDK_INT >= 33) {
                     direct = AudioManager.getDirectPlaybackSupport(format(), attributes());
-                    if ((direct & AudioManager.DIRECT_PLAYBACK_BITSTREAM_SUPPORTED) == 0)
-                        throw new IllegalStateException("Route does not advertise IEC bitstream playback: " + direct);
+                    if ((direct & AudioManager.DIRECT_PLAYBACK_BITSTREAM_SUPPORTED) == 0) {
+                        diagnostics = "Route does not advertise IEC bitstream playback: " + direct;
+                        continue;
+                    }
                 }
                 long cycles = Math.max(2L, (min + (long)MatCarrierPlayer.CYCLE_BYTES - 1) / MatCarrierPlayer.CYCLE_BYTES);
                 if (cycles > 16) throw new IllegalStateException("IEC minimum exceeds 320ms diagnostic limit");
                 buffer = (int)cycles * MatCarrierPlayer.CYCLE_BYTES;
                 diagnostics = "opening Android HDMI AudioTrack";
+                checkCancelled();
                 try {
                     track = new AudioTrack.Builder().setAudioAttributes(attributes()).setAudioFormat(format())
                             .setTransferMode(AudioTrack.MODE_STREAM).setBufferSizeInBytes(buffer).build();
-                    break;
-                } catch (UnsupportedOperationException e) {
-                    diagnostics = "IEC AudioTrack open failed: " + e + "; waiting for HDMI device change";
-                    LimeLog.warning(diagnostics);
-                    // An actual topology change can make a cold-open failure recoverable.
-                    // Unchanged capabilities do not justify opening the same track repeatedly.
-                    revision = devices.availability.await(revision, deadline);
-                    if (revision < 0) throw new IllegalStateException(diagnostics, e);
+                } catch (UnsupportedOperationException | IllegalStateException e) {
+                    diagnostics = "IEC AudioTrack open failed: " + e;
+                    continue;
                 }
+                checkCancelled();
+                if (track.getState() == AudioTrack.STATE_INITIALIZED) break;
+                diagnostics = "IEC track not initialized";
+                track.release();
+                track = null;
             }
         }
         long openUs = (System.nanoTime() - openStart) / 1000;
-        if (track.getState() != AudioTrack.STATE_INITIALIZED) throw new IllegalStateException("IEC track not initialized");
+        checkCancelled();
         track.addOnRoutingChangedListener(routingListener, null);
+        listenerAttached = true;
         track.pause(); track.flush();
         wraps = previousLow = 0;
         // Encoded audio must stop on focus loss instead of ducking the bitstream.
         long focusStart = System.nanoTime();
         focusLost = false;
+        checkCancelled();
         if (manager.requestAudioFocus(focusListener, AudioManager.STREAM_MUSIC,
                 AudioManager.AUDIOFOCUS_GAIN_TRANSIENT) != AudioManager.AUDIOFOCUS_REQUEST_GRANTED)
             throw new IllegalStateException("MAT audio focus denied");
+        focusOwned = true;
+        checkCancelled();
         long focusUs = (System.nanoTime() - focusStart) / 1000;
         // IEC61937 has proportional 16-bit carrier frames, unlike AC3's byte units.
         // Older platforms expose capacity but not an explicit start threshold.
@@ -116,10 +137,11 @@ public final class MatAudioTrackSink implements MatCarrierPlayer.Sink {
         LimeLog.info("MAT IEC track initialized: " + diagnostics);
     }
     @Override public long startThresholdFrames() { return startThresholdFrames; }
-    @Override public void play() {
+    @Override public void play() throws InterruptedException {
         if (closed || track == null || playTime != 0) throw new IllegalStateException("Invalid MAT play transition");
         checkRoute();
         long playCallStart = System.nanoTime();
+        checkCancelled();
         track.play();
         playTime = System.nanoTime();
         LimeLog.info("MAT IEC play: primedCarrierFrames=" + submittedFrames +
@@ -241,21 +263,38 @@ public final class MatAudioTrackSink implements MatCarrierPlayer.Sink {
         return played;
     }
     public String diagnostics() { return diagnostics; }
-    @Override public void close() {
-        closed = true;
-        try {
-            if (track != null) {
-                try {
-                    track.removeOnRoutingChangedListener(routingListener);
-                    logProgress("closing"); track.pause(); track.flush();
-                } finally {
-                    timestampValid = false;
-                    try { track.release(); } finally { track = null; }
-                }
-            }
-        } finally {
-            AudioManager manager = (AudioManager)context.getSystemService(Context.AUDIO_SERVICE);
-            if (manager != null) manager.abandonAudioFocus(focusListener);
+    private static RuntimeException attempt(RuntimeException first, Runnable action) {
+        try { action.run(); }
+        catch (RuntimeException failure) {
+            if (first == null) return failure;
+            first.addSuppressed(failure);
         }
+        return first;
+    }
+    @Override public void close() {
+        if (closed) return;
+        closed = true;
+        RuntimeException first = null;
+        if (track != null) {
+            if (listenerAttached) first = attempt(first, () -> track.removeOnRoutingChangedListener(routingListener));
+            first = attempt(first, () -> logProgress("closing"));
+            first = attempt(first, () -> {
+                if (track.getState() == AudioTrack.STATE_INITIALIZED) track.pause();
+            });
+            first = attempt(first, () -> {
+                if (track.getState() == AudioTrack.STATE_INITIALIZED) track.flush();
+            });
+            first = attempt(first, track::release);
+            track = null;
+            timestampValid = false;
+        }
+        if (focusOwned) {
+            focusOwned = false;
+            first = attempt(first, () -> {
+                AudioManager manager = (AudioManager)context.getSystemService(Context.AUDIO_SERVICE);
+                manager.abandonAudioFocus(focusListener);
+            });
+        }
+        if (first != null) throw first;
     }
 }
