@@ -1,5 +1,8 @@
 package com.limelight.binding.audio;
 
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.nio.ShortBuffer;
 import java.security.MessageDigest;
 import java.util.function.BooleanSupplier;
 import java.util.concurrent.ArrayBlockingQueue;
@@ -41,6 +44,8 @@ public final class MatCarrierPlayer implements MatCarrierConsumer, AutoCloseable
         }
     }
     private final Sink sink;
+    private final byte[] carrierCopy = new byte[CYCLE_BYTES];
+    private final ShortBuffer carrierWords = ByteBuffer.wrap(carrierCopy).order(ByteOrder.LITTLE_ENDIAN).asShortBuffer();
     private final BooleanSupplier cancelled;
     private final boolean verifyWrites;
     private final ArrayBlockingQueue<Slot> pending, free;
@@ -134,8 +139,10 @@ public final class MatCarrierPlayer implements MatCarrierConsumer, AutoCloseable
         Slot slot = free.remove();
         long copyStart = System.nanoTime();
         if (verifyWrites) System.arraycopy(b, 0, slot.diagnosticBytes, 0, CYCLE_BYTES);
-        for (int i = 0; i < slot.words.length; i++)
-            slot.words[i] = (short) ((b[2 * i] & 255) | ((b[2 * i + 1] & 255) << 8));
+        // The callback borrows b only until it returns. Reuse our own little-endian view.
+        System.arraycopy(b, 0, carrierCopy, 0, CYCLE_BYTES);
+        carrierWords.position(0);
+        carrierWords.get(slot.words);
         maxCopyNanos = Math.max(maxCopyNanos, System.nanoTime() - copyStart);
         if (receivedCycles == 0) firstPayloadNanos = copyStart;
         pending.add(slot);
