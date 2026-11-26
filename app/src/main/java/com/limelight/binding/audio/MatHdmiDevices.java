@@ -31,11 +31,17 @@ final class MatHdmiDevices implements AutoCloseable {
         }
 
         synchronized long await(long previous, long deadline) throws InterruptedException {
+            // Android can update the direct profile without changing the device ID.
+            long nextProbe = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(200);
             for (;;) {
                 if (Thread.interrupted()) throw new InterruptedException("HDMI wait cancelled");
                 long remaining = deadline - System.nanoTime();
                 if (remaining <= 0) return -1;
-                if (devices.length != 0 && previous != revision) return revision;
+                if (devices.length != 0) {
+                    long untilProbe = nextProbe - System.nanoTime();
+                    if (previous != revision || untilProbe <= 0) return revision;
+                    remaining = Math.min(remaining, untilProbe);
+                }
                 TimeUnit.NANOSECONDS.timedWait(this, remaining);
             }
         }

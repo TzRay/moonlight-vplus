@@ -356,6 +356,11 @@ public class MoonBridge {
                 hostLatency, receiveTimeUs, enqueueTimeUs, presentationTimeUs, metadata);
     }
 
+    public static java.util.function.BooleanSupplier matPreparationCancellation() {
+        java.util.function.BooleanSupplier cancelled = connectionCancelled;
+        return cancelled != null ? cancelled : () -> false;
+    }
+
     public static int bridgeArInit(int audioConfiguration, int sampleRate, int samplesPerFrame, int codec, int bitrate) {
         if (audioRenderer != null) {
             return audioRenderer.setup(new AudioConfiguration(audioConfiguration), sampleRate, samplesPerFrame, codec, bitrate);
