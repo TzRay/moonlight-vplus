@@ -31,6 +31,7 @@ import com.limelight.LimeLog
 import com.limelight.R
 import com.limelight.nvstream.av.audio.AudioRenderer
 import com.limelight.nvstream.av.video.VideoDecoderRenderer
+import com.limelight.nvstream.http.AdaptiveBitrateService
 import com.limelight.nvstream.http.ComputerDetails
 import com.limelight.nvstream.http.HostHttpResponseException
 import com.limelight.nvstream.http.LimelightCryptoProvider
@@ -113,6 +114,11 @@ open class NvConnection(
         // Activity teardown and disconnect-and-quit can both stop this connection.
         // A second stop must not interrupt a newer native session or release its slot.
         requestStop()
+        synchronized(bitrateExecutor) {
+            bitrateController?.stop()
+            bitrateController = null
+            bitrateExecutor.shutdown()
+        }
 
         // Claim this attempt's slot before touching the process-wide native connection.
         // Startup failure and stop must never both release it.
@@ -817,60 +823,87 @@ open class NvConnection(
         }.start()
     }
 
-    @Volatile internal var manualBitrateOverride: ((Int, (Boolean) -> Unit) -> Boolean)? = null
+    // Feedback, a previous controller's final restore, and manual writes all
+    // address the same host session, including while ABR is being toggled.
+    internal val bitrateExecutor = java.util.concurrent.Executors.newSingleThreadScheduledExecutor { work ->
+        Thread(work, "SessionBitrate").apply { isDaemon = true }
+    }
+    @Volatile internal var bitrateController: AdaptiveBitrateService? = null
+        private set
+
+    internal fun startBitrateController(service: AdaptiveBitrateService, initialBitrate: Int, mode: String): Boolean =
+        synchronized(bitrateExecutor) {
+            if (stopped) return false
+            service.start(initialBitrate, mode)
+            bitrateController = service
+            true
+        }
+
+    internal fun stopBitrateController() = synchronized(bitrateExecutor) {
+        bitrateController?.stop()
+        bitrateController = null
+    }
 
     @Throws(IOException::class, XmlPullParserException::class)
     fun setBitrate(bitrateKbps: Int, callback: BitrateAdjustmentCallback?) {
-        if (manualBitrateOverride?.invoke(bitrateKbps) { ok ->
-                if (ok) callback?.onSuccess(bitrateKbps)
-                else callback?.onFailure(appContext.getString(R.string.connection_server_failed))
-            } == true) return
-        Thread {
-            val h: NvHTTP
-            try {
-                h = NvHTTP(context.serverAddress, context.httpsPort, uniqueId, clientName, context.serverCert, cryptoProvider)
-                LimeLog.info("NvHTTP created successfully for bitrate adjustment")
-            } catch (e: IOException) {
-                LimeLog.warning("Failed to create NvHTTP for bitrate adjustment: ${e.message}")
-                callback?.onFailure(appContext.getString(R.string.connection_http_failed, e.message.orEmpty()))
-                return@Thread
+        synchronized(bitrateExecutor) {
+            if (stopped) {
+                callback?.onFailure(appContext.getString(R.string.connection_operation_interrupted))
+                return
             }
-            // The catch blocks cover only the bitrate operation; callbacks run after it
-            // settles so a throwing callback is not re-reported as a second failure.
-            val failureMessage = try {
-                LimeLog.info("Sending bitrate adjustment request...")
-                if (h.setBitrate(bitrateKbps)) {
-                    context.streamConfig.bitrate = bitrateKbps
-                    LimeLog.info("Bitrate adjustment successful, updated local config to $bitrateKbps kbps")
-                    null
-                } else {
-                    LimeLog.warning("Bitrate adjustment request failed (server returned false)")
-                    appContext.getString(R.string.connection_server_failed)
-                }
-            } catch (e: InterruptedException) {
-                Thread.currentThread().interrupt()
-                LimeLog.warning("Bitrate adjustment interrupted: ${e.message}")
-                appContext.getString(R.string.connection_operation_interrupted)
-            } catch (e: IOException) {
-                LimeLog.warning("Failed to set bitrate: ${e.message}")
-                e.printStackTrace()
-                appContext.getString(R.string.connection_network_error, e.message.orEmpty())
-            } catch (e: XmlPullParserException) {
-                LimeLog.warning("Failed to set bitrate: ${e.message}")
-                e.printStackTrace()
-                appContext.getString(R.string.connection_network_error, e.message.orEmpty())
-            } catch (e: Exception) {
-                // A failed background bitrate adjustment must never kill the process.
-                LimeLog.warning("Unexpected error during bitrate adjustment: ${e.message}")
-                e.printStackTrace()
-                appContext.getString(R.string.connection_network_error, e.message.orEmpty())
-            }
-            if (failureMessage != null) {
-                callback?.onFailure(failureMessage)
+            if (bitrateController?.setManualBitrate(bitrateKbps) { ok ->
+                    if (ok) callback?.onSuccess(bitrateKbps)
+                    else callback?.onFailure(appContext.getString(R.string.connection_server_failed))
+                } == true) return
+            bitrateExecutor.execute { adjustBitrateOverHttp(bitrateKbps, callback) }
+        }
+    }
+
+    private fun adjustBitrateOverHttp(bitrateKbps: Int, callback: BitrateAdjustmentCallback?) {
+        val h: NvHTTP
+        try {
+            h = NvHTTP(context.serverAddress, context.httpsPort, uniqueId, clientName, context.serverCert, cryptoProvider)
+            LimeLog.info("NvHTTP created successfully for bitrate adjustment")
+        } catch (e: IOException) {
+            LimeLog.warning("Failed to create NvHTTP for bitrate adjustment: ${e.message}")
+            callback?.onFailure(appContext.getString(R.string.connection_http_failed, e.message.orEmpty()))
+            return
+        }
+        // The catch blocks cover only the bitrate operation; callbacks run after it
+        // settles so a throwing callback is not re-reported as a second failure.
+        val failureMessage = try {
+            LimeLog.info("Sending bitrate adjustment request...")
+            if (h.setBitrate(bitrateKbps)) {
+                context.streamConfig.bitrate = bitrateKbps
+                LimeLog.info("Bitrate adjustment successful, updated local config to $bitrateKbps kbps")
+                null
             } else {
-                callback?.onSuccess(bitrateKbps)
+                LimeLog.warning("Bitrate adjustment request failed (server returned false)")
+                appContext.getString(R.string.connection_server_failed)
             }
-        }.start()
+        } catch (e: InterruptedException) {
+            Thread.currentThread().interrupt()
+            LimeLog.warning("Bitrate adjustment interrupted: ${e.message}")
+            appContext.getString(R.string.connection_operation_interrupted)
+        } catch (e: IOException) {
+            LimeLog.warning("Failed to set bitrate: ${e.message}")
+            e.printStackTrace()
+            appContext.getString(R.string.connection_network_error, e.message.orEmpty())
+        } catch (e: XmlPullParserException) {
+            LimeLog.warning("Failed to set bitrate: ${e.message}")
+            e.printStackTrace()
+            appContext.getString(R.string.connection_network_error, e.message.orEmpty())
+        } catch (e: Exception) {
+            // A failed background bitrate adjustment must never kill the process.
+            LimeLog.warning("Unexpected error during bitrate adjustment: ${e.message}")
+            e.printStackTrace()
+            appContext.getString(R.string.connection_network_error, e.message.orEmpty())
+        }
+        if (failureMessage != null) {
+            callback?.onFailure(failureMessage)
+        } else {
+            callback?.onSuccess(bitrateKbps)
+        }
     }
 
     interface BitrateAdjustmentCallback {

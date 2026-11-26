@@ -83,6 +83,101 @@ class AdaptiveBitrateControlTest {
         }
     }
 
+    @Test fun legacyHostGetsNoUnknownLossReportButVisibleDamageCanStillLowerTheRate() {
+        Replay(1).use { r ->
+            r.tick(4, 1)
+            r.tick(4, 2, dropped = 1)
+            r.tick(4, 2, dropped = 1)
+            assertTrue(r.host.reports.isEmpty())
+            assertEquals(listOf(18000), r.host.writes)
+            r.tick(100, 0)
+            assertEquals(18000, r.host.reports.single().currentBitrate)
+        }
+    }
+
+    @Test fun legacyHostAdjustmentAlreadyAppliedAtReplyCannotWinOverQueuedManualSelection() {
+        Replay(1).use { r ->
+            val entered = CountDownLatch(1)
+            val release = CountDownLatch(1)
+            r.host.respond = {
+                entered.countDown()
+                assertTrue(release.await(5, TimeUnit.SECONDS))
+                r.host.setBitrate(14000) // Legacy host changes the encoder before replying.
+                AbrAction(14000, "legacy loss")
+            }
+            r.sample(100, 10)
+            r.worker.execute { r.service.tick() }
+            assertTrue(entered.await(5, TimeUnit.SECONDS))
+            r.service.setSuspended(true)
+            assertTrue(r.service.setManualBitrate(35000) { assertTrue(it) })
+            release.countDown()
+            r.drain()
+            assertEquals(listOf(14000, 20000, 35000), r.host.writes)
+            assertEquals(35000, r.service.currentBitrate)
+        }
+    }
+
+    @Test fun lostLegacyReplyDuringSuspensionRestoresPreviousForegroundRate() {
+        Replay(1).use { r ->
+            val entered = CountDownLatch(1)
+            val release = CountDownLatch(1)
+            r.host.respond = {
+                r.host.setBitrate(14000)
+                entered.countDown()
+                assertTrue(release.await(5, TimeUnit.SECONDS))
+                null
+            }
+            r.sample(100, 10)
+            r.worker.execute { r.service.tick() }
+            assertTrue(entered.await(5, TimeUnit.SECONDS))
+            r.service.setSuspended(true)
+            release.countDown()
+            r.drain()
+            assertEquals(listOf(14000, 20000), r.host.writes)
+        }
+    }
+
+    @Test fun changingModeKeepsTheManuallySelectedRate() {
+        Replay(2).use { r ->
+            assertTrue(r.service.setManualBitrate(35000) { assertTrue(it) })
+            r.service.setMode("quality")
+            r.drain()
+            r.tick(0, 0)
+            assertEquals(listOf(35000), r.host.writes)
+            assertEquals(35000, r.host.reports.single().currentBitrate)
+        }
+    }
+
+    @Test fun turningAbrOffAndOnOrdersFinalRestoreBeforeNewManualWrite() {
+        val worker = ScheduledThreadPoolExecutor(1)
+        val host = FakeHost(2)
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        fun service() = AdaptiveBitrateService({ host }, { null }, { _, _ -> },
+            executor = worker, shutdownExecutorOnStop = false)
+        try {
+            val oldService = service()
+            oldService.start(20000, "balanced")
+            assertTrue(oldService.setManualBitrate(22000) { assertTrue(it) })
+            worker.submit { entered.countDown(); check(release.await(5, TimeUnit.SECONDS)) }
+            assertTrue(entered.await(5, TimeUnit.SECONDS))
+            oldService.stop()
+            // The ordinary, ABR-disabled manual entry uses the same connection queue.
+            worker.execute { host.setBitrate(30000) }
+            val newService = service()
+            newService.start(30000, "quality")
+            assertTrue(newService.setManualBitrate(35000) { assertTrue(it) })
+            release.countDown()
+            worker.submit {}.get(5, TimeUnit.SECONDS)
+            assertEquals(listOf(22000, 20000, 30000, 35000), host.writes)
+            newService.stop()
+        } finally {
+            release.countDown()
+            worker.shutdown()
+            assertTrue(worker.awaitTermination(5, TimeUnit.SECONDS))
+        }
+    }
+
     @Test fun lateFeedbackCannotOverrideManualBitrateOrDecideWhileSuspended() {
         Replay(2).use { r ->
             val entered = CountDownLatch(1)

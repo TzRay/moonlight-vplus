@@ -24,7 +24,8 @@ class AdaptiveBitrateService(
     private val nowMs: () -> Long = { System.nanoTime() / 1_000_000L },
     private val executor: ScheduledExecutorService = Executors.newSingleThreadScheduledExecutor { r ->
         Thread(r, "AdaptiveBitrateService").apply { isDaemon = true }
-    }
+    },
+    private val shutdownExecutorOnStop: Boolean = true
 ) {
     data class AbrStats(
         val packetLoss: Float,
@@ -151,28 +152,41 @@ class AdaptiveBitrateService(
 
     // Every user bitrate change uses the same executor as feedback and its
     // resulting HTTP write. Invalidate the in-flight recommendation immediately.
-    fun setManualBitrate(kbps: Int, finished: (Boolean) -> Unit): Boolean {
+    @Synchronized fun setManualBitrate(kbps: Int, finished: (Boolean) -> Unit): Boolean {
         if (!enabled) return false
         revision.incrementAndGet()
         executor.execute {
             val ok = applyBitrateInternal(kbps, "manual")
             if (ok) {
-                applyModePreset(mode, kbps)
-                if (serverSupported) {
-                    serverEnableRetries = 1
-                    serverRetryTickCounter = 0
-                }
                 lastAdjustWallClock = nowMs()
-                resetSampling.set(true)
+                resetControllerRange()
             }
             finished(ok)
         }
         return true
     }
 
+    @Synchronized fun setMode(newMode: String) {
+        if (!enabled) return
+        revision.incrementAndGet()
+        executor.execute {
+            mode = newMode
+            resetControllerRange()
+        }
+    }
+
+    private fun resetControllerRange() {
+        applyModePreset(mode, currentBitrate)
+        if (serverSupported) {
+            serverEnableRetries = 1
+            serverRetryTickCounter = 0
+        }
+        resetSampling.set(true)
+    }
+
     private fun current(ticket: Long) = enabled && !suspended && revision.get() == ticket
 
-    fun stop() {
+    @Synchronized fun stop() {
         if (!enabled) return
         enabled = false
         revision.incrementAndGet()
@@ -193,7 +207,7 @@ class AdaptiveBitrateService(
             }
             LimeLog.info("[ABR] 停止，恢复码率: ${initialBitrate}kbps")
         }
-        executor.shutdown()
+        if (shutdownExecutorOnStop) executor.shutdown()
     }
 
     /** 用于性能面板显示当前 ABR 状态。*/
@@ -261,7 +275,14 @@ class AdaptiveBitrateService(
     }
 
     private fun tickServer(http: AbrEndpoint, stats: AbrStats, ticket: Long) {
-        if (!current(ticket) || (!packetFeedback && !stats.packets.trusted)) return
+        if (!current(ticket)) return
+        if (!packetFeedback && !stats.packets.trusted) {
+            // The legacy feedback format cannot distinguish an unknown packet
+            // denominator from clean delivery. Locally confirmed frame damage
+            // can still lower the rate without submitting a misleading report.
+            tickLocal(stats, ticket)
+            return
+        }
         val feedback = NetworkFeedback(
             packetLoss = stats.packetLoss,
             rttMs = stats.rttMs,
@@ -270,15 +291,17 @@ class AdaptiveBitrateService(
             currentBitrate = currentBitrate,
             packets = stats.packets.takeIf { packetFeedback }
         )
-        val action = http.reportNetworkFeedback(feedback) ?: return
-        val newBitrate = action.newBitrate ?: return
+        val action = http.reportNetworkFeedback(feedback)
         if (!current(ticket)) {
-            // Legacy hosts apply their decision before replying. The current
-            // connection must retain its foreground rate through a suspension.
+            // Legacy hosts apply before replying. A lost response can hide an
+            // applied change just as a late positive response can.
             val restore = if (enabled) currentBitrate else initialBitrate
-            if (!packetFeedback && newBitrate != restore) http.setBitrate(restore)
+            if (!packetFeedback && (action == null || action.newBitrate?.let { it != restore } == true)) {
+                http.setBitrate(restore)
+            }
             return
         }
+        val newBitrate = action?.newBitrate ?: return
         if (newBitrate == currentBitrate) return
         val clamped = newBitrate.coerceIn(minBitrate, maxBitrate)
         applyBitrateInternal(clamped, action.reason ?: "server", source = "server", ticket = ticket)

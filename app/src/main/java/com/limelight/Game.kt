@@ -189,7 +189,7 @@ class Game : ThemedComponentActivity(), SurfaceHolder.Callback,
 
     // 智能码率
     private var extremeResumeSuspended = false
-    var adaptiveBitrateService: AdaptiveBitrateService? = null
+    val adaptiveBitrateService: AdaptiveBitrateService? get() = conn?.bitrateController
 
     // Sunshine clipboard sync — null until pref toggles enable it.
     private var clipboardSyncManager: ClipboardSyncManager? = null
@@ -2516,6 +2516,7 @@ class Game : ThemedComponentActivity(), SurfaceHolder.Callback,
      */
     private fun stopConnection(reason: StreamStopReason) {
         val connection = conn
+        extremeResumeSuspended = false
         connection?.requestStop()
 
         val wasConnected = connected
@@ -2631,20 +2632,17 @@ class Game : ThemedComponentActivity(), SurfaceHolder.Callback,
             onBitrateChanged = { kbps, _ ->
                 // service 已成功通知服务端，仅同步本地配置
                 c.applyBitrateLocally(kbps)
-            }
+            },
+            executor = c.bitrateExecutor,
+            shutdownExecutorOnStop = false
         )
-        service.start(prefConfig.bitrate, prefConfig.abrMode)
-        c.manualBitrateOverride = service::setManualBitrate
+        if (!c.startBitrateController(service, prefConfig.bitrate, prefConfig.abrMode)) return
         service.setSuspended(extremeResumeSuspended)
-        adaptiveBitrateService = service
     }
 
     /** 停止智能码率，恢复初始码率。*/
     fun stopAdaptiveBitrate() {
-        extremeResumeSuspended = false
-        conn?.manualBitrateOverride = null
-        adaptiveBitrateService?.stop()
-        adaptiveBitrateService = null
+        conn?.stopBitrateController()
     }
 
     override fun onStart() {
