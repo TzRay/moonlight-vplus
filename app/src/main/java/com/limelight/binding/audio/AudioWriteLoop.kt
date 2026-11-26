@@ -28,3 +28,21 @@ internal fun alignedPcmBufferSize(minimum: Int, requested: Int, channels: Int): 
     require(aligned <= Int.MAX_VALUE)
     return aligned.toInt()
 }
+
+/** Serialize complete callback frames with flush/play. Pause interrupts a
+ * blocking write before waiting for its owner to leave the current frame. */
+internal class AudioWriteGate {
+    private val writer = Any()
+    @Volatile var paused = false
+        private set
+    inline fun frame(work: () -> Unit) = synchronized(writer) { work() }
+    fun pause(interrupt: () -> Unit, afterWriter: () -> Unit) {
+        paused = true
+        interrupt()
+        synchronized(writer) { afterWriter() }
+    }
+    fun resume(beforeWriter: () -> Unit) = synchronized(writer) {
+        beforeWriter()
+        paused = false
+    }
+}

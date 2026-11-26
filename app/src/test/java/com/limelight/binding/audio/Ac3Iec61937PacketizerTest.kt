@@ -96,4 +96,19 @@ class Ac3Iec61937PacketizerTest {
         p.append(f, f.size) { out.add(it.clone()) }
         assertEquals(1, out.size)
     }
+    @Test fun resumeSkipsSplitBackgroundFrameAndProducesNextCompleteBurst() {
+        val background = frame(36, 2560, 3)
+        val foreground = frame(0, 128, 1)
+        for (split in listOf(1, 6, 311, background.lastIndex)) {
+            val packetizer = Ac3Iec61937Packetizer()
+            packetizer.append(background, split) { fail() }
+            packetizer.discardPartialFrame()
+            val rest = background.copyOfRange(split, background.size) + foreground
+            val bursts = mutableListOf<ShortArray>()
+            packetizer.append(rest, rest.size) { bursts += it.clone() }
+            assertEquals(1, bursts.size)
+            assertEquals(0x101, bursts.single()[2].toInt())
+            assertEquals(foreground.size * 8, bursts.single()[3].toInt())
+        }
+    }
 }

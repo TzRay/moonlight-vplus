@@ -10,18 +10,18 @@ import com.limelight.nvstream.jni.MoonBridge
 
 /** Opt-in AC3 carrier for devices whose raw ENCODING_AC3 route decodes to PCM. */
 class Ac3Iec61937Renderer(private val encodedBufferBytes: Int) : AudioRenderer {
-    private var track: AudioTrack? = null
+    private val writes = AudioWriteGate()
+    @Volatile private var track: AudioTrack? = null
     private val packetizer = Ac3Iec61937Packetizer()
-    private var failed = false
+    @Volatile private var failed = false
     private val sink = Ac3Iec61937Packetizer.Sink { words ->
-        val output = track ?: throw IllegalStateException("IEC61937 track is closed")
-        var offset = 0
-        while (offset < words.size) {
-            // The API 1 short[] overload is blocking, matching WRITE_BLOCKING.
-            val written = output.write(words, offset, words.size - offset)
-            check(written > 0) { "IEC61937 AudioTrack.write returned $written" }
-            offset += written
+        if (writes.paused) return@Sink
+        val output = track ?: return@Sink
+        val written = writeAudioFully(words.size, { !writes.paused }) { offset, remaining ->
+            output.write(words, offset, remaining)
         }
+        check(writes.paused || written == words.size) { "IEC61937 incomplete burst ($written/${words.size})" }
+
     }
 
     override fun setup(audioConfiguration: MoonBridge.AudioConfiguration, sampleRate: Int,
@@ -56,7 +56,7 @@ class Ac3Iec61937Renderer(private val encodedBufferBytes: Int) : AudioRenderer {
             check(track!!.state == AudioTrack.STATE_INITIALIZED)
             track!!.pause()
             track!!.flush()
-            track!!.play()
+            writes.resume { track!!.play() }
             LimeLog.info("Ac3Iec61937Renderer: 48 kHz AC3 ${audioConfiguration.channelCount}ch; IEC61937 stereo carrier, buffer=$buffer bytes (${buffer / 192} ms)")
             0
         } catch (e: Exception) {
@@ -68,8 +68,8 @@ class Ac3Iec61937Renderer(private val encodedBufferBytes: Int) : AudioRenderer {
 
     override fun start() {}
     override fun playDecodedAudio(audioData: ShortArray) {}
-    override fun playEncodedAudio(audioData: ByteArray, length: Int) {
-        if (failed || track == null) return
+    override fun playEncodedAudio(audioData: ByteArray, length: Int) = writes.frame {
+        if (failed || track == null) return@frame
         try {
             packetizer.append(audioData, length, sink)
         } catch (e: Exception) {
@@ -80,9 +80,20 @@ class Ac3Iec61937Renderer(private val encodedBufferBytes: Int) : AudioRenderer {
         }
     }
 
+    fun pauseProcessing() {
+        writes.pause({ track?.pause() }, { track?.flush() })
+    }
+
+    fun resumeProcessing() {
+        if (!failed) writes.resume {
+            // A packetized frame may straddle two callbacks or the foreground edge.
+            packetizer.discardPartialFrame()
+            track?.play()
+        }
+    }
+
     override fun stop() {
-        try { track?.pause(); track?.flush() } catch (_: Exception) {}
-        packetizer.reset()
+        try { writes.pause({ track?.pause() }, { track?.flush(); packetizer.reset() }) } catch (_: Exception) {}
     }
     override fun cleanup() {
         stop()

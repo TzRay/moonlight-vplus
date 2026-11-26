@@ -15,8 +15,14 @@ class Ac3Iec61937Packetizer {
         fun write(words: ShortArray)
     }
 
+    private var skipCurrent = false
+
+    /** Finish parsing a compressed frame which began in the background. */
+    fun discardPartialFrame() { skipCurrent = used != 0 }
+
     fun reset() {
         used = 0
+        skipCurrent = false
         expected = 0
     }
 
@@ -47,6 +53,10 @@ class Ac3Iec61937Packetizer {
                     expected = BITRATES[frmsizecod / 2] * 4
                 }
                 if (expected != 0 && used == expected) {
+                    if (skipCurrent) {
+                        reset()
+                        continue
+                    }
                     burst.fill(0)
                     burst[0] = 0xf872.toShort()
                     burst[1] = 0x4e1f.toShort()
