@@ -29,6 +29,7 @@ class SmartAudioRenderer(
     private var backgroundPaused = false
     private var stopped = false
     private var matSession = 0L
+    private val legacyBackgroundReported = java.util.concurrent.atomic.AtomicBoolean()
 
     @Synchronized private fun install(output: AudioRenderer) {
         stopped = false
@@ -40,6 +41,9 @@ class SmartAudioRenderer(
 
     private fun pauseOutput(output: AudioRenderer?) {
         when (output) {
+            is MatPassthroughRenderer -> if (matSession == 0L && legacyBackgroundReported.compareAndSet(false, true)) {
+                LimeLog.warning("MAT background pause was not negotiated. Keeping the MAT stream active for fast resume.")
+            }
             is AndroidAudioRenderer -> output.pauseProcessing()
             is PcmPassthroughRenderer -> output.pauseProcessing()
             is Ac3PassthroughRenderer -> output.pauseProcessing()
