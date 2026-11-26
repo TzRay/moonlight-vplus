@@ -1,5 +1,31 @@
 package com.limelight.binding.audio
 
+import android.media.AudioTrack
+import com.limelight.LimeLog
+
+/** One failed HAL operation must not skip later flush/release actions. */
+internal inline fun audioCleanup(operation: String, work: () -> Unit): Boolean {
+    return try {
+        work()
+        true
+    } catch (e: Exception) {
+        LimeLog.warning("AudioTrack $operation failed: ${e.message}")
+        false
+    }
+}
+
+internal fun releaseAudioOutput(flush: () -> Unit, release: () -> Unit, stop: (() -> Unit)? = null) {
+    audioCleanup("flush", flush)
+    if (stop != null) audioCleanup("stop", stop)
+    audioCleanup("release", release)
+}
+
+internal fun interruptAudioWrite(track: AudioTrack?) {
+    if (track != null && !audioCleanup("pause") { track.pause() }) {
+        audioCleanup("stop after failed pause") { track.stop() }
+    }
+}
+
 /** Drain a blocking AudioTrack write without dropping a positive short write.
  * Stop on cancellation, zero progress, or error; never spin or replay a prefix.
  * Units are shorts for decoded PCM and bytes for passthrough PCM.
@@ -38,8 +64,11 @@ internal class AudioWriteGate {
     inline fun frame(work: () -> Unit) = synchronized(writer) { work() }
     fun pause(interrupt: () -> Unit, afterWriter: () -> Unit) {
         paused = true
-        interrupt()
-        synchronized(writer) { afterWriter() }
+        try {
+            interrupt()
+        } finally {
+            synchronized(writer) { afterWriter() }
+        }
     }
     fun resume(beforeWriter: () -> Unit) = synchronized(writer) {
         beforeWriter()

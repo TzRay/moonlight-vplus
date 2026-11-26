@@ -56,6 +56,28 @@ class AudioWriteLoopTest {
         alignedPcmBufferSize(-2, 8192, 8)
     }
 
+    @Test fun failedInterruptAndFlushStillRetireTheOutput() {
+        val gate = AudioWriteGate()
+        val operations = ArrayList<String>()
+        try {
+            gate.pause({
+                operations += "pause"
+                throw IllegalStateException("fixture pause failure")
+            }, {
+                assertTrue(gate.paused)
+                releaseAudioOutput(
+                    flush = { operations += "flush"; throw IllegalStateException("fixture flush failure") },
+                    stop = { operations += "stop"; throw IllegalStateException("fixture stop failure") },
+                    release = { operations += "release" }
+                )
+            })
+            fail("pause failure should remain observable")
+        } catch (failure: IllegalStateException) {
+            assertEquals("fixture pause failure", failure.message)
+        }
+        assertEquals(listOf("pause", "flush", "stop", "release"), operations)
+    }
+
     @Test fun pauseInterruptsPartialWritesBeforeFlushingAndForegroundStartsANewFrame() {
         for (next in listOf(3, 0, -6)) {
             val gate = AudioWriteGate()

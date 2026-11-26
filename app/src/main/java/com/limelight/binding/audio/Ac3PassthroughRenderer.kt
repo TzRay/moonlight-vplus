@@ -190,7 +190,7 @@ class Ac3PassthroughRenderer(
     }
 
     fun pauseProcessing() {
-        writes.pause({ track?.pause() }, { track?.flush() })
+        writes.pause({ interruptAudioWrite(track) }, { audioCleanup("flush") { track?.flush() } })
     }
 
     fun resumeProcessing() {
@@ -218,12 +218,11 @@ class Ac3PassthroughRenderer(
     }
 
     override fun cleanup() {
-        stop()
-        try {
-            track?.stop()
-            track?.release()
-        } catch (_: Exception) {}
-        track = null
+        val output = track
+        writes.pause({ interruptAudioWrite(output) }, {
+            track = null
+            releaseAudioOutput(flush = { output?.flush() }, release = { output?.release() }, stop = { output?.stop() })
+        })
     }
 
     private fun channelMaskToString(channelMask: Int): String {

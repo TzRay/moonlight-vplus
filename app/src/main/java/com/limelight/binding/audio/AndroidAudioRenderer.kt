@@ -168,11 +168,10 @@ class AndroidAudioRenderer(
                 break
             } catch (e: Exception) {
                 e.printStackTrace()
-                systemAudioHaptics.detach()
-                try {
-                    track?.release()
-                    track = null
-                } catch (_: Exception) {}
+                val failedTrack = track
+                track = null
+                audioCleanup("detach haptics") { systemAudioHaptics.detach() }
+                audioCleanup("release") { failedTrack?.release() }
             }
         }
 
@@ -228,7 +227,9 @@ class AndroidAudioRenderer(
         this.savedChannelCount = audioConfiguration.channelCount
         decodedStreamFramePosition.set(0L)
 
-        return initializeAudioTrackInternal(audioConfiguration, sampleRate, samplesPerFrame)
+        val result = initializeAudioTrackInternal(audioConfiguration, sampleRate, samplesPerFrame)
+        if (result == 0) isProcessingPaused = false
+        return result
     }
 
     // --- 暂停处理 ---
@@ -240,28 +241,18 @@ class AndroidAudioRenderer(
         // 释放 Spatializer
         spatializer = null
 
-        // 释放 AudioTrack
-        val currentTrack = track
-        if (currentTrack != null) {
-            try {
-                // 如果开启了 AudioFx，先关闭 session
-                if (enableAudioFx) {
-                    val i = Intent(AudioEffect.ACTION_CLOSE_AUDIO_EFFECT_CONTROL_SESSION)
-                    i.putExtra(AudioEffect.EXTRA_AUDIO_SESSION, currentTrack.audioSessionId)
-                    i.putExtra(AudioEffect.EXTRA_PACKAGE_NAME, context.packageName)
-                    context.sendBroadcast(i)
-                }
-
-                systemAudioHaptics.detach()
-                currentTrack.pause()
-                synchronized(decodedWriter) {
-                    currentTrack.flush()
-                    currentTrack.release()
-                }
-            } catch (e: Exception) {
-                LimeLog.warning("Error releasing audio track: " + e.message)
-            }
+        val output = track ?: return
+        if (enableAudioFx) audioCleanup("close effects") {
+            val intent = Intent(AudioEffect.ACTION_CLOSE_AUDIO_EFFECT_CONTROL_SESSION)
+            intent.putExtra(AudioEffect.EXTRA_AUDIO_SESSION, output.audioSessionId)
+            intent.putExtra(AudioEffect.EXTRA_PACKAGE_NAME, context.packageName)
+            context.sendBroadcast(intent)
+        }
+        audioCleanup("detach haptics") { systemAudioHaptics.detach() }
+        interruptAudioWrite(output)
+        synchronized(decodedWriter) {
             track = null
+            releaseAudioOutput(output::flush, output::release)
         }
     }
 
@@ -377,17 +368,7 @@ class AndroidAudioRenderer(
         }
     }
 
-    override fun stop() {
-        clearAudioPresentationClock()
-        systemAudioHaptics.detach()
-        val currentTrack = track
-        if (currentTrack != null && enableAudioFx) {
-            val i = Intent(AudioEffect.ACTION_CLOSE_AUDIO_EFFECT_CONTROL_SESSION)
-            i.putExtra(AudioEffect.EXTRA_AUDIO_SESSION, currentTrack.audioSessionId)
-            i.putExtra(AudioEffect.EXTRA_PACKAGE_NAME, context.packageName)
-            context.sendBroadcast(i)
-        }
-    }
+    override fun stop() = pauseProcessing()
 
     fun detachSystemAudioHaptics(): Boolean {
         systemAudioHaptics.detach()
@@ -400,15 +381,8 @@ class AndroidAudioRenderer(
     }
 
     override fun cleanup() {
-        clearAudioPresentationClock()
-        systemAudioHaptics.close()
-        spatializer = null
-        track?.let {
-            it.pause()
-            it.flush()
-            it.release()
-        }
-        track = null
+        pauseProcessing()
+        audioCleanup("close haptics") { systemAudioHaptics.close() }
     }
 
     private fun clearAudioPresentationClock() {
