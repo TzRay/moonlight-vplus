@@ -397,7 +397,7 @@ int BridgeArInit(int audioConfiguration, POPUS_MULTISTREAM_CONFIGURATION opusCon
                 ClearMatAudioLifecycleException(env, "consumer cleanup");
                 return -1;
             }
-            LI_MAT_PLAYBACK_CALLBACKS callbacks = {BridgeMatCycle, BridgeMatEnd, LiveMatBridge, BridgeMatThreadStart, BridgeMatProgress};
+            LI_MAT_PLAYBACK_CALLBACKS callbacks = {BridgeMatCycle, BridgeMatEnd, LiveMatBridge, BridgeMatThreadStart, BridgeMatProgress, true};
             LiSetMatPlaybackCallbacksEx(&callbacks, sizeof(callbacks));
         } else {
             // Encoded passthrough (AC3 / E-AC3): skip Opus decoder, allocate raw byte buffer.

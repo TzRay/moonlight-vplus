@@ -14,6 +14,7 @@ import com.limelight.LimeLog;
 import com.limelight.nvstream.jni.MoonBridge;
 import java.util.Arrays;
 import java.util.function.BooleanSupplier;
+import java.util.function.Consumer;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -148,9 +149,15 @@ public final class MatAudioTrackSink implements MatCarrierPlayer.Sink {
                 "; primeTargetCarrierFrames=" + startThresholdFrames + "; playCallUs=" + (playTime - playCallStart) / 1000 +
                 "; firstWriteToPlayUs=" + (firstWriteTime == 0 ? -1 : (playTime - firstWriteTime) / 1000));
     }
+    private volatile Consumer<String> failureListener;
+    @Override public void setFailureListener(Consumer<String> listener) { failureListener = listener; }
     private volatile boolean focusLost;
     private final AudioManager.OnAudioFocusChangeListener focusListener = change -> {
-        if (change < 0) focusLost = true; // Do not duck/multiply a bitstream.
+        if (change < 0) {
+            focusLost = true;
+            Consumer<String> listener = failureListener;
+            if (listener != null) listener.accept("MAT audio focus lost");
+        }
     };
     private void checkRoute() {
         if (focusLost) throw new IllegalStateException("MAT audio focus lost");
@@ -274,6 +281,7 @@ public final class MatAudioTrackSink implements MatCarrierPlayer.Sink {
     @Override public void close() {
         if (closed) return;
         closed = true;
+        failureListener = null;
         RuntimeException first = null;
         if (track != null) {
             if (listenerAttached) first = attempt(first, () -> track.removeOnRoutingChangedListener(routingListener));

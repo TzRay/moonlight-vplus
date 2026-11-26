@@ -271,6 +271,11 @@ Java_com_limelight_nvstream_jni_MoonBridge_stopConnection(JNIEnv *env, jclass cl
 }
 
 JNIEXPORT void JNICALL
+Java_com_limelight_nvstream_jni_MoonBridge_notifyMatPlaybackFailure(JNIEnv *env, jclass clazz, jlong epoch, jlong domain) {
+    if (epoch > 0 && domain > 0) LiNotifyMatPlaybackFailure((uint64_t)epoch, (uint64_t)domain);
+}
+
+JNIEXPORT void JNICALL
 Java_com_limelight_nvstream_jni_MoonBridge_interruptConnection(JNIEnv *env, jclass clazz) {
     LiInterruptConnection();
 }

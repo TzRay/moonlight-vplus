@@ -18,7 +18,9 @@ class MatPassthroughRenderer(private val context: Context) : AudioRenderer, MatC
         }
         val cancelled = MoonBridge.matPreparationCancellation()
         return try {
-            session = MatPlaybackSession(MatAudioTrackSink(context), false, cancelled)
+            session = MatPlaybackSession(MatAudioTrackSink(context), false, cancelled).also {
+                it.player().setFailureListener(MoonBridge::notifyMatPlaybackFailure)
+            }
             LimeLog.info("MAT live output prepared: logical 48k/960, IEC61937 192k/8ch; awaiting authenticated payload")
             0
         } catch (e: MatCarrierPlayer.CleanupPending) {
