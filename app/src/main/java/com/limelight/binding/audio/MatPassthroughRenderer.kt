@@ -16,9 +16,16 @@ class MatPassthroughRenderer(private val context: Context) : AudioRenderer, MatC
             LimeLog.warning("MAT IEC61937 output requires Android 7 or newer")
             return -1
         }
-        val cancelled = MoonBridge.matPreparationCancellation()
+        val connectionCancelled = MoonBridge.matPreparationCancellation()
+        val preparation = MoonBridge.getMatAudioPreparationToken()
+        val preparing = java.util.concurrent.atomic.AtomicBoolean(true)
+        val cancelled = java.util.function.BooleanSupplier {
+            connectionCancelled.asBoolean || (preparing.get() && preparation != 0L &&
+                    MoonBridge.isMatAudioPreparationCancelled(preparation))
+        }
         return try {
             session = MatPlaybackSession(MatAudioTrackSink(context), false, cancelled).also {
+                preparing.set(false)
                 it.player().setFailureListener(MoonBridge::notifyMatPlaybackFailure)
             }
             LimeLog.info("MAT live output prepared: logical 48k/960, IEC61937 192k/8ch; awaiting authenticated payload")
@@ -28,21 +35,21 @@ class MatPassthroughRenderer(private val context: Context) : AudioRenderer, MatC
                     " " + e.suppressed.contentToString())
             MatPlaybackSession.CLEANUP_PENDING
         } catch (e: Exception) {
-            if (e is InterruptedException) Thread.currentThread().interrupt()
+            if (e is InterruptedException && !cancelled.asBoolean) Thread.currentThread().interrupt()
             LimeLog.severe("MAT IEC setup failed: $e")
             -1
         }
     }
     override fun start() {}
-    override fun stop() { session?.close() }
+    override fun stop() { session?.player()?.requestStop() }
     override fun cleanup() {
         session?.let { current ->
             val player = current.player()
             try { current.close() } finally {
-                if (!player.writerAlive()) session = null
+                session = null
+                LimeLog.info("MAT IEC final state=${player.state()} received=${player.receivedCycles()} written=${player.writtenCycles()} submittedBytes=${player.submittedBytes()} peakQueue=${player.peakQueue()} maxCopyUs=${player.maxCopyUs()} maxEnqueueUs=${player.maxEnqueueUs()} drained=${player.drained()} error=${player.error()} closeError=${player.closeError()}")
+                LimeLog.info("MAT IEC startup: firstPayloadNanos=${player.firstPayloadNanos()} playNanos=${player.playNanos()} firstObservedHeadNanos=${player.firstPlayedNanos()} primedCarrierFrames=${player.primedFrames()}")
             }
-            LimeLog.info("MAT IEC final state=${player.state()} received=${player.receivedCycles()} written=${player.writtenCycles()} submittedBytes=${player.submittedBytes()} peakQueue=${player.peakQueue()} maxCopyUs=${player.maxCopyUs()} maxEnqueueUs=${player.maxEnqueueUs()} drained=${player.drained()} error=${player.error()} closeError=${player.closeError()}")
-            LimeLog.info("MAT IEC startup: firstPayloadNanos=${player.firstPayloadNanos()} playNanos=${player.playNanos()} firstObservedHeadNanos=${player.firstPlayedNanos()} primedCarrierFrames=${player.primedFrames()}")
         }
     }
     override fun playDecodedAudio(audioData: ShortArray) { error("MAT must not enter PCM callback") }

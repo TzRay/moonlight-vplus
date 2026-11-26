@@ -183,8 +183,15 @@ public final class MatCarrierPlayer implements MatCarrierConsumer, AutoCloseable
         return false;
     }
     private boolean active() { return state == State.RUNNING || state == State.DRAINING; }
+    private boolean canWrite() {
+        if (cancelled.getAsBoolean()) {
+            requestStop();
+            return false;
+        }
+        return active();
+    }
     private void beginPlayback() throws Exception {
-        if (!active() || cancelled.getAsBoolean() || playNanos != 0) return;
+        if (!canWrite() || playNanos != 0) return;
         primedFrames = submittedBytes / 16;
         sink.play();
         playNanos = System.nanoTime();
@@ -209,11 +216,11 @@ public final class MatCarrierPlayer implements MatCarrierConsumer, AutoCloseable
         try {
             if (verifyWrites) digest = MessageDigest.getInstance("SHA-256");
             sink.prepare(() -> !active() || cancelled.getAsBoolean());
-            if (!active() || cancelled.getAsBoolean()) return;
+            if (!canWrite()) return;
             long startThresholdFrames = sink.startThresholdFrames();
-            if (!active() || cancelled.getAsBoolean()) return;
+            if (!canWrite()) return;
             ready.countDown();
-            while (active()) {
+            while (canWrite()) {
                 Slot slot = pending.poll(10, TimeUnit.MILLISECONDS);
                 if (slot == null) {
                     if (state == State.DRAINING && pending.isEmpty()) break;
@@ -224,7 +231,7 @@ public final class MatCarrierPlayer implements MatCarrierConsumer, AutoCloseable
                 try {
                     int offset = 0;
                     long lastWrite = System.nanoTime();
-                    while (offset < slot.words.length && active()) {
+                    while (offset < slot.words.length && canWrite()) {
                         int requested = slot.words.length - offset;
                         int n = sink.write(slot.words, offset, requested);
                         if (n < 0 || n > requested || n % CHANNELS != 0)
@@ -254,7 +261,7 @@ public final class MatCarrierPlayer implements MatCarrierConsumer, AutoCloseable
                 // A short stream may reach EOS without ever filling the paused track.
                 beginPlayback();
                 long deadline = System.nanoTime() + drainNanos;
-                while (state == State.DRAINING) {
+                while (state == State.DRAINING && canWrite()) {
                     long played = sink.playedFrames();
                     if (played > 0 && firstPlayedNanos == 0) firstPlayedNanos = System.nanoTime();
                     if (played >= submittedBytes / 16) break;
@@ -269,9 +276,9 @@ public final class MatCarrierPlayer implements MatCarrierConsumer, AutoCloseable
                 }
             }
         } catch (InterruptedException e) {
-            if (active()) fail("MAT writer interrupted");
+            if (canWrite()) fail("MAT writer interrupted");
             Thread.currentThread().interrupt();
-        } catch (Exception e) { fail(e.toString()); }
+        } catch (Exception e) { if (canWrite()) fail(e.toString()); }
         finally {
             if (digest != null) submittedSha256 = hex(digest.digest());
             try { sink.close(); }
@@ -325,17 +332,22 @@ public final class MatCarrierPlayer implements MatCarrierConsumer, AutoCloseable
         return progress.report(System.nanoTime());
     }
     public long primedFrames() { return primedFrames; }
-    @Override public void close() {
-        synchronized (this) {
-            if (state == State.NEW) { state = State.STOPPED; ready.countDown(); done.countDown(); return; }
-            if (active()) {
-                state = State.STOPPED;
-                publishFailure();
-            }
+    public synchronized void requestStop() {
+        if (state == State.NEW) {
+            state = State.STOPPED;
             ready.countDown();
-            notifyAll();
+            done.countDown();
+            return;
         }
-        writer.interrupt();
+        if (!active()) return;
+        state = State.STOPPED;
+        if (!cancelled.getAsBoolean()) publishFailure();
+        ready.countDown();
+        notifyAll();
+        if (Thread.currentThread() != writer) writer.interrupt();
+    }
+    @Override public void close() {
+        requestStop();
         // Connection cancellation can interrupt its owner. Still join/release the sink,
         // then restore that interrupt instead of letting join abort immediately.
         boolean interrupted = Thread.interrupted();

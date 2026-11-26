@@ -100,8 +100,10 @@ public final class MatAudioTrackSink implements MatCarrierPlayer.Sink {
                     diagnostics = "IEC AudioTrack open failed: " + e;
                     continue;
                 }
-                checkCancelled();
-                if (track.getState() == AudioTrack.STATE_INITIALIZED) break;
+                if (track.getState() == AudioTrack.STATE_INITIALIZED) {
+                    checkCancelled();
+                    break;
+                }
                 diagnostics = "IEC track not initialized";
                 track.release();
                 track = null;
@@ -278,6 +280,13 @@ public final class MatAudioTrackSink implements MatCarrierPlayer.Sink {
         }
         return first;
     }
+    static void logClosingProgress(BooleanSupplier initialized, Runnable readProgress) {
+        try {
+            if (initialized.getAsBoolean()) readProgress.run();
+        } catch (RuntimeException detail) {
+            LimeLog.warning("MAT closing playback diagnostics unavailable: " + detail);
+        }
+    }
     @Override public void close() {
         if (closed) return;
         closed = true;
@@ -285,7 +294,8 @@ public final class MatAudioTrackSink implements MatCarrierPlayer.Sink {
         RuntimeException first = null;
         if (track != null) {
             if (listenerAttached) first = attempt(first, () -> track.removeOnRoutingChangedListener(routingListener));
-            first = attempt(first, () -> logProgress("closing"));
+            logClosingProgress(() -> track.getState() == AudioTrack.STATE_INITIALIZED,
+                    () -> logProgress("closing"));
             first = attempt(first, () -> {
                 if (track.getState() == AudioTrack.STATE_INITIALIZED) track.pause();
             });

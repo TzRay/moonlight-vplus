@@ -125,10 +125,13 @@ class SmartAudioRenderer(
         delegate?.start()
     }
 
-    @Synchronized override fun stop() {
-        stopped = true
+    override fun stop() {
+        val output = synchronized(this) {
+            stopped = true
+            delegate
+        }
         onAudioPresentationClock(-1L, -1L, 0)
-        delegate?.stop()
+        output?.stop()
     }
 
     override fun playDecodedAudio(audioData: ShortArray) {
@@ -145,10 +148,15 @@ class SmartAudioRenderer(
         (delegate as? MatCarrierConsumer)?.offerMatCycle(bytes, length, epoch, domain, index, pts48k) ?: false
     override fun endMatStream(cycles: Long): Boolean = (delegate as? MatCarrierConsumer)?.endMatStream(cycles) ?: false
 
-    @Synchronized override fun cleanup() {
+    override fun cleanup() {
+        val output = synchronized(this) {
+            val current = delegate
+            delegate = null
+            stopped = true
+            current
+        }
         onAudioPresentationClock(-1L, -1L, 0)
-        delegate?.cleanup()
-        delegate = null
+        output?.cleanup()
     }
 
     @Synchronized fun pauseProcessing() {

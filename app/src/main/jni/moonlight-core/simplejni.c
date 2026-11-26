@@ -280,6 +280,16 @@ Java_com_limelight_nvstream_jni_MoonBridge_getMatBackgroundSession(JNIEnv *env, 
     return (jlong)LiGetMatBackgroundSession();
 }
 
+JNIEXPORT jlong JNICALL
+Java_com_limelight_nvstream_jni_MoonBridge_getMatAudioPreparationToken(JNIEnv *env, jclass clazz) {
+    return (jlong)LiGetMatAudioPreparationToken();
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_limelight_nvstream_jni_MoonBridge_isMatAudioPreparationCancelled(JNIEnv *env, jclass clazz, jlong token) {
+    return LiIsMatAudioPreparationCancelled((uint64_t)token) ? JNI_TRUE : JNI_FALSE;
+}
+
 JNIEXPORT void JNICALL
 Java_com_limelight_nvstream_jni_MoonBridge_setMatBackgroundPaused(JNIEnv *env, jclass clazz, jlong session, jboolean paused) {
     LiSetMatBackgroundPaused((uint64_t)session, paused == JNI_TRUE);

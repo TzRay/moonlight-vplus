@@ -716,6 +716,8 @@ public class MoonBridge {
 
     public static native long getMatBackgroundSession();
     public static native void setMatBackgroundPaused(long session, boolean paused);
+    public static native long getMatAudioPreparationToken();
+    public static native boolean isMatAudioPreparationCancelled(long token);
     public static native void notifyMatPlaybackFailure(long epoch, long domain);
     public static native void interruptConnection();
 

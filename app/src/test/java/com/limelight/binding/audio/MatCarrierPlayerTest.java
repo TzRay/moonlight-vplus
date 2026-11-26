@@ -672,6 +672,51 @@ public class MatCarrierPlayerTest {
         assertEquals(0, primingSink.playCalls);
     }
 
+    @Test public void closingDiagnosticsTolerateAnUninitializedTrackAndAResetPlaybackHead() {
+        MatAudioTrackSink.logClosingProgress(() -> false, () -> fail("uninitialized track queried"));
+        MatAudioTrackSink.logClosingProgress(() -> true, () -> {
+            throw new IllegalStateException("playhead reset while closing");
+        });
+    }
+
+    @Test(timeout = 4000) public void supersededPreparationRetiresWithoutAFailureOrAPlayCall() throws Exception {
+        java.util.concurrent.atomic.AtomicBoolean cancelled = new java.util.concurrent.atomic.AtomicBoolean();
+        Sink output = new Sink() {
+            @Override public void prepare() throws Exception {
+                cancelled.set(true);
+                throw new InterruptedException("prepare retired");
+            }
+        };
+        try (MatCarrierPlayer player = new MatCarrierPlayer(output, false, cancelled::get)) {
+            player.start();
+            assertFalse(player.awaitCompletion(1000));
+            assertEquals(MatCarrierPlayer.State.STOPPED, player.state());
+            assertEquals("", player.error());
+            assertTrue(output.closed);
+            assertEquals(0, output.playCalls);
+        }
+    }
+
+    @Test(timeout = 4000) public void cancellationDuringPrimingStopsBeforeAnotherWrite() throws Exception {
+        java.util.concurrent.atomic.AtomicBoolean cancelled = new java.util.concurrent.atomic.AtomicBoolean();
+        Sink output = new Sink() {
+            @Override public int write(short[] words, int offset, int count) {
+                int result = super.write(words, offset, count);
+                cancelled.set(true);
+                return result;
+            }
+        };
+        try (MatCarrierPlayer player = new MatCarrierPlayer(output, false, cancelled::get)) {
+            player.start();
+            assertTrue(player.awaitReady(1000));
+            assertTrue(offer(player, carrier(0), 0));
+            assertFalse(player.awaitCompletion(1000));
+            assertEquals(MatCarrierPlayer.State.STOPPED, player.state());
+            assertEquals(0, output.playCalls);
+            assertTrue(output.bytes > 0 && output.bytes < MatCarrierPlayer.CYCLE_BYTES);
+        }
+    }
+
     @Test(timeout = 5000) public void failedPartialSubmissionHashesOnlyTheAcceptedPrefix() throws Exception {
         Sink sink = new Sink() {
             @Override public int write(short[] words, int offset, int count) {
