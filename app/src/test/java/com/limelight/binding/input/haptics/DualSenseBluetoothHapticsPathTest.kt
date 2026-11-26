@@ -171,12 +171,16 @@ class DualSenseBluetoothHapticsPathTest {
         val actual = Collections.synchronizedList(mutableListOf<ByteArray>())
         // Only the HID report cadence advances this clock. Waiting for the test's
         // handoff cannot turn a missing sequence number into an idle stream.
-        val nowNanos = AtomicLong(1)
+        val timing = object : DualSenseBluetoothHapticsSink.Timing {
+            private val now = AtomicLong(1)
+            override fun nowNanos() = now.get()
+            override fun waitForNextReport(nanos: Long) { now.addAndGet(nanos) }
+        }
         val sink = DualSenseBluetoothHapticsSink({ true }, {
             writing.countDown()
             check(resume.await(2, TimeUnit.SECONDS))
             actual.add(it.copyOf()); played.countDown(); true
-        }, { true }, clockNanos = nowNanos::get, waitForNextReport = { nowNanos.addAndGet(it) })
+        }, { true }, timing = timing)
         try {
             assertTrue(sink.start())
             frames.take(3).forEach(sink::submit)
