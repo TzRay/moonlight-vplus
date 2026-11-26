@@ -363,6 +363,36 @@ public class MatCarrierPlayerTest {
         } finally { failWrite.countDown(); }
     }
 
+    @Test(timeout = 5000) public void deviceFailureFocusLossAndStopNotifyOnceWithTheAcceptedIdentity() throws Exception {
+        for (int cause = 0; cause < 3; ++cause) {
+            java.util.concurrent.atomic.AtomicInteger notifications = new java.util.concurrent.atomic.AtomicInteger();
+            java.util.concurrent.atomic.AtomicReference<java.util.function.Consumer<String>> focus =
+                    new java.util.concurrent.atomic.AtomicReference<>();
+            final int fault = cause;
+            Sink sink = new Sink() {
+                @Override public void setFailureListener(java.util.function.Consumer<String> listener) { focus.set(listener); }
+                @Override public int write(short[] bytes, int offset, int count) {
+                    if (fault == 0) throw new IllegalStateException("ERROR_DEAD_OBJECT");
+                    return super.write(bytes, offset, count);
+                }
+            };
+            try (MatCarrierPlayer player = new MatCarrierPlayer(sink)) {
+                player.setFailureListener((epoch, domain) -> {
+                    assertEquals(1, epoch);
+                    assertEquals(2, domain);
+                    notifications.incrementAndGet();
+                });
+                player.start();
+                assertTrue(offer(player, carrier(0), 0));
+                if (cause == 1) focus.get().accept("MAT audio focus lost");
+                else if (cause == 2) player.close();
+                if (cause < 2) assertFalse(player.awaitCompletion(1000));
+                player.close();
+                assertEquals(1, notifications.get());
+            }
+        }
+    }
+
     @Test(timeout = 5000) public void drainedMediaWithFailedCloseCannotComplete() throws Exception {
         Sink sink = new PrimingSink(1, true) {
             @Override public void close() { throw new IllegalStateException("release failed"); }

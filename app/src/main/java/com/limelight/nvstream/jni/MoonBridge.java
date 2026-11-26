@@ -714,6 +714,7 @@ public class MoonBridge {
 
     public static native void stopConnection();
 
+    public static native void notifyMatPlaybackFailure(long epoch, long domain);
     public static native void interruptConnection();
 
     public static native void sendMouseMove(short deltaX, short deltaY);

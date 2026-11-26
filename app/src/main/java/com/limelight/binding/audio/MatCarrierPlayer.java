@@ -2,6 +2,7 @@ package com.limelight.binding.audio;
 
 import java.security.MessageDigest;
 import java.util.function.BooleanSupplier;
+import java.util.function.Consumer;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -18,6 +19,7 @@ public final class MatCarrierPlayer implements MatCarrierConsumer, AutoCloseable
         /** Open a paused track. Must not wait for input, which arrives after setup returns. */
         void prepare() throws Exception;
         default void prepare(BooleanSupplier cancelled) throws Exception { prepare(); }
+        default void setFailureListener(Consumer<String> listener) {}
         default String preparationDetail() { return ""; }
         /** Carrier frames needed before play, or zero to prime until a short write. */
         default long startThresholdFrames() { return 0; }
@@ -27,6 +29,19 @@ public final class MatCarrierPlayer implements MatCarrierConsumer, AutoCloseable
         /** Carrier frames since this track was opened; implementation handles 32-bit wrap. */
         long playedFrames() throws Exception;
         void close() throws Exception;
+    }
+    public interface FailureListener {
+        void onFailure(long epoch, long domain);
+    }
+    private FailureListener failureListener;
+    public synchronized void setFailureListener(FailureListener listener) {
+        failureListener = listener;
+    }
+    private void publishFailure() {
+        if (failureListener != null && receivedCycles != 0) {
+            failureListener.onFailure(epoch, domain);
+            failureListener = null;
+        }
     }
     public static final class CleanupPending extends IllegalStateException {
         CleanupPending() { super("MAT writer did not stop"); }
@@ -98,6 +113,7 @@ public final class MatCarrierPlayer implements MatCarrierConsumer, AutoCloseable
         stallNanos = TimeUnit.MILLISECONDS.toNanos(stallMs);
         drainNanos = TimeUnit.MILLISECONDS.toNanos(drainMs);
         writer = new Thread(this::run, "mat-iec-writer");
+        sink.setFailureListener(this::fail);
     }
     public synchronized void start() {
         if (state != State.NEW) throw new IllegalStateException("MAT player already started");
@@ -149,7 +165,11 @@ public final class MatCarrierPlayer implements MatCarrierConsumer, AutoCloseable
         state = State.DRAINING; notifyAll(); return true;
     }
     private synchronized boolean fail(String message) {
-        if (state != State.FAILED && state != State.STOPPED) { error = message; state = State.FAILED; }
+        if (active()) {
+            error = message;
+            state = State.FAILED;
+            publishFailure();
+        }
         notifyAll();
         ready.countDown();
         if (Thread.currentThread() != writer) writer.interrupt();
@@ -255,6 +275,7 @@ public final class MatCarrierPlayer implements MatCarrierConsumer, AutoCloseable
                 synchronized (this) {
                     if (error.isEmpty()) error = "IEC close failed: " + closeError;
                     state = State.FAILED;
+                    publishFailure();
                 }
             }
             synchronized (this) {
@@ -300,7 +321,10 @@ public final class MatCarrierPlayer implements MatCarrierConsumer, AutoCloseable
     @Override public void close() {
         synchronized (this) {
             if (state == State.NEW) { state = State.STOPPED; ready.countDown(); done.countDown(); return; }
-            if (active()) state = State.STOPPED;
+            if (active()) {
+                state = State.STOPPED;
+                publishFailure();
+            }
             ready.countDown();
             notifyAll();
         }
