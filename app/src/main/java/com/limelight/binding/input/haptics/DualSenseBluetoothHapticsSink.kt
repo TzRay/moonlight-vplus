@@ -12,7 +12,9 @@ internal class DualSenseBluetoothHapticsSink(
     private val pause: () -> Boolean,
     private val onFailure: () -> Unit = {},
     private val control: (Ds5HapticsState) -> Unit = {},
-    private val release: () -> Boolean = pause
+    private val release: () -> Boolean = pause,
+    private val clockNanos: () -> Long = System::nanoTime,
+    private val waitForNextReport: (Long) -> Unit = LockSupport::parkNanos
 ) : DualSenseNativeHapticsSink {
     private data class Packet(val samples: ByteArray, val receivedAt: Long)
     private val lock = Any()
@@ -59,7 +61,7 @@ internal class DualSenseBluetoothHapticsSink(
             val flags = frame.flags.toInt()
             val restart = flags and 5 != 0
             if (!restart && sequence?.let { frame.sequenceNumber - it <= 0 } == true) return
-            val now = System.nanoTime()
+            val now = clockNanos()
             // Missing unreliable PCM is a gap, not a new stream; retain queued audio and FIR history.
             if (restart || lastInput != 0L && now - lastInput > IDLE_NS) {
                 queue.clear()
@@ -103,8 +105,8 @@ internal class DualSenseBluetoothHapticsSink(
         var failed = startupFailed
         try {
             while (!stopping) {
-                val now = System.nanoTime()
-                if (deadline > now) { LockSupport.parkNanos(minOf(deadline - now, FLUSH_NS)); continue }
+                val now = clockNanos()
+                if (deadline > now) { waitForNextReport(minOf(deadline - now, FLUSH_NS)); continue }
                 val packet = synchronized(lock) {
                     if (encoder.hasPendingSamples && now - lastInput >= FLUSH_NS) {
                         encoder.finish { enqueue(it, lastInput) }
@@ -131,7 +133,7 @@ internal class DualSenseBluetoothHapticsSink(
                 playing = true
                 // Never burst old packets to catch up with a blocked Android HID service.
                 deadline = if (deadline == 0L) now + PERIOD_NS else deadline + PERIOD_NS
-                val after = System.nanoTime()
+                val after = clockNanos()
                 if (deadline <= after) deadline = after + PERIOD_NS
             }
         } catch (failure: Throwable) {

@@ -13,6 +13,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicLong
 import java.util.zip.CRC32
 import kotlin.math.PI
 import kotlin.math.sin
@@ -168,11 +169,14 @@ class DualSenseBluetoothHapticsPathTest {
         val resume = CountDownLatch(1)
         val played = CountDownLatch(expected.size)
         val actual = Collections.synchronizedList(mutableListOf<ByteArray>())
+        // Only the HID report cadence advances this clock. Waiting for the test's
+        // handoff cannot turn a missing sequence number into an idle stream.
+        val nowNanos = AtomicLong(1)
         val sink = DualSenseBluetoothHapticsSink({ true }, {
             writing.countDown()
             check(resume.await(2, TimeUnit.SECONDS))
             actual.add(it.copyOf()); played.countDown(); true
-        }, { true })
+        }, { true }, clockNanos = nowNanos::get, waitForNextReport = { nowNanos.addAndGet(it) })
         try {
             assertTrue(sink.start())
             frames.take(3).forEach(sink::submit)
