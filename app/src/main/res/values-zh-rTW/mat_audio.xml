@@ -2,4 +2,6 @@
 <resources>
     <string name="audio_codec_mat_live">MAT / Atmos（實驗，HDMI）</string>
     <string name="summary_audio_codec_mat_live">需要相容的 Sunshine MAT 擷取來源及 HDMI 音訊輸出。主機未提供 MAT 時使用 Opus；播放裝置不支援時連線會失敗。重新連線後生效，略過音效及空間化處理。</string>
+    <string name="mat_host_encoder_missing">Sunshine 主機缺少 MAT 擷取元件。</string>
+    <string name="mat_host_encoder_incompatible">主機的 Windows 音訊引擎或 Dolby Access 版本與 MAT 擷取元件不相容。</string>
 </resources>

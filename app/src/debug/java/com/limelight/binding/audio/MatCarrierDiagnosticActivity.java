@@ -13,6 +13,7 @@ import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.Arrays;
+import java.util.concurrent.TimeUnit;
 
 /** ADB-only, debug-only playback of an explicitly selected recorded carrier.
  * Uses the production sink/player; never participates in live source selection.
@@ -31,8 +32,9 @@ public final class MatCarrierDiagnosticActivity extends Activity {
         String sample = getIntent().getStringExtra("sample");
         String sha256 = getIntent().getStringExtra("sha256");
         int skip = getIntent().getIntExtra("skip_cycles", 0);
+        int seconds = getIntent().getIntExtra("replay_seconds", 0);
         update("MAT sample comparison\n" + sample + "\nPreparing playback…");
-        playback = new Thread(() -> play(sample, sha256, skip), "mat-sample-diagnostic");
+        playback = new Thread(() -> play(sample, sha256, skip, seconds), "mat-sample-diagnostic");
         playback.start();
     }
 
@@ -44,7 +46,7 @@ public final class MatCarrierDiagnosticActivity extends Activity {
         return MatCarrierPlayer.hex(MessageDigest.getInstance("SHA-256").digest(bytes));
     }
 
-    private void play(String sample, String expected, int skip) {
+    private void play(String sample, String expected, int skip, int seconds) {
         JSONObject result = new JSONObject();
         MatPlaybackSession session = null;
         try {
@@ -69,7 +71,10 @@ public final class MatCarrierDiagnosticActivity extends Activity {
                 if (!MatCarrierPlayer.validCarrier(bytes, offset, MatCarrierPlayer.CYCLE_BYTES))
                     throw new IllegalStateException("Invalid carrier at byte " + offset);
             String selectedSha256 = digest(Arrays.copyOfRange(bytes, first, bytes.length));
-            int count = (bytes.length - first) / MatCarrierPlayer.CYCLE_BYTES;
+            int recordedCycles = (bytes.length - first) / MatCarrierPlayer.CYCLE_BYTES;
+            if (seconds < 0 || seconds > 1800) throw new IllegalArgumentException("Invalid replay duration");
+            int count = seconds == 0 ? recordedCycles : seconds * 50;
+            MessageDigest replayDigest = MessageDigest.getInstance("SHA-256");
             result.put("sample", sample).put("sourceSha256", sourceSha256).put("skipCycles", skip)
                     .put("selectedSha256", selectedSha256).put("cycles", count)
                     .put("receiverAtmosVerified", false).put("startedAtMs", System.currentTimeMillis());
@@ -78,17 +83,25 @@ public final class MatCarrierDiagnosticActivity extends Activity {
                     "\nPlaying " + (count * .02) + " seconds\nReceiver Atmos recognition is not measured here.");
             session = new MatPlaybackSession(new MatAudioTrackSink(this), true);
             byte[] cycle = new byte[MatCarrierPlayer.CYCLE_BYTES];
+            long nextCycle = System.nanoTime();
             for (int index = 0; index < count; index++) {
                 if (Thread.currentThread().isInterrupted()) throw new InterruptedException("Diagnostic cancelled");
-                System.arraycopy(bytes, first + index * cycle.length, cycle, 0, cycle.length);
+                if (seconds > 0) {
+                    TimeUnit.NANOSECONDS.sleep(nextCycle - System.nanoTime());
+                    nextCycle += TimeUnit.MILLISECONDS.toNanos(20);
+                }
+                System.arraycopy(bytes, first + (index % recordedCycles) * cycle.length, cycle, 0, cycle.length);
+                if (seconds > 0) replayDigest.update(cycle);
                 if (!session.offerMatCycle(cycle, cycle.length, 1, 1, index, index * 960L))
                     throw new IllegalStateException(session.player().error());
             }
             if (!session.endMatStream(count)) throw new IllegalStateException(session.player().error());
             MatCarrierPlayer player = session.player();
             result.put("submittedSha256", player.submittedSha256()).put("writtenCycles", player.writtenCycles())
-                    .put("submittedBytes", player.submittedBytes()).put("state", player.state().name());
-            if (!selectedSha256.equals(player.submittedSha256()))
+                    .put("submittedBytes", player.submittedBytes()).put("state", player.state().name())
+                    .put("maxCopyUs", player.maxCopyUs()).put("maxEnqueueUs", player.maxEnqueueUs());
+            String expectedSubmission = seconds == 0 ? selectedSha256 : MatCarrierPlayer.hex(replayDigest.digest());
+            if (!expectedSubmission.equals(player.submittedSha256()))
                 throw new IllegalStateException("Submitted bytes differ from selected sample");
             result.put("result", "PLAYED_BYTE_EXACT");
         } catch (Exception e) {
@@ -96,6 +109,12 @@ public final class MatCarrierDiagnosticActivity extends Activity {
             catch (Exception ignored) { }
         } finally {
             if (session != null) {
+                MatCarrierPlayer player = session.player();
+                try {
+                    result.put("acceptedCycles", player.receivedCycles()).put("peakQueue", player.peakQueue())
+                            .put("writtenCycles", player.writtenCycles()).put("submittedBytes", player.submittedBytes())
+                            .put("primedFrames", player.primedFrames()).put("maxEnqueueUs", player.maxEnqueueUs());
+                } catch (Exception ignored) { }
                 try { session.close(); }
                 catch (Exception e) {
                     try { result.put("result", "FAILED").put("closeError", e.toString()); }

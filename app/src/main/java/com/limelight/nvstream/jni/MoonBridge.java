@@ -120,6 +120,8 @@ public class MoonBridge {
     public static final int ML_ERROR_UNEXPECTED_EARLY_TERMINATION = -102;
     public static final int ML_ERROR_PROTECTED_CONTENT = -103;
     public static final int ML_ERROR_FRAME_CONVERSION = -104;
+    public static final int ML_ERROR_MAT_ENCODER_MISSING = -107;
+    public static final int ML_ERROR_MAT_ENCODER_INCOMPATIBLE = -108;
 
     public static final int ML_PORT_INDEX_TCP_47984 = 0;
     public static final int ML_PORT_INDEX_TCP_47989 = 1;

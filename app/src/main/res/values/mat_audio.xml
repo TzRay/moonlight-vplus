@@ -2,4 +2,6 @@
 <resources>
     <string name="audio_codec_mat_live">MAT / Atmos (experimental, HDMI)</string>
     <string name="summary_audio_codec_mat_live">Requires a compatible Sunshine MAT capture source and HDMI audio output. Hosts without MAT use Opus; unsupported playback devices fail the connection. Reconnect to apply. Audio effects and spatialization are bypassed.</string>
+    <string name="mat_host_encoder_missing">The MAT capture component is missing on the Sunshine host.</string>
+    <string name="mat_host_encoder_incompatible">The host audio engine or Dolby Access version is incompatible with this MAT capture component.</string>
 </resources>

@@ -5,6 +5,7 @@ import android.media.AudioAttributes;
 import android.media.AudioDeviceInfo;
 import android.media.AudioFormat;
 import android.media.AudioManager;
+import android.media.AudioRouting;
 import android.media.AudioTrack;
 import android.media.AudioTimestamp;
 import android.os.Build;
@@ -12,6 +13,8 @@ import androidx.annotation.RequiresApi;
 import com.limelight.LimeLog;
 import com.limelight.nvstream.jni.MoonBridge;
 import java.util.Arrays;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /** IEC only. No legacy PCM fallback, DSP, resampler, spatializer or TrueHD repacking. */
 @RequiresApi(Build.VERSION_CODES.N)
@@ -21,9 +24,12 @@ public final class MatAudioTrackSink implements MatCarrierPlayer.Sink {
     private long wraps, previousLow;
     private int routeId = -1;
     private long nextRouteCheck;
+    private final AtomicBoolean routeChanged = new AtomicBoolean(true);
+    private final AudioRouting.OnRoutingChangedListener routingListener = ignored -> routeChanged.set(true);
+    private int routeQueries;
     private long nextProgressLog;
     private long submittedFrames, firstWriteTime, lastWriteTime;
-    private long maxWriteGap, maxWriteCall;
+    private long maxWriteGap, maxWriteCall, maxRouteQuery;
     private long minimumQueued = Long.MAX_VALUE, maximumQueued;
     private long previousProgressTime, previousSubmitted, previousPlayed;
     private long startThresholdFrames, playTime, firstHeadTime;
@@ -42,38 +48,65 @@ public final class MatAudioTrackSink implements MatCarrierPlayer.Sink {
         return new AudioFormat.Builder().setEncoding(AudioFormat.ENCODING_IEC61937)
                 .setSampleRate(MatCarrierPlayer.RATE).setChannelMask(AudioFormat.CHANNEL_OUT_7POINT1_SURROUND).build();
     }
-    @Override public void prepare() {
+    @Override public String preparationDetail() { return diagnostics; }
+    @Override public void prepare() throws InterruptedException {
         if (closed || track != null) throw new IllegalStateException("MAT sink cannot be reused");
         MoonBridge.bridgeMatAudioThreadStart(2);
-        int min = AudioTrack.getMinBufferSize(MatCarrierPlayer.RATE,
-                AudioFormat.CHANNEL_OUT_7POINT1_SURROUND, AudioFormat.ENCODING_IEC61937);
-        if (min <= 0) throw new IllegalStateException("192kHz/7.1/IEC61937 unsupported: " + min);
-        int direct = -1;
-        if (Build.VERSION.SDK_INT >= 33) {
-            direct = AudioManager.getDirectPlaybackSupport(format(), attributes());
-            if ((direct & AudioManager.DIRECT_PLAYBACK_BITSTREAM_SUPPORTED) == 0)
-                throw new IllegalStateException("Route does not advertise IEC bitstream playback: " + direct);
+        AudioManager manager = (AudioManager)context.getSystemService(Context.AUDIO_SERVICE);
+        if (manager == null) throw new IllegalStateException("AudioManager unavailable");
+        long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(MatPlaybackSession.HDMI_READY_TIMEOUT_MS);
+        long openStart = System.nanoTime();
+        diagnostics = "waiting for Android HDMI output";
+        int min, buffer, direct;
+        try (MatHdmiDevices devices = new MatHdmiDevices(manager)) {
+            long revision = devices.availability.await(-1, deadline);
+            if (revision < 0) throw new IllegalStateException(diagnostics);
+            for (;;) {
+                min = AudioTrack.getMinBufferSize(MatCarrierPlayer.RATE,
+                        AudioFormat.CHANNEL_OUT_7POINT1_SURROUND, AudioFormat.ENCODING_IEC61937);
+                if (min <= 0) throw new IllegalStateException("192kHz/7.1/IEC61937 unsupported: " + min);
+                direct = -1;
+                if (Build.VERSION.SDK_INT >= 33) {
+                    direct = AudioManager.getDirectPlaybackSupport(format(), attributes());
+                    if ((direct & AudioManager.DIRECT_PLAYBACK_BITSTREAM_SUPPORTED) == 0)
+                        throw new IllegalStateException("Route does not advertise IEC bitstream playback: " + direct);
+                }
+                long cycles = Math.max(2L, (min + (long)MatCarrierPlayer.CYCLE_BYTES - 1) / MatCarrierPlayer.CYCLE_BYTES);
+                if (cycles > 16) throw new IllegalStateException("IEC minimum exceeds 320ms diagnostic limit");
+                buffer = (int)cycles * MatCarrierPlayer.CYCLE_BYTES;
+                diagnostics = "opening Android HDMI AudioTrack";
+                try {
+                    track = new AudioTrack.Builder().setAudioAttributes(attributes()).setAudioFormat(format())
+                            .setTransferMode(AudioTrack.MODE_STREAM).setBufferSizeInBytes(buffer).build();
+                    break;
+                } catch (UnsupportedOperationException e) {
+                    diagnostics = "IEC AudioTrack open failed: " + e + "; waiting for HDMI device change";
+                    LimeLog.warning(diagnostics);
+                    // An actual topology change can make a cold-open failure recoverable.
+                    // Unchanged capabilities do not justify opening the same track repeatedly.
+                    revision = devices.availability.await(revision, deadline);
+                    if (revision < 0) throw new IllegalStateException(diagnostics, e);
+                }
+            }
         }
-        long cycles = Math.max(2L, (min + (long)MatCarrierPlayer.CYCLE_BYTES - 1) / MatCarrierPlayer.CYCLE_BYTES);
-        // A huge vendor minimum is not silently accepted as a low-latency route.
-        if (cycles > 16) throw new IllegalStateException("IEC minimum exceeds 320ms diagnostic limit");
-        int buffer = (int) cycles * MatCarrierPlayer.CYCLE_BYTES;
-        track = new AudioTrack.Builder().setAudioAttributes(attributes()).setAudioFormat(format())
-                .setTransferMode(AudioTrack.MODE_STREAM).setBufferSizeInBytes(buffer).build();
+        long openUs = (System.nanoTime() - openStart) / 1000;
         if (track.getState() != AudioTrack.STATE_INITIALIZED) throw new IllegalStateException("IEC track not initialized");
+        track.addOnRoutingChangedListener(routingListener, null);
         track.pause(); track.flush();
         wraps = previousLow = 0;
         // Encoded audio must stop on focus loss instead of ducking the bitstream.
-        AudioManager manager = (AudioManager)context.getSystemService(Context.AUDIO_SERVICE);
+        long focusStart = System.nanoTime();
         focusLost = false;
-        if (manager == null || manager.requestAudioFocus(focusListener, AudioManager.STREAM_MUSIC,
+        if (manager.requestAudioFocus(focusListener, AudioManager.STREAM_MUSIC,
                 AudioManager.AUDIOFOCUS_GAIN_TRANSIENT) != AudioManager.AUDIOFOCUS_REQUEST_GRANTED)
             throw new IllegalStateException("MAT audio focus denied");
+        long focusUs = (System.nanoTime() - focusStart) / 1000;
         // IEC61937 has proportional 16-bit carrier frames, unlike AC3's byte units.
         // Older platforms expose capacity but not an explicit start threshold.
         startThresholdFrames = Build.VERSION.SDK_INT >= 31 ? track.getStartThresholdInFrames() :
                 track.getBufferSizeInFrames();
         diagnostics = "IEC61937 192000Hz 7.1; requestedBuffer=" + buffer +
+                "; openUs=" + openUs + "; focusUs=" + focusUs +
                 "; minimumBufferBytes=" + min + "; actualBufferFrames=" + track.getBufferSizeInFrames() +
                 "; capacityFrames=" + track.getBufferCapacityInFrames() +
                 "; primeTargetCarrierFrames=" + startThresholdFrames +
@@ -86,10 +119,11 @@ public final class MatAudioTrackSink implements MatCarrierPlayer.Sink {
     @Override public void play() {
         if (closed || track == null || playTime != 0) throw new IllegalStateException("Invalid MAT play transition");
         checkRoute();
+        long playCallStart = System.nanoTime();
         track.play();
         playTime = System.nanoTime();
         LimeLog.info("MAT IEC play: primedCarrierFrames=" + submittedFrames +
-                "; primeTargetCarrierFrames=" + startThresholdFrames +
+                "; primeTargetCarrierFrames=" + startThresholdFrames + "; playCallUs=" + (playTime - playCallStart) / 1000 +
                 "; firstWriteToPlayUs=" + (firstWriteTime == 0 ? -1 : (playTime - firstWriteTime) / 1000));
     }
     private volatile boolean focusLost;
@@ -99,25 +133,33 @@ public final class MatAudioTrackSink implements MatCarrierPlayer.Sink {
     private void checkRoute() {
         if (focusLost) throw new IllegalStateException("MAT audio focus lost");
         long now = System.nanoTime();
-        if (now < nextRouteCheck) return;
-        nextRouteCheck = now + 50_000_000;
+        // A stable HDMI route took 295 ms to query under load. Validate at startup
+        // and again on Android's route notification. Retry while the device is unknown.
+        if (routeChanged.getAndSet(false) || now >= nextRouteCheck) {
+            validateRoute(now);
+        }
+        if (routeId != -1 && now >= nextProgressLog) {
+            logProgress("progress");
+            nextProgressLog = now + 5_000_000_000L;
+        }
+    }
+    private void validateRoute(long now) {
         AudioDeviceInfo device = track.getRoutedDevice();
-        // Routing can be unknown until the first write; wait for a real route.
-        if (device == null) return;
+        routeQueries++;
+        maxRouteQuery = Math.max(maxRouteQuery, System.nanoTime() - now);
+        if (device == null) {
+            nextRouteCheck = now + 50_000_000;
+            return;
+        }
         int type = device.getType();
-        boolean hdmi = type == AudioDeviceInfo.TYPE_HDMI || type == AudioDeviceInfo.TYPE_HDMI_ARC ||
-                (Build.VERSION.SDK_INT >= 31 && type == AudioDeviceInfo.TYPE_HDMI_EARC);
-        if (!hdmi) throw new IllegalStateException("Refusing MAT on non-HDMI output: " + type);
+        if (!MatHdmiDevices.isHdmi(type)) throw new IllegalStateException("Refusing MAT on non-HDMI output: " + type);
         if (routeId != -1 && routeId != device.getId()) throw new IllegalStateException("MAT HDMI route changed; reconnect");
         if (routeId == -1) {
             LimeLog.info("MAT IEC routed device: id=" + device.getId() + "; type=" + type +
                     "; name=" + device.getProductName() + "; encodings=" + Arrays.toString(device.getEncodings()));
         }
         routeId = device.getId();
-        if (now >= nextProgressLog) {
-            logProgress("progress");
-            nextProgressLog = now + 5_000_000_000L;
-        }
+        nextRouteCheck = Long.MAX_VALUE;
     }
     private void logProgress(String phase) {
         long now = System.nanoTime();
@@ -142,7 +184,8 @@ public final class MatAudioTrackSink implements MatCarrierPlayer.Sink {
                 "; minQueuedCarrierFrames=" + (minimumQueued == Long.MAX_VALUE ? queued : minimumQueued) +
                 "; maxQueuedCarrierFrames=" + maximumQueued +
                 "; maxWriteGapUs=" + maxWriteGap / 1000 +
-                "; maxWriteCallUs=" + maxWriteCall / 1000 +
+                "; maxWriteCallUs=" + maxWriteCall / 1000 + "; maxRouteQueryUs=" + maxRouteQuery / 1000 +
+                "; routeQueries=" + routeQueries +
                 "; elapsedUs=" + (firstWriteTime == 0 ? 0 : (now - firstWriteTime) / 1000) +
                 "; submittedFps=" + (hasInterval ? (submittedFrames - previousSubmitted) / seconds : 0) +
                 "; playedFps=" + (hasInterval ? (played - previousPlayed) / seconds : 0) +
@@ -154,12 +197,14 @@ public final class MatAudioTrackSink implements MatCarrierPlayer.Sink {
         previousProgressTime = now; previousSubmitted = submittedFrames; previousPlayed = played;
         previousUnderruns = underruns;
         minimumQueued = Long.MAX_VALUE; maximumQueued = 0;
-        maxWriteGap = maxWriteCall = 0;
+        maxWriteGap = maxWriteCall = maxRouteQuery = 0;
     }
     @Override public int write(short[] words, int offset, int count) {
         checkRoute();
         long before = System.nanoTime();
         int written = track.write(words, offset, count, AudioTrack.WRITE_NON_BLOCKING);
+        if (written == AudioTrack.ERROR_DEAD_OBJECT)
+            throw new IllegalStateException("HDMI AudioTrack invalidated by Android (ERROR_DEAD_OBJECT -6)");
         long now = System.nanoTime();
         maxWriteCall = Math.max(maxWriteCall, now - before);
         if (written > 0) {
@@ -200,7 +245,10 @@ public final class MatAudioTrackSink implements MatCarrierPlayer.Sink {
         closed = true;
         try {
             if (track != null) {
-                try { logProgress("closing"); track.pause(); track.flush(); } finally {
+                try {
+                    track.removeOnRoutingChangedListener(routingListener);
+                    logProgress("closing"); track.pause(); track.flush();
+                } finally {
                     timestampValid = false;
                     try { track.release(); } finally { track = null; }
                 }

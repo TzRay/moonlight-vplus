@@ -12,6 +12,37 @@ import static org.junit.Assert.*;
 
 /** Real player/session with a fake final audio device; no Dolby fixture or hardware. */
 public class MatCarrierPlayerTest {
+    @Test(timeout = 3000) public void hdmiOpenWaitsForAnActualOutputAndIgnoresDuplicateNotifications() throws Exception {
+        MatHdmiDevices.Availability state = new MatHdmiDevices.Availability();
+        assertEquals(-1, state.await(-1, System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(10)));
+        state.update(new int[]{13}, false);
+        long first = state.await(-1, System.nanoTime() + TimeUnit.SECONDS.toNanos(1));
+        assertTrue(first > 0);
+        state.update(new int[]{13}, false);
+        assertEquals(-1, state.await(first, System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(10)));
+        state.update(new int[0], true);
+        java.util.concurrent.FutureTask<Long> wait = new java.util.concurrent.FutureTask<>(
+                () -> state.await(first, System.nanoTime() + TimeUnit.SECONDS.toNanos(1)));
+        new Thread(wait).start();
+        assertFalse(wait.isDone());
+        state.update(new int[]{13}, false); // Android may reuse the old device ID.
+        assertTrue(wait.get(1, TimeUnit.SECONDS) > first);
+        assertEquals(-1, state.await(-1, System.nanoTime() - 1));
+    }
+
+    @Test(timeout = 3000) public void cancellingHdmiWaitDoesNotOpenAnOutputLater() throws Exception {
+        MatHdmiDevices.Availability state = new MatHdmiDevices.Availability();
+        java.util.concurrent.FutureTask<Boolean> wait = new java.util.concurrent.FutureTask<>(() -> {
+            try {
+                state.await(-1, System.nanoTime() + TimeUnit.SECONDS.toNanos(8));
+                return false;
+            } catch (InterruptedException expected) { return true; }
+        });
+        Thread thread = new Thread(wait);
+        thread.start();
+        thread.interrupt();
+        assertTrue(wait.get(1, TimeUnit.SECONDS));
+    }
     private static class Sink implements MatCarrierPlayer.Sink {
         final ByteArrayOutputStream accepted = new ByteArrayOutputStream();
         final CountDownLatch entered = new CountDownLatch(1);
@@ -170,6 +201,81 @@ public class MatCarrierPlayerTest {
             assertTrue(offer(player, bytes, 0));
             assertFalse(player.offerMatCycle(bytes, bytes.length, 3, 2, 1, 960));
             assertEquals(MatCarrierPlayer.State.FAILED, player.state());
+        }
+    }
+
+    @Test(timeout = 5000) public void coldHdmiPlayCanHoldTheWriterWhileLiveCyclesArrive() throws Exception {
+        CountDownLatch starting = new CountDownLatch(1), allowPlay = new CountDownLatch(1);
+        CountDownLatch playReturned = new CountDownLatch(1), allowConsumption = new CountDownLatch(1);
+        PrimingSink sink = new PrimingSink(MatCarrierPlayer.FRAMES_PER_CYCLE, true) {
+            @Override public void play() {
+                starting.countDown();
+                try {
+                    if (!allowPlay.await(2, TimeUnit.SECONDS)) throw new IllegalStateException("test did not release HDMI");
+                } catch (InterruptedException e) { Thread.currentThread().interrupt(); throw new IllegalStateException(e); }
+                super.play();
+            }
+            @Override public int write(short[] words, int offset, int count) {
+                if (playing && allowConsumption.getCount() != 0) {
+                    playReturned.countDown();
+                    return 0;
+                }
+                return super.write(words, offset, count);
+            }
+            @Override public long playedFrames() { return allowConsumption.getCount() != 0 ? 0 : super.playedFrames(); }
+        };
+        try (MatPlaybackSession session = new MatPlaybackSession(sink, true)) {
+            ByteArrayOutputStream expected = new ByteArrayOutputStream();
+            try {
+                for (int i = 0; i < 13; i++) {
+                    byte[] frame = carrier(i);
+                    assertTrue(offer(session.player(), frame, i));
+                    expected.write(frame);
+                    if (i == 0) assertTrue(starting.await(1, TimeUnit.SECONDS));
+                    if (i == 6) {
+                        allowPlay.countDown();
+                        assertTrue(playReturned.await(1, TimeUnit.SECONDS));
+                    }
+                }
+            } finally { allowPlay.countDown(); allowConsumption.countDown(); }
+            assertTrue(session.endMatStream(13));
+            assertEquals(1, sink.playCalls);
+            assertArrayEquals(expected.toByteArray(), sink.accepted.toByteArray());
+        }
+    }
+
+    @Test(timeout = 5000) public void playingTrackKeepsItsQueuedCyclesAcrossALongDeviceWrite() throws Exception {
+        CountDownLatch stall = new CountDownLatch(1), enteredWrite = new CountDownLatch(1), resume = new CountDownLatch(1);
+        PrimingSink sink = new PrimingSink(MatCarrierPlayer.FRAMES_PER_CYCLE, true) {
+            @Override public int write(short[] words, int offset, int count) {
+                if (stall.getCount() == 0) {
+                    enteredWrite.countDown();
+                    try {
+                        if (!resume.await(2, TimeUnit.SECONDS)) throw new IllegalStateException("test did not release write");
+                    } catch (InterruptedException e) { Thread.currentThread().interrupt(); throw new IllegalStateException(e); }
+                }
+                return super.write(words, offset, count);
+            }
+        };
+        try (MatPlaybackSession session = new MatPlaybackSession(sink, true)) {
+            ByteArrayOutputStream expected = new ByteArrayOutputStream();
+            try {
+                for (int i = 0; i < 16; i++) {
+                    byte[] frame = carrier(i);
+                    assertTrue(offer(session.player(), frame, i));
+                    expected.write(frame);
+                    if (i == 0) {
+                        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(1);
+                        while (session.player().firstPlayedNanos() == 0 && System.nanoTime() < deadline) Thread.sleep(1);
+                        assertTrue(session.player().firstPlayedNanos() != 0);
+                        stall.countDown();
+                    }
+                    if (i == 1) assertTrue(enteredWrite.await(1, TimeUnit.SECONDS));
+                }
+            } finally { resume.countDown(); }
+            assertTrue(session.endMatStream(16));
+            assertEquals(1, sink.playCalls);
+            assertArrayEquals(expected.toByteArray(), sink.accepted.toByteArray());
         }
     }
 
@@ -336,6 +442,18 @@ public class MatCarrierPlayerTest {
             Thread.interrupted();
             player.close();
         }
+    }
+
+    @Test(timeout = 8000) public void slowHdmiInitializationCompletesInsideTheRecoveryWindow() throws Exception {
+        Sink sink = new Sink() {
+            @Override public void prepare() throws Exception { Thread.sleep(3500); super.prepare(); }
+        };
+        try (MatPlaybackSession session = new MatPlaybackSession(sink)) {
+            assertTrue(sink.prepared);
+            assertEquals(0, session.player().receivedCycles());
+            assertFalse(sink.playing);
+        }
+        assertTrue(sink.closed);
     }
 
     @Test(timeout = 5000) public void setupIsReadyWithoutWaitingForPayloadOrStartingPlayback() throws Exception {

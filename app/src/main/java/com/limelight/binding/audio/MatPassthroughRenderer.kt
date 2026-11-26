@@ -33,7 +33,7 @@ class MatPassthroughRenderer(private val context: Context) : AudioRenderer, MatC
         session?.let { current ->
             current.close()
             val player = current.player()
-            LimeLog.info("MAT IEC final state=${player.state()} received=${player.receivedCycles()} written=${player.writtenCycles()} submittedBytes=${player.submittedBytes()} peakQueue=${player.peakQueue()} error=${player.error()}")
+            LimeLog.info("MAT IEC final state=${player.state()} received=${player.receivedCycles()} written=${player.writtenCycles()} submittedBytes=${player.submittedBytes()} peakQueue=${player.peakQueue()} maxCopyUs=${player.maxCopyUs()} maxEnqueueUs=${player.maxEnqueueUs()} error=${player.error()}")
             LimeLog.info("MAT IEC startup: firstPayloadNanos=${player.firstPayloadNanos()} playNanos=${player.playNanos()} firstObservedHeadNanos=${player.firstPlayedNanos()} primedCarrierFrames=${player.primedFrames()}")
         }
         session = null

@@ -9,9 +9,14 @@ import java.util.concurrent.TimeUnit;
 public final class MatCarrierPlayer implements MatCarrierConsumer, AutoCloseable {
     public static final int CYCLE_BYTES = 61440, RATE = 192000, CHANNELS = 8;
     public static final int FRAMES_PER_CYCLE = 3840;
+    // SHIELD can spend 232 ms in one nonblocking HDMI write under 4K60 load.
+    // 16 carrier periods absorb that stall without blocking the RTP consumer.
+    // The writer polls immediately; capacity is not a playback start threshold.
+    private static final int OUTPUT_QUEUE_CYCLES = 16;
     public interface Sink extends AutoCloseable {
         /** Open a paused track. Must not wait for input, which arrives after setup returns. */
         void prepare() throws Exception;
+        default String preparationDetail() { return ""; }
         /** Carrier frames needed before play, or zero to prime until a short write. */
         default long startThresholdFrames() { return 0; }
         void play() throws Exception;
@@ -41,6 +46,7 @@ public final class MatCarrierPlayer implements MatCarrierConsumer, AutoCloseable
     private volatile String error = "", submittedSha256 = "";
     private volatile long receivedCycles, writtenCycles, submittedBytes;
     private volatile int peakQueue;
+    private volatile long maxCopyNanos, maxEnqueueNanos;
     private volatile long firstPayloadNanos, playNanos, firstPlayedNanos, primedFrames;
     private long lastHead, nextHeadCheck;
     private long stallSince;
@@ -66,12 +72,12 @@ public final class MatCarrierPlayer implements MatCarrierConsumer, AutoCloseable
     private long epoch, domain;
 
     public MatCarrierPlayer(Sink sink) { this(sink, false); }
-    MatCarrierPlayer(Sink sink, boolean verifyWrites) { this(sink, 4, 1000, 3000, verifyWrites); }
+    MatCarrierPlayer(Sink sink, boolean verifyWrites) { this(sink, OUTPUT_QUEUE_CYCLES, 1000, 3000, verifyWrites); }
     public MatCarrierPlayer(Sink sink, int capacity, long stallMs, long drainMs) {
         this(sink, capacity, stallMs, drainMs, false);
     }
     private MatCarrierPlayer(Sink sink, int capacity, long stallMs, long drainMs, boolean verifyWrites) {
-        if (sink == null || capacity < 1 || capacity > 16 || stallMs < 1 || drainMs < 1)
+        if (sink == null || capacity < 1 || capacity > OUTPUT_QUEUE_CYCLES || stallMs < 1 || drainMs < 1)
             throw new IllegalArgumentException("Invalid MAT output bounds");
         this.sink = sink;
         this.verifyWrites = verifyWrites;
@@ -101,11 +107,14 @@ public final class MatCarrierPlayer implements MatCarrierConsumer, AutoCloseable
                 (receivedCycles != 0 && (e != epoch || d != domain))) return fail("Invalid MAT cycle metadata");
         Slot slot = free.poll();
         if (slot == null) return fail("MAT buffer pool exhausted");
+        long copyStart = System.nanoTime();
         if (verifyWrites) System.arraycopy(b, 0, slot.diagnosticBytes, 0, CYCLE_BYTES);
         // Lossless little-endian reinterpretation, NOT another IEC byte swap.
         for (int i = 0; i < slot.words.length; i++)
             slot.words[i] = (short) ((b[2 * i] & 255) | ((b[2 * i + 1] & 255) << 8));
         boolean queued;
+        long enqueueStart = System.nanoTime();
+        maxCopyNanos = Math.max(maxCopyNanos, enqueueStart - copyStart);
         try {
             if (receivedCycles == 0) firstPayloadNanos = System.nanoTime();
             // The native decoder is separate from UDP reception. Let the device
@@ -116,7 +125,11 @@ public final class MatCarrierPlayer implements MatCarrierConsumer, AutoCloseable
             Thread.currentThread().interrupt();
             return fail("MAT enqueue interrupted");
         }
-        if (!queued) { free.add(slot); return fail("MAT output queue overflow"); }
+        maxEnqueueNanos = Math.max(maxEnqueueNanos, System.nanoTime() - enqueueStart);
+        if (!queued) {
+            free.add(slot);
+            return fail("MAT output queue overflow");
+        }
         epoch = e; domain = d; receivedCycles++;
         peakQueue = Math.max(peakQueue, pending.size());
         return true;
@@ -240,6 +253,8 @@ public final class MatCarrierPlayer implements MatCarrierConsumer, AutoCloseable
     public State state() { return state; }
     public String error() { return error; }
     public String submittedSha256() { return submittedSha256; }
+    public long maxCopyUs() { return TimeUnit.NANOSECONDS.toMicros(maxCopyNanos); }
+    public long maxEnqueueUs() { return TimeUnit.NANOSECONDS.toMicros(maxEnqueueNanos); }
     public long submittedBytes() { return submittedBytes; }
     public long receivedCycles() { return receivedCycles; }
     public long writtenCycles() { return writtenCycles; }

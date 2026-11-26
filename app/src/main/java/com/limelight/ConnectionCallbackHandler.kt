@@ -39,9 +39,14 @@ class ConnectionCallbackHandler(private val game: Game) {
     }
 
     fun stageFailed(stage: String, portFlags: Int, errorCode: Int, connection: NvConnection) {
+        val matFailure = when (errorCode) {
+            MoonBridge.ML_ERROR_MAT_ENCODER_MISSING -> R.string.mat_host_encoder_missing
+            MoonBridge.ML_ERROR_MAT_ENCODER_INCOMPATIBLE -> R.string.mat_host_encoder_incompatible
+            else -> null
+        }
         // Perform a connection test if the failure could be due to a blocked port
         // This does network I/O, so don't do it on the main thread.
-        val portTestResult = MoonBridge.testClientConnectivity(
+        val portTestResult = if (matFailure != null) MoonBridge.ML_TEST_RESULT_INCONCLUSIVE else MoonBridge.testClientConnectivity(
             ServerHelper.CONNECTION_TEST_SERVER, 443, portFlags
         )
 
@@ -64,8 +69,9 @@ class ConnectionCallbackHandler(private val game: Game) {
 
                 var dialogText = game.resources.getString(R.string.conn_error_msg) +
                         " " + stage + " (error " + errorCode + ")"
+                if (matFailure != null) dialogText += "\n\n" + game.getString(matFailure)
 
-                if (portFlags != 0) {
+                if (portFlags != 0 && matFailure == null) {
                     dialogText += "\n\n" + game.resources.getString(R.string.check_ports_msg) + "\n" +
                             MoonBridge.stringifyPortFlags(portFlags, "\n")
                 }
