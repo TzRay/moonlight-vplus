@@ -111,11 +111,10 @@ class PcmPassthroughRenderer(
             return 0
         } catch (e: Exception) {
             LimeLog.severe("PcmPassthroughRenderer: AudioTrack create failed: ${e.message}")
-            systemAudioHaptics.detach()
-            try {
-                track?.release()
-            } catch (_: Exception) {}
+            val failedTrack = track
             track = null
+            audioCleanup("detach haptics") { systemAudioHaptics.detach() }
+            audioCleanup("release") { failedTrack?.release() }
             return -2
         }
     }
@@ -126,14 +125,12 @@ class PcmPassthroughRenderer(
 
     override fun stop() {
         stopped = true
-        try {
-            systemAudioHaptics.detach()
-            pauseProcessing()
-        } catch (_: Exception) {}
+        audioCleanup("detach haptics") { systemAudioHaptics.detach() }
+        pauseProcessing()
     }
 
     fun pauseProcessing() {
-        writes.pause({ track?.pause() }, { track?.flush() })
+        writes.pause({ interruptAudioWrite(track) }, { audioCleanup("flush") { track?.flush() } })
     }
 
     fun resumeProcessing() {
@@ -174,13 +171,12 @@ class PcmPassthroughRenderer(
 
     override fun cleanup() {
         stopped = true
-        try {
-            systemAudioHaptics.close()
-            pauseProcessing()
-            track?.stop()
-            track?.release()
-        } catch (_: Exception) {}
-        track = null
+        val output = track
+        audioCleanup("close haptics") { systemAudioHaptics.close() }
+        writes.pause({ interruptAudioWrite(output) }, {
+            track = null
+            releaseAudioOutput(flush = { output?.flush() }, release = { output?.release() }, stop = { output?.stop() })
+        })
     }
 
     private fun channelMaskToString(channelMask: Int): String {

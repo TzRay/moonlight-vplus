@@ -365,10 +365,7 @@ internal class BitrateCardController(
         game.prefConfig.abrMode = mode
         game.prefConfig.writeDisplayPreferences(game)
         if (game.prefConfig.enableAdaptiveBitrate) {
-            unbindAbrListener()
-            game.stopAdaptiveBitrate()
-            game.startAdaptiveBitrateIfEnabled()
-            bindAbrListener()
+            game.adaptiveBitrateService?.setMode(mode)
         }
         state = createState(conn.currentBitrate)
         emitState()

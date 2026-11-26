@@ -81,7 +81,7 @@ class Ac3Iec61937Renderer(private val encodedBufferBytes: Int) : AudioRenderer {
     }
 
     fun pauseProcessing() {
-        writes.pause({ track?.pause() }, { track?.flush() })
+        writes.pause({ interruptAudioWrite(track) }, { audioCleanup("flush") { track?.flush() } })
     }
 
     fun resumeProcessing() {
@@ -93,11 +93,14 @@ class Ac3Iec61937Renderer(private val encodedBufferBytes: Int) : AudioRenderer {
     }
 
     override fun stop() {
-        try { writes.pause({ track?.pause() }, { track?.flush(); packetizer.reset() }) } catch (_: Exception) {}
+        writes.pause({ interruptAudioWrite(track) }, {
+            audioCleanup("flush") { track?.flush() }
+            packetizer.reset()
+        })
     }
     override fun cleanup() {
         stop()
-        try { track?.release() } catch (_: Exception) {}
+        audioCleanup("release") { track?.release() }
         track = null
     }
 }
