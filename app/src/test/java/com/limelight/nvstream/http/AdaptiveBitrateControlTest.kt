@@ -148,6 +148,36 @@ class AdaptiveBitrateControlTest {
         }
     }
 
+    @Test fun newlyEnabledControllerTakesBaselineAfterThePreviousRestore() {
+        val worker = ScheduledThreadPoolExecutor(1)
+        val host = FakeHost(2)
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        var actualRate = 20000
+        fun service() = AdaptiveBitrateService({ host }, { null }, { rate, _ -> actualRate = rate },
+            executor = worker, shutdownExecutorOnStop = false)
+        try {
+            val old = service()
+            old.start(actualRate, "balanced") { actualRate }
+            assertTrue(old.setManualBitrate(35000) { assertTrue(it) })
+            worker.submit { entered.countDown(); check(release.await(5, TimeUnit.SECONDS)) }
+            assertTrue(entered.await(5, TimeUnit.SECONDS))
+            old.stop()
+            val replacement = service()
+            replacement.start(actualRate, "quality") { actualRate }
+            release.countDown()
+            worker.submit {}.get(5, TimeUnit.SECONDS)
+            assertEquals(listOf(35000, 20000), host.writes)
+            assertEquals(actualRate, replacement.currentBitrate)
+            assertEquals(20000, replacement.currentBitrate)
+            replacement.stop()
+        } finally {
+            release.countDown()
+            worker.shutdown()
+            assertTrue(worker.awaitTermination(5, TimeUnit.SECONDS))
+        }
+    }
+
     @Test fun turningAbrOffAndOnOrdersFinalRestoreBeforeNewManualWrite() {
         val worker = ScheduledThreadPoolExecutor(1)
         val host = FakeHost(2)
