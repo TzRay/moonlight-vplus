@@ -339,6 +339,12 @@ int BridgeArInit(int audioConfiguration, POPUS_MULTISTREAM_CONFIGURATION opusCon
     err = (*env)->CallStaticIntMethod(env, GlobalBridgeClass, BridgeArInitMethod,
                                       audioConfiguration, opusConfig->sampleRate, opusConfig->samplesPerFrame,
                                       negotiatedCodec, negotiatedBitrate);
+    // MatPlaybackSession.CLEANUP_PENDING: the old Java writer still owns HDMI.
+    if (negotiatedCodec == AUDIO_CODEC_MAT_LIVE && err == -2001) {
+        MatAudioLifecycleFailed = true;
+        LiBlockMatAudioRecovery();
+        return err;
+    }
     if ((*env)->ExceptionCheck(env)) {
         // Ordinary init has a Java caller. MAT may also reinitialize on the native
         // recovery worker, so return failure with a clean JNI exception state.
@@ -380,13 +386,19 @@ int BridgeArInit(int audioConfiguration, POPUS_MULTISTREAM_CONFIGURATION opusCon
             }
             if (consumer) (*env)->DeleteLocalRef(env, consumer);
             if (!LiveMatBridge || (*env)->ExceptionCheck(env)) {
+                // Creation may already have cleared the JNI exception. A missing
+                // required consumer/method cannot confirm progress on this connection.
+                MatAudioLifecycleFailed = true;
+                LiBlockMatAudioRecovery();
                 ClearMatAudioLifecycleException(env, "consumer creation");
+                MatPlaybackBridgeDestroy(LiveMatBridge, env);
+                LiveMatBridge = NULL;
                 (*env)->CallStaticVoidMethod(env, GlobalBridgeClass, BridgeArCleanupMethod);
                 ClearMatAudioLifecycleException(env, "consumer cleanup");
                 return -1;
             }
             LI_MAT_PLAYBACK_CALLBACKS callbacks = {BridgeMatCycle, BridgeMatEnd, LiveMatBridge, BridgeMatThreadStart, BridgeMatProgress};
-            LiSetMatPlaybackCallbacks(&callbacks);
+            LiSetMatPlaybackCallbacksEx(&callbacks, sizeof(callbacks));
         } else {
             // Encoded passthrough (AC3 / E-AC3): skip Opus decoder, allocate raw byte buffer.
             Decoder = NULL;
@@ -418,7 +430,7 @@ void BridgeArCleanup() {
     JNIEnv* env = GetThreadEnv();
 
     // common-c has joined its audio workers before releasing this consumer.
-    LiSetMatPlaybackCallbacks(NULL);
+    LiSetMatPlaybackCallbacksEx(NULL, 0);
     MatPlaybackBridgeDestroy(LiveMatBridge, env);
     LiveMatBridge = NULL;
 
@@ -939,7 +951,7 @@ static AUDIO_RENDERER_CALLBACKS BridgeAudioRendererCallbacks = {
         .stop = BridgeArStop,
         .cleanup = BridgeArCleanup,
         .decodeAndPlaySample = BridgeArDecodeAndPlaySample,
-        .capabilities = CAPABILITY_SUPPORTS_ARBITRARY_AUDIO_DURATION
+        .capabilities = CAPABILITY_SUPPORTS_ARBITRARY_AUDIO_DURATION | CAPABILITY_MAT_PLAYBACK_PROGRESS
 };
 
 static CONNECTION_LISTENER_CALLBACKS BridgeConnListenerCallbacks = {

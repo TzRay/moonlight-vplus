@@ -16,13 +16,17 @@ class MatPassthroughRenderer(private val context: Context) : AudioRenderer, MatC
             LimeLog.warning("MAT IEC61937 output requires Android 7 or newer")
             return -1
         }
+        val cancelled = MoonBridge.matPreparationCancellation()
         return try {
-            session = MatPlaybackSession(MatAudioTrackSink(context))
+            session = MatPlaybackSession(MatAudioTrackSink(context), false, cancelled)
             LimeLog.info("MAT live output prepared: logical 48k/960, IEC61937 192k/8ch; awaiting authenticated payload")
             0
+        } catch (e: MatCarrierPlayer.CleanupPending) {
+            LimeLog.severe("MAT setup blocked by unfinished writer cleanup: " + e.message +
+                    " " + e.suppressed.contentToString())
+            MatPlaybackSession.CLEANUP_PENDING
         } catch (e: Exception) {
             if (e is InterruptedException) Thread.currentThread().interrupt()
-            cleanup()
             LimeLog.severe("MAT IEC setup failed: $e")
             -1
         }
@@ -31,12 +35,13 @@ class MatPassthroughRenderer(private val context: Context) : AudioRenderer, MatC
     override fun stop() { session?.close() }
     override fun cleanup() {
         session?.let { current ->
-            current.close()
             val player = current.player()
-            LimeLog.info("MAT IEC final state=${player.state()} received=${player.receivedCycles()} written=${player.writtenCycles()} submittedBytes=${player.submittedBytes()} peakQueue=${player.peakQueue()} maxCopyUs=${player.maxCopyUs()} maxEnqueueUs=${player.maxEnqueueUs()} error=${player.error()}")
+            try { current.close() } finally {
+                if (!player.writerAlive()) session = null
+            }
+            LimeLog.info("MAT IEC final state=${player.state()} received=${player.receivedCycles()} written=${player.writtenCycles()} submittedBytes=${player.submittedBytes()} peakQueue=${player.peakQueue()} maxCopyUs=${player.maxCopyUs()} maxEnqueueUs=${player.maxEnqueueUs()} drained=${player.drained()} error=${player.error()} closeError=${player.closeError()}")
             LimeLog.info("MAT IEC startup: firstPayloadNanos=${player.firstPayloadNanos()} playNanos=${player.playNanos()} firstObservedHeadNanos=${player.firstPlayedNanos()} primedCarrierFrames=${player.primedFrames()}")
         }
-        session = null
     }
     override fun playDecodedAudio(audioData: ShortArray) { error("MAT must not enter PCM callback") }
     override fun playEncodedAudio(audioData: ByteArray, length: Int) { error("MAT must not enter AC3 callback") }
