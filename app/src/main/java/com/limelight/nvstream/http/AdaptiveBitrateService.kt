@@ -108,16 +108,20 @@ class AdaptiveBitrateService(
      * 启动 ABR。会在后台线程探测服务端能力。
      * @param initialBitrate 当前码率（kbps），ABR 围绕此值上下浮动
      */
-    fun start(initialBitrate: Int, mode: String) {
+    fun start(initialBitrate: Int, mode: String, settledBitrate: () -> Int = { initialBitrate }) {
         if (enabled) return
-        this.initialBitrate = initialBitrate
         this.currentBitrate = initialBitrate
         this.mode = mode
-        applyModePreset(mode)
         resetState()
         enabled = true
 
         executor.execute {
+            // A preceding controller may still be restoring the connected
+            // encoder. Read the acknowledged rate after earlier writes settle.
+            val baseline = settledBitrate()
+            this.initialBitrate = baseline
+            currentBitrate = baseline
+            applyModePreset(mode, baseline)
             try {
                 val http = nvHttpFactory()
                 nvHttp = http
@@ -125,7 +129,7 @@ class AdaptiveBitrateService(
                 packetFeedback = "packet_sample_v2" in caps.features
                 serverSupported = caps.supported
                 if (caps.supported) serverEnableRetries = 1
-                LimeLog.info("[ABR] 启动: bitrate=${initialBitrate}kbps, mode=$mode, server=${caps.supported} (v${caps.version})")
+                LimeLog.info("[ABR] 启动: bitrate=${baseline}kbps, mode=$mode, server=${caps.supported} (v${caps.version})")
             } catch (e: Exception) {
                 LimeLog.warning("[ABR] 服务端能力探测失败: ${e.message}")
             }
@@ -225,7 +229,7 @@ class AdaptiveBitrateService(
     // 内部
     // -----------------------------------------------------------------------
 
-    private fun applyModePreset(mode: String, baseline: Int = initialBitrate) {
+    private fun applyModePreset(mode: String, baseline: Int) {
         val range = bitrateRange(baseline, mode)
         minBitrate = range.first
         maxBitrate = range.last

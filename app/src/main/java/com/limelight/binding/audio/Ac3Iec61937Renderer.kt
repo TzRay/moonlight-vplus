@@ -99,8 +99,11 @@ class Ac3Iec61937Renderer(private val encodedBufferBytes: Int) : AudioRenderer {
         })
     }
     override fun cleanup() {
-        stop()
-        audioCleanup("release") { track?.release() }
-        track = null
+        val output = track
+        writes.pause({ interruptAudioWrite(output) }, {
+            track = null
+            packetizer.reset()
+            releaseAudioOutput(flush = { output?.flush() }, release = { output?.release() })
+        })
     }
 }

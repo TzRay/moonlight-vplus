@@ -2636,7 +2636,7 @@ class Game : ThemedComponentActivity(), SurfaceHolder.Callback,
             executor = c.bitrateExecutor,
             shutdownExecutorOnStop = false
         )
-        if (!c.startBitrateController(service, prefConfig.bitrate, prefConfig.abrMode)) return
+        if (!c.startBitrateController(service, prefConfig.abrMode)) return
         service.setSuspended(extremeResumeSuspended)
     }
 

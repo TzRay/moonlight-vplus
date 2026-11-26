@@ -831,10 +831,10 @@ open class NvConnection(
     @Volatile internal var bitrateController: AdaptiveBitrateService? = null
         private set
 
-    internal fun startBitrateController(service: AdaptiveBitrateService, initialBitrate: Int, mode: String): Boolean =
+    internal fun startBitrateController(service: AdaptiveBitrateService, mode: String): Boolean =
         synchronized(bitrateExecutor) {
             if (stopped) return false
-            service.start(initialBitrate, mode)
+            service.start(currentBitrate, mode) { currentBitrate }
             bitrateController = service
             true
         }
