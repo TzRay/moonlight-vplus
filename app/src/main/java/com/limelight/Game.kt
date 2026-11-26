@@ -188,6 +188,7 @@ class Game : ThemedComponentActivity(), SurfaceHolder.Callback,
     var progressOverlay: FullscreenProgressOverlay? = null
 
     // 智能码率
+    private var extremeResumeSuspended = false
     var adaptiveBitrateService: AdaptiveBitrateService? = null
 
     // Sunshine clipboard sync — null until pref toggles enable it.
@@ -2140,6 +2141,7 @@ class Game : ThemedComponentActivity(), SurfaceHolder.Callback,
                 resumeEnabled = isResumeStreamEnabled,
             ))
         ) {
+            if (!isChangingResolution) suspendExtremeResume()
             LimeLog.info("Extreme Resume: onStop intercepted.")
             if (!isChangingResolution && isResumeStreamEnabled) {
                 showKeepAliveNotification()
@@ -2621,20 +2623,26 @@ class Game : ThemedComponentActivity(), SurfaceHolder.Callback,
             statsProvider = {
                 sampler.sample(
                     MoonBridge.getObservedVideoDataPackets(), renderer.numFramesOut, renderer.missingVideoFrames,
-                    SystemClock.elapsedRealtime(), MoonBridge.getEstimatedRttInfo()
+                    SystemClock.elapsedRealtime(), MoonBridge.getEstimatedRttInfo(),
+                    MoonBridge.getVideoPacketCoverageGaps(), renderer.numFramesIn, renderer.abrGeneration
                 )
             },
+            resetSampler = sampler::reset,
             onBitrateChanged = { kbps, _ ->
                 // service 已成功通知服务端，仅同步本地配置
                 c.applyBitrateLocally(kbps)
             }
         )
         service.start(prefConfig.bitrate, prefConfig.abrMode)
+        c.manualBitrateOverride = service::setManualBitrate
+        service.setSuspended(extremeResumeSuspended)
         adaptiveBitrateService = service
     }
 
     /** 停止智能码率，恢复初始码率。*/
     fun stopAdaptiveBitrate() {
+        extremeResumeSuspended = false
+        conn?.manualBitrateOverride = null
         adaptiveBitrateService?.stop()
         adaptiveBitrateService = null
     }
@@ -2652,6 +2660,7 @@ class Game : ThemedComponentActivity(), SurfaceHolder.Callback,
         }
 
         if (isExtremeResumeEnabled && connected) {
+            if (streamView.holder.surface.isValid) resumeExtremeResume()
             LimeLog.info("Extreme Resume: Returning to foreground with active connection.")
             if (progressOverlay != null) {
                 progressOverlay?.dismiss()
@@ -3080,8 +3089,8 @@ class Game : ThemedComponentActivity(), SurfaceHolder.Callback,
             streamView.post { cursorServiceManager.syncCursorWithStream() }
         } else if (connected && isExtremeResumeEnabled) {
             streamView.post { cursorServiceManager.syncCursorWithStream() }
-            audioRenderer?.resumeProcessing()
             decoderRenderer?.resumeProcessing()
+            resumeExtremeResume()
         }
 
         panZoomHandler.handleSurfaceChange()
@@ -3111,6 +3120,24 @@ class Game : ThemedComponentActivity(), SurfaceHolder.Callback,
         }
     }
 
+    private fun suspendExtremeResume() {
+        if (extremeResumeSuspended) return
+        extremeResumeSuspended = true
+        adaptiveBitrateService?.setSuspended(true)
+        decoderRenderer?.resetAbrFrameWindow()
+        if (!PreferenceManager.getDefaultSharedPreferences(this).getBoolean("checkbox_background_audio", false)) {
+            audioRenderer?.pauseProcessing()
+        }
+    }
+
+    private fun resumeExtremeResume() {
+        if (!extremeResumeSuspended) return
+        extremeResumeSuspended = false
+        audioRenderer?.resumeProcessing()
+        decoderRenderer?.resetAbrFrameWindow()
+        adaptiveBitrateService?.setSuspended(false)
+    }
+
     override fun surfaceDestroyed(holder: SurfaceHolder) {
         if (!surfaceCreated) {
             throw IllegalStateException("Surface destroyed before creation!")
@@ -3127,11 +3154,7 @@ class Game : ThemedComponentActivity(), SurfaceHolder.Callback,
                     isExtremeResumeEnabled, isFinishing, isResumeStreamEnabled
                 )
             ) {
-                val globalPrefs = PreferenceManager.getDefaultSharedPreferences(this)
-                if (!globalPrefs.getBoolean("checkbox_background_audio", false)) {
-                    audioRenderer?.pauseProcessing()
-                    LimeLog.info("Extreme Resume: Audio muted for background.")
-                }
+                suspendExtremeResume()
                 decoderRenderer?.pauseProcessing()
                 releaseFramegenCapture()
                 return

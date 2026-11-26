@@ -817,8 +817,14 @@ open class NvConnection(
         }.start()
     }
 
+    @Volatile internal var manualBitrateOverride: ((Int, (Boolean) -> Unit) -> Boolean)? = null
+
     @Throws(IOException::class, XmlPullParserException::class)
     fun setBitrate(bitrateKbps: Int, callback: BitrateAdjustmentCallback?) {
+        if (manualBitrateOverride?.invoke(bitrateKbps) { ok ->
+                if (ok) callback?.onSuccess(bitrateKbps)
+                else callback?.onFailure(appContext.getString(R.string.connection_server_failed))
+            } == true) return
         Thread {
             val h: NvHTTP
             try {
