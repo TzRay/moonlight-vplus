@@ -951,7 +951,7 @@ static AUDIO_RENDERER_CALLBACKS BridgeAudioRendererCallbacks = {
         .stop = BridgeArStop,
         .cleanup = BridgeArCleanup,
         .decodeAndPlaySample = BridgeArDecodeAndPlaySample,
-        .capabilities = CAPABILITY_SUPPORTS_ARBITRARY_AUDIO_DURATION | CAPABILITY_MAT_PLAYBACK_PROGRESS
+        .capabilities = CAPABILITY_SUPPORTS_ARBITRARY_AUDIO_DURATION | CAPABILITY_MAT_PLAYBACK_PROGRESS | CAPABILITY_MAT_BACKGROUND_PAUSE
 };
 
 static CONNECTION_LISTENER_CALLBACKS BridgeConnListenerCallbacks = {
