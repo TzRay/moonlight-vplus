@@ -96,6 +96,36 @@ class Ac3Iec61937PacketizerTest {
         p.append(f, f.size) { out.add(it.clone()) }
         assertEquals(1, out.size)
     }
+    @Test fun backgroundDamageOrLossResynchronizesAtTheNextWholeForegroundFrame() {
+        val old = frame(0, 128, 3)
+        val fresh = frame(0, 128, 1)
+        val p = Ac3Iec61937Packetizer()
+        p.append(old, 32, tolerateDamage = true) { fail() }
+        p.packetLost()
+        p.append(ByteArray(17), 17, tolerateDamage = true) { fail() }
+        p.discardPartialFrame()
+        val garbageAndStart = byteArrayOf(0x22, 0x44, 0x33, 0x55, fresh[0])
+        p.append(garbageAndStart, garbageAndStart.size) { fail() }
+        val bursts = mutableListOf<ShortArray>()
+        p.append(fresh.copyOfRange(1, fresh.size), fresh.size - 1) { bursts += it.clone() }
+        assertEquals(0x101, bursts.single()[2].toInt())
+        assertThrows(IllegalArgumentException::class.java) { p.append(ByteArray(6), 6) { fail() } }
+
+        p.packetLost()
+        p.append(ByteArray(3), 3, tolerateDamage = true) { fail() }
+        p.discardPartialFrame()
+        p.append(fresh, fresh.size) { bursts += it.clone() }
+        assertEquals(2, bursts.size)
+
+        p.append(ByteArray(23), 23, tolerateDamage = true) { fail() }
+        p.append(old, 22, tolerateDamage = true) { fail() }
+        p.discardPartialFrame()
+        val tail = old.copyOfRange(22, old.size) + fresh
+        p.append(tail, tail.size) { bursts += it.clone() }
+        assertEquals(3, bursts.size)
+        assertEquals(0x101, bursts.last()[2].toInt())
+    }
+
     @Test fun resumeSkipsSplitBackgroundFrameAndProducesNextCompleteBurst() {
         val background = frame(36, 2560, 3)
         val foreground = frame(0, 128, 1)

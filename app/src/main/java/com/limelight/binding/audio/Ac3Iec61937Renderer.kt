@@ -52,11 +52,14 @@ class Ac3Iec61937Renderer(private val encodedBufferBytes: Int) : AudioRenderer {
                 .setTransferMode(AudioTrack.MODE_STREAM).setBufferSizeInBytes(buffer.toInt())
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
                 builder.setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
-            track = builder.build()
-            check(track!!.state == AudioTrack.STATE_INITIALIZED)
-            track!!.pause()
-            track!!.flush()
-            writes.resume { track!!.play() }
+            writes.startPlayback(::releaseTrack) {
+                track = builder.build()
+                val output = checkNotNull(track)
+                check(output.state == AudioTrack.STATE_INITIALIZED)
+                output.pause()
+                output.flush()
+                output.play()
+            }
             LimeLog.info("Ac3Iec61937Renderer: 48 kHz AC3 ${audioConfiguration.channelCount}ch; IEC61937 stereo carrier, buffer=$buffer bytes (${buffer / 192} ms)")
             0
         } catch (e: Exception) {
@@ -66,13 +69,27 @@ class Ac3Iec61937Renderer(private val encodedBufferBytes: Int) : AudioRenderer {
         }
     }
 
+    private fun releaseTrack() {
+        val output = track
+        track = null
+        audioCleanup("release") { output?.release() }
+    }
+
     override fun start() {}
     override fun playDecodedAudio(audioData: ShortArray) {}
     override fun playEncodedAudio(audioData: ByteArray, length: Int) = writes.frame {
-        if (failed || track == null) return@frame
+        if (failed) return@frame
+        if (length == 0 || track == null) {
+            packetizer.packetLost()
+            return@frame
+        }
         try {
-            packetizer.append(audioData, length, sink)
+            packetizer.append(audioData, length, tolerateDamage = writes.paused, sink = sink)
         } catch (e: Exception) {
+            if (e is IllegalArgumentException && writes.paused) {
+                packetizer.packetLost()
+                return@frame
+            }
             // Do not resume halfway through a burst or silently switch to lossy PCM.
             failed = true
             LimeLog.severe("IEC61937 stopped: ${e.message}; reconnect or select raw AC3")
@@ -85,25 +102,20 @@ class Ac3Iec61937Renderer(private val encodedBufferBytes: Int) : AudioRenderer {
     }
 
     fun resumeProcessing() {
-        if (!failed) writes.resume {
-            // A packetized frame may straddle two callbacks or the foreground edge.
-            packetizer.discardPartialFrame()
-            track?.play()
-        }
+        if (!failed) writes.resumePlayback({ checkNotNull(track).play() }, packetizer::discardPartialFrame)
     }
 
     override fun stop() {
         writes.pause({ interruptAudioWrite(track) }, {
             audioCleanup("flush") { track?.flush() }
             packetizer.reset()
-        })
+        }, retire = true)
     }
     override fun cleanup() {
-        val output = track
-        writes.pause({ interruptAudioWrite(output) }, {
-            track = null
+        writes.pause({ interruptAudioWrite(track) }, {
+            val output = track
             packetizer.reset()
             releaseAudioOutput(flush = { output?.flush() }, release = { output?.release() })
-        })
+        }, retire = true)
     }
 }

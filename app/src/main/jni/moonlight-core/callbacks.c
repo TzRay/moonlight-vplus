@@ -466,12 +466,17 @@ void BridgeArDecodeAndPlaySample(char* sampleData, int sampleLength) {
     // Encoded passthrough path (AC3 / E-AC3): hand the raw bitstream to Java
     // verbatim, no Opus decode. Drop oversized frames to avoid buffer overrun.
     if (Decoder == NULL) {
-        if (sampleLength <= 0 || sampleLength > ENCODED_AUDIO_BUFFER_SIZE) {
-            __android_log_print(ANDROID_LOG_WARN, "moonlight-jni",
-                                "BridgeArDecodeAndPlaySample: dropping oversized encoded frame (%d bytes)", sampleLength);
-            return;
+        // A zero-length AC3 callback marks a lost RTP packet. IEC must drop an
+        // unfinished carrier frame. Raw AC3 already ignores empty callbacks.
+        bool lostAc3Packet = sampleData == NULL && sampleLength == 0 && LiGetNegotiatedAudioCodec() == AUDIO_CODEC_AC3;
+        if (!lostAc3Packet) {
+            if (sampleLength <= 0 || sampleLength > ENCODED_AUDIO_BUFFER_SIZE) {
+                __android_log_print(ANDROID_LOG_WARN, "moonlight-jni",
+                                    "BridgeArDecodeAndPlaySample: invalid encoded length (%d bytes)", sampleLength);
+                return;
+            }
+            (*env)->SetByteArrayRegion(env, EncodedAudioBuffer, 0, sampleLength, (const jbyte*)sampleData);
         }
-        (*env)->SetByteArrayRegion(env, EncodedAudioBuffer, 0, sampleLength, (const jbyte*)sampleData);
         // Java side reads the leading sampleLength bytes (first 2 bytes of an AC3
         // frame are the sync word 0x0B77, length is encoded inside the bitstream).
         (*env)->CallStaticVoidMethod(env, GlobalBridgeClass, BridgeArPlayEncodedSampleMethod, EncodedAudioBuffer, (jint) sampleLength);

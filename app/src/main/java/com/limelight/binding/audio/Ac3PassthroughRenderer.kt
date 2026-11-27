@@ -156,49 +156,48 @@ class Ac3PassthroughRenderer(
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 builder.setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
             }
-            track = builder.build()
-
-            if (track!!.state != AudioTrack.STATE_INITIALIZED) {
-                LimeLog.severe("Ac3PassthroughRenderer: AudioTrack state=${track!!.state}, not INITIALIZED")
-                track?.release()
-                track = null
-                return -2
+            writes.startPlayback(::releaseTrack) {
+                track = builder.build()
+                val output = checkNotNull(track)
+                check(output.state == AudioTrack.STATE_INITIALIZED) { "AudioTrack state=${output.state}" }
+                // Idle and flush before the first frame, including when the HDMI route changes.
+                output.pause()
+                output.flush()
+                output.play()
             }
-
-            // Match Kodi's idle-then-play sequencing: pause+flush before
-            // play() makes some TV firmwares more willing to accept the
-            // first frame without a startup glitch.
-            track!!.pause()
-            track!!.flush()
-            writes.resume { track!!.play() }
 
             val bufferMs = if (frameBytes > 0) bufferSize.toLong() * 32 / frameBytes else 0
             LimeLog.info("Ac3PassthroughRenderer: $codecName initialized @${sampleRate} Hz, ${audioConfiguration.channelCount}ch (mask=$channelMaskName), bitrate=$bitrate bps, buffer=${bufferSize}B (~${bufferMs} ms, min=$minBuffer, frame=$frameBytes)")
             return 0
         } catch (e: Exception) {
             LimeLog.severe("Ac3PassthroughRenderer: AudioTrack create failed: ${e.message}")
-            try {
-                track?.release()
-            } catch (_: Exception) {}
-            track = null
+            releaseTrack()
             return -2
         }
+    }
+
+    private fun releaseTrack() {
+        val output = track
+        track = null
+        audioCleanup("release") { output?.release() }
     }
 
     override fun start() {
         // play() already called in setup(); nothing additional.
     }
 
-    fun pauseProcessing() {
-        writes.pause({ interruptAudioWrite(track) }, { audioCleanup("flush") { track?.flush() } })
+    fun pauseProcessing() = pauseTrack(retire = false)
+
+    private fun pauseTrack(retire: Boolean) {
+        writes.pause({ interruptAudioWrite(track) }, { audioCleanup("flush") { track?.flush() } }, retire)
     }
 
     fun resumeProcessing() {
-        writes.resume { track?.play() }
+        writes.resumePlayback({ checkNotNull(track).play() })
     }
 
     override fun stop() {
-        try { pauseProcessing() } catch (_: Exception) {}
+        pauseTrack(retire = true)
     }
 
     override fun playDecodedAudio(audioData: ShortArray) {}
@@ -218,11 +217,11 @@ class Ac3PassthroughRenderer(
     }
 
     override fun cleanup() {
-        val output = track
-        writes.pause({ interruptAudioWrite(output) }, {
+        writes.pause({ interruptAudioWrite(track) }, {
+            val output = track
             track = null
             releaseAudioOutput(flush = { output?.flush() }, release = { output?.release() }, stop = { output?.stop() })
-        })
+        }, retire = true)
     }
 
     private fun channelMaskToString(channelMask: Int): String {
