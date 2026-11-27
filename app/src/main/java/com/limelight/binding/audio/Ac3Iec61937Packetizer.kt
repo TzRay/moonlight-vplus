@@ -68,7 +68,7 @@ class Ac3Iec61937Packetizer {
                     val bsid = (frame[5].toInt() and 255) ushr 3
                     val sync = frame[0] == 0x0b.toByte() && frame[1] == 0x77.toByte()
                     if (!sync || fscod != 0 || frmsizecod > 37 || bsid > 8) {
-                        if (!tolerateDamage && !seekingSync) {
+                        if (!tolerateDamage && !seekingSync && backgroundBytes == 0) {
                             throw IllegalArgumentException("Invalid 48 kHz AC3 frame header")
                         }
                         if (!seekingSync) LimeLog.warning("IEC61937 discarded an invalid background AC3 header")
