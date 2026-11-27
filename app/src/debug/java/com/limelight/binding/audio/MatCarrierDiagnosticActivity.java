@@ -5,6 +5,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.view.WindowManager;
 import android.widget.TextView;
+import androidx.annotation.RequiresApi;
 import com.limelight.LimeLog;
 import org.json.JSONObject;
 import java.io.File;
@@ -45,6 +46,7 @@ public final class MatCarrierDiagnosticActivity extends Activity {
         runOnUiThread(() -> status.setText(value));
     }
 
+    @RequiresApi(Build.VERSION_CODES.N)
     private void play(String sample, String expected, int skip, int seconds) {
         JSONObject result = new JSONObject();
         MatPlaybackSession session = null;
