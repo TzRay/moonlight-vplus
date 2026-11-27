@@ -2,6 +2,10 @@ package com.limelight.binding.audio
 
 import org.junit.Assert.*
 import org.junit.Test
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 
 class AudioWriteLoopTest {
     @Test fun positiveShortWritesPreserveTheEntirePcmPayload() {
@@ -78,9 +82,112 @@ class AudioWriteLoopTest {
         assertEquals(listOf("pause", "flush", "stop", "release"), operations)
     }
 
+    @Test fun foregroundPlayFailureReopensOnceAndKeepsFailedOutputMutedUntilNextResume() {
+        val gate = AudioWriteGate()
+        var opens = 0
+        var releases = 0
+        var writable = false
+        gate.startPlayback({ releases++; writable = false }) {
+            opens++
+            if (opens == 2) throw IllegalStateException("route still unavailable")
+            writable = true
+        }
+        gate.pause({}, {})
+        val failedPlay = { throw IllegalStateException("old track invalid") }
+        gate.resumePlayback(failedPlay)
+        assertTrue(gate.paused)
+        assertFalse(writable)
+        assertEquals(2, opens)
+        assertEquals(2, releases) // old track and failed replacement
+        var ready = false
+        gate.resumePlayback(failedPlay) { ready = true }
+        assertFalse(gate.paused)
+        assertTrue(ready && writable)
+        assertEquals(3, opens)
+        gate.pause({}, {})
+        gate.resumePlayback({})
+        assertEquals(3, opens)
+        gate.pause({}, {}, retire = true)
+        gate.resumePlayback(failedPlay)
+        assertTrue(gate.paused)
+        assertEquals(3, opens)
+    }
+
+    @Test fun pauseAndRetirementDuringReopenInterruptAndReleaseTheCurrentTrack() {
+        for (retire in listOf(false, true)) {
+            val gate = AudioWriteGate()
+            val current = AtomicInteger(0)
+            val openingReplacement = CountDownLatch(1)
+            val interrupted = CountDownLatch(1)
+            val executor = Executors.newFixedThreadPool(2)
+            val released = mutableListOf<Int>()
+            val interrupts = mutableListOf<Int>()
+            var opens = 0
+            fun release() {
+                val track = current.getAndSet(0)
+                if (track != 0) released += track
+            }
+            try {
+                gate.startPlayback(::release) {
+                    if (++opens == 2) {
+                        openingReplacement.countDown()
+                        check(interrupted.await(2, TimeUnit.SECONDS))
+                    }
+                    current.set(opens)
+                }
+                gate.pause({}, {})
+                val resume = executor.submit {
+                    gate.resumePlayback({ error("route lost") }) { error("canceled start published") }
+                }
+                assertTrue(openingReplacement.await(2, TimeUnit.SECONDS))
+                val pause = executor.submit {
+                    gate.pause({
+                        interrupts += current.get()
+                        interrupted.countDown()
+                    }, {
+                        if (retire) release()
+                    }, retire)
+                }
+                pause.get(2, TimeUnit.SECONDS)
+                resume.get(2, TimeUnit.SECONDS)
+                assertTrue(gate.paused)
+                assertEquals(listOf(0, 2), interrupts)
+                assertEquals(if (retire) listOf(1, 2) else listOf(1), released)
+                gate.resumePlayback({ check(current.get() == 2) })
+                assertEquals(retire, gate.paused)
+                assertEquals(2, opens)
+            } finally { executor.shutdownNow() }
+        }
+    }
+
+    @Test fun stoppingDuringPlayFailurePreventsReopeningTheRetiredTrack() {
+        val gate = AudioWriteGate()
+        val inPlay = CountDownLatch(1)
+        val stopped = CountDownLatch(1)
+        val executor = Executors.newSingleThreadExecutor()
+        var opens = 0
+        try {
+            gate.startPlayback({}) { opens++ }
+            gate.pause({}, {})
+            val resume = executor.submit {
+                gate.resumePlayback({
+                    inPlay.countDown()
+                    check(stopped.await(2, TimeUnit.SECONDS))
+                    error("track was retired")
+                })
+            }
+            assertTrue(inPlay.await(2, TimeUnit.SECONDS))
+            gate.pause({ stopped.countDown() }, {}, retire = true)
+            resume.get(2, TimeUnit.SECONDS)
+            assertTrue(gate.paused)
+            assertEquals(1, opens)
+        } finally { executor.shutdownNow() }
+    }
+
     @Test fun pauseInterruptsPartialWritesBeforeFlushingAndForegroundStartsANewFrame() {
         for (next in listOf(3, 0, -6)) {
             val gate = AudioWriteGate()
+            gate.startPlayback({}) {}
             val inside = java.util.concurrent.CountDownLatch(1)
             val interrupted = java.util.concurrent.CountDownLatch(1)
             val offsets = mutableListOf<Int>()
@@ -104,7 +211,7 @@ class AudioWriteLoopTest {
                 inFlight.get(2, java.util.concurrent.TimeUnit.SECONDS)
                 assertEquals(listOf(0, 2), offsets)
                 gate.frame { assertEquals(0, writeAudioFully(8, { !gate.paused }) { _, _ -> error("background write") }) }
-                gate.resume { check(flushed) }
+                gate.resumePlayback({ check(flushed) })
                 gate.frame { assertEquals(8, writeAudioFully(8, { !gate.paused }) { offset, size ->
                     assertEquals(0, offset)
                     size

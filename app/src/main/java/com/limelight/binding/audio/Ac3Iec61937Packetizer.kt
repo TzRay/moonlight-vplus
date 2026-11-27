@@ -1,5 +1,7 @@
 package com.limelight.binding.audio
 
+import com.limelight.LimeLog
+
 /**
  * Streaming, bounded AC3-to-IEC61937 packer. No decoding or gain changes.
  * Supports normal-rate 48 kHz AC3 only; E-AC3 has a different burst format.
@@ -15,19 +17,39 @@ class Ac3Iec61937Packetizer {
         fun write(words: ShortArray)
     }
 
-    private var skipCurrent = false
+    private var backgroundBytes = 0
+    private var seekingSync = false
 
     /** Finish parsing a compressed frame which began in the background. */
-    fun discardPartialFrame() { skipCurrent = used != 0 }
+    fun discardPartialFrame() { backgroundBytes = used }
 
     fun reset() {
         used = 0
-        skipCurrent = false
+        backgroundBytes = 0
         expected = 0
+        seekingSync = false
+    }
+
+    fun packetLost() {
+        reset()
+        seekingSync = true
+    }
+
+    /** Retain a possible start of the next AC3 header, including a split sync word. */
+    private fun seekNextHeader() {
+        var start = 1
+        while (start < used) {
+            if (frame[start] == 0x0b.toByte() && (start + 1 == used || frame[start + 1] == 0x77.toByte())) break
+            start++
+        }
+        used -= start
+        backgroundBytes = (backgroundBytes - start).coerceAtLeast(0)
+        if (used != 0) System.arraycopy(frame, start, frame, 0, used)
+        seekingSync = true
     }
 
     /** Handles partial frames and multiple frames in one native callback. */
-    fun append(bytes: ByteArray, length: Int, sink: Sink) {
+    fun append(bytes: ByteArray, length: Int, tolerateDamage: Boolean = false, sink: Sink) {
         if (length < 0 || length > bytes.size) {
             reset()
             throw IllegalArgumentException("Invalid AC3 callback length")
@@ -41,19 +63,23 @@ class Ac3Iec61937Packetizer {
                 used += count
                 offset += count
                 if (expected == 0 && used == 6) {
-                    if ((frame[0].toInt() and 255) != 0x0b || (frame[1].toInt() and 255) != 0x77) {
-                        throw IllegalArgumentException("Missing AC3 sync word")
-                    }
                     val fscod = (frame[4].toInt() and 255) ushr 6
                     val frmsizecod = frame[4].toInt() and 63
                     val bsid = (frame[5].toInt() and 255) ushr 3
-                    if (fscod != 0 || frmsizecod > 37 || bsid > 8) {
-                        throw IllegalArgumentException("IEC61937 mode requires normal-rate 48 kHz AC3")
+                    val sync = frame[0] == 0x0b.toByte() && frame[1] == 0x77.toByte()
+                    if (!sync || fscod != 0 || frmsizecod > 37 || bsid > 8) {
+                        if (!tolerateDamage && !seekingSync) {
+                            throw IllegalArgumentException("Invalid 48 kHz AC3 frame header")
+                        }
+                        if (!seekingSync) LimeLog.warning("IEC61937 discarded an invalid background AC3 header")
+                        seekNextHeader()
+                        continue
                     }
+                    seekingSync = false
                     expected = BITRATES[frmsizecod / 2] * 4
                 }
                 if (expected != 0 && used == expected) {
-                    if (skipCurrent) {
+                    if (backgroundBytes != 0) {
                         reset()
                         continue
                     }

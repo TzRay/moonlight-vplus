@@ -84,26 +84,28 @@ class PcmPassthroughRenderer(
             }
             val bufferSize = alignedPcmBufferSize(minBuf, bufferBytes, audioConfiguration.channelCount)
 
-            track = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                val builder = AudioTrack.Builder()
-                    .setAudioFormat(format)
-                    .setAudioAttributes(attributes)
-                    .setTransferMode(AudioTrack.MODE_STREAM)
-                    .setBufferSizeInBytes(bufferSize)
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    try {
-                        builder.setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
-                    } catch (_: Exception) {
-                        // The hint is optional on vendor audio routes.
+            writes.startPlayback(::releaseTrack) {
+                track = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    val builder = AudioTrack.Builder()
+                        .setAudioFormat(format)
+                        .setAudioAttributes(attributes)
+                        .setTransferMode(AudioTrack.MODE_STREAM)
+                        .setBufferSizeInBytes(bufferSize)
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        try {
+                            builder.setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
+                        } catch (_: Exception) {
+                            // The hint is optional on vendor audio routes.
+                        }
                     }
+                    builder.build()
+                } else {
+                    AudioTrack(attributes, format, bufferSize,
+                        AudioTrack.MODE_STREAM, AudioManager.AUDIO_SESSION_ID_GENERATE)
                 }
-                builder.build()
-            } else {
-                AudioTrack(attributes, format, bufferSize,
-                    AudioTrack.MODE_STREAM, AudioManager.AUDIO_SESSION_ID_GENERATE)
+                systemAudioHaptics.attach(track!!)
+                track!!.play()
             }
-            systemAudioHaptics.attach(track!!)
-            writes.resume { track!!.play() }
             stopped = false
             val frameBytes = audioConfiguration.channelCount * samplesPerFrame * 2
             val capacityMs = bufferSize * 1000.0 / (sampleRate * sampleFrameBytes)
@@ -111,12 +113,16 @@ class PcmPassthroughRenderer(
             return 0
         } catch (e: Exception) {
             LimeLog.severe("PcmPassthroughRenderer: AudioTrack create failed: ${e.message}")
-            val failedTrack = track
-            track = null
-            audioCleanup("detach haptics") { systemAudioHaptics.detach() }
-            audioCleanup("release") { failedTrack?.release() }
+            releaseTrack()
             return -2
         }
+    }
+
+    private fun releaseTrack() {
+        val output = track
+        track = null
+        audioCleanup("detach haptics") { systemAudioHaptics.detach() }
+        audioCleanup("release") { output?.release() }
     }
 
     override fun start() {
@@ -125,16 +131,20 @@ class PcmPassthroughRenderer(
 
     override fun stop() {
         stopped = true
-        audioCleanup("detach haptics") { systemAudioHaptics.detach() }
-        pauseProcessing()
+        pauseTrack(retire = true)
     }
 
-    fun pauseProcessing() {
-        writes.pause({ interruptAudioWrite(track) }, { audioCleanup("flush") { track?.flush() } })
+    fun pauseProcessing() = pauseTrack(retire = false)
+
+    private fun pauseTrack(retire: Boolean) {
+        writes.pause({ interruptAudioWrite(track) }, {
+            if (retire) audioCleanup("detach haptics") { systemAudioHaptics.detach() }
+            audioCleanup("flush") { track?.flush() }
+        }, retire)
     }
 
     fun resumeProcessing() {
-        if (!stopped) writes.resume { track?.play() }
+        if (!stopped) writes.resumePlayback({ checkNotNull(track).play() })
     }
 
     fun detachSystemAudioHaptics(): Boolean {
@@ -171,12 +181,12 @@ class PcmPassthroughRenderer(
 
     override fun cleanup() {
         stopped = true
-        val output = track
-        audioCleanup("close haptics") { systemAudioHaptics.close() }
-        writes.pause({ interruptAudioWrite(output) }, {
+        writes.pause({ interruptAudioWrite(track) }, {
+            val output = track
+            audioCleanup("close haptics") { systemAudioHaptics.close() }
             track = null
             releaseAudioOutput(flush = { output?.flush() }, release = { output?.release() }, stop = { output?.stop() })
-        })
+        }, retire = true)
     }
 
     private fun channelMaskToString(channelMask: Int): String {

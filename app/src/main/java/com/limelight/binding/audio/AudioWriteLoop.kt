@@ -58,20 +58,89 @@ internal fun alignedPcmBufferSize(minimum: Int, requested: Int, channels: Int): 
 /** Serialize complete callback frames with flush/play. Pause interrupts a
  * blocking write before waiting for its owner to leave the current frame. */
 internal class AudioWriteGate {
+    private sealed interface State {
+        object Playing : State
+        object Paused : State
+        object Retired : State
+        class Starting : State
+        class Pausing : State
+    }
+
     private val writer = Any()
-    @Volatile var paused = false
-        private set
+    private val intent = Any()
+    @Volatile private var state: State = State.Playing
+    private class Output(val open: () -> Unit, val release: () -> Unit)
+    private var output: Output? = null
+
+    val paused: Boolean get() = state !== State.Playing
     inline fun frame(work: () -> Unit) = synchronized(writer) { work() }
-    fun pause(interrupt: () -> Unit, afterWriter: () -> Unit) {
-        paused = true
+
+    private fun change(expected: State, next: State): Boolean = synchronized(intent) {
+        if (state !== expected) return@synchronized false
+        state = next
+        true
+    }
+
+    fun pause(interrupt: () -> Unit, afterWriter: () -> Unit, retire: Boolean = false) {
+        val pausing = State.Pausing()
+        val interruptedStart = synchronized(intent) {
+            val starting = state is State.Starting
+            if (state !== State.Retired) state = if (retire) State.Retired else pausing
+            starting
+        }
         try {
             interrupt()
         } finally {
-            synchronized(writer) { afterWriter() }
+            synchronized(writer) {
+                if (retire) output = null
+                try {
+                    // A HAL open/play already in flight may have published a different
+                    // playing track since the lock-free interrupt. Interrupt that one too.
+                    if (interruptedStart) audioCleanup("interrupt resumed track", interrupt)
+                    afterWriter()
+                } finally {
+                    change(pausing, State.Paused)
+                }
+            }
         }
     }
-    fun resume(beforeWriter: () -> Unit) = synchronized(writer) {
-        beforeWriter()
-        paused = false
+
+    fun startPlayback(release: () -> Unit, open: () -> Unit) = synchronized(writer) {
+        val starting = State.Starting()
+        synchronized(intent) { state = starting }
+        output = null
+        try {
+            open()
+            output = Output(open, release)
+            change(starting, State.Playing)
+        } finally {
+            change(starting, State.Paused)
+        }
+    }
+
+    fun resumePlayback(play: () -> Unit, onReady: () -> Unit = {}) {
+        val starting = State.Starting()
+        if (!change(State.Paused, starting)) return
+        synchronized(writer) {
+            try {
+                val previous = output ?: return
+                if (state !== starting) return
+                if (!audioCleanup("resume", play)) {
+                    if (state !== starting) return
+                    previous.release()
+                    if (state !== starting) return
+                    if (!audioCleanup("reopen on the current route", previous.open)) {
+                        previous.release()
+                        return
+                    }
+                }
+                if (state === starting) {
+                    onReady()
+                    change(starting, State.Playing)
+                }
+            } finally {
+                change(starting, State.Paused)
+            }
+        }
     }
 }
