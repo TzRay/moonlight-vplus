@@ -3129,9 +3129,11 @@ class Game : ThemedComponentActivity(), SurfaceHolder.Callback,
     }
 
     private fun resumeExtremeResume() {
+        // onStart and surface recreation can independently signal a usable route.
+        // A failed Opus open may retry on the next signal in the same foreground.
+        audioRenderer?.resumeProcessing()
         if (!extremeResumeSuspended) return
         extremeResumeSuspended = false
-        audioRenderer?.resumeProcessing()
         decoderRenderer?.resetAbrFrameWindow()
         adaptiveBitrateService?.setSuspended(false)
     }

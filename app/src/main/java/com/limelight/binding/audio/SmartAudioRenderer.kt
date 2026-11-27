@@ -118,10 +118,13 @@ class SmartAudioRenderer(
             onSystemAudioHapticsActiveChanged,
             onAudioPresentationClock
         )
-        val res = pcm.setup(audioConfiguration, sampleRate, samplesPerFrame, codec, bitrate)
-        if (res == 0) {
-            install(pcm)
-        }
+        return setupOpus(pcm, audioConfiguration, sampleRate, samplesPerFrame, bitrate)
+    }
+
+    internal fun setupOpus(pcm: AndroidAudioRenderer, configuration: MoonBridge.AudioConfiguration,
+                           sampleRate: Int, samplesPerFrame: Int, bitrate: Int): Int {
+        val res = pcm.setup(configuration, sampleRate, samplesPerFrame, MoonBridge.AUDIO_CODEC_OPUS, bitrate)
+        if (res == 0) install(pcm) else pcm.cleanup()
         return res
     }
 
@@ -163,26 +166,41 @@ class SmartAudioRenderer(
         output?.cleanup()
     }
 
-    @Synchronized fun pauseProcessing() {
-        if (backgroundPaused) return
-        backgroundPaused = true
-        if (matSession != 0L) MoonBridge.setMatBackgroundPaused(matSession, true)
-        if (!stopped) pauseOutput(delegate)
+    fun pauseProcessing() {
+        val pauseOpus = synchronized(this) {
+            if (backgroundPaused) return
+            backgroundPaused = true
+            if (matSession != 0L) MoonBridge.setMatBackgroundPaused(matSession, true)
+            if (stopped) return
+            val output = delegate
+            if (output is AndroidAudioRenderer) output.requestPause() else {
+                pauseOutput(output)
+                return
+            }
+        }
+        pauseOpus?.invoke()
     }
 
-    @Synchronized fun resumeProcessing() {
-        if (!backgroundPaused) return
-        backgroundPaused = false
-        // The MAT worker may already have closed its suspended renderer.
-        // The common library matches the original connection epoch on resume.
-        if (matSession != 0L) MoonBridge.setMatBackgroundPaused(matSession, false)
-        if (stopped) return
-        when (val output = delegate) {
-            is AndroidAudioRenderer -> output.resumeProcessing()
-            is PcmPassthroughRenderer -> output.resumeProcessing()
-            is Ac3PassthroughRenderer -> output.resumeProcessing()
-            is Ac3Iec61937Renderer -> output.resumeProcessing()
+    fun resumeProcessing() {
+        val startOpus = synchronized(this) {
+            val output = delegate
+            if (backgroundPaused) {
+                backgroundPaused = false
+                // Match the connection even if the suspended MAT renderer has closed.
+                if (matSession != 0L) MoonBridge.setMatBackgroundPaused(matSession, false)
+            } else if (output !is AndroidAudioRenderer) {
+                return
+            }
+            if (stopped) return
+            when (output) {
+                is AndroidAudioRenderer -> output.requestResume()
+                is PcmPassthroughRenderer -> { output.resumeProcessing(); return }
+                is Ac3PassthroughRenderer -> { output.resumeProcessing(); return }
+                is Ac3Iec61937Renderer -> { output.resumeProcessing(); return }
+                else -> return
+            }
         }
+        startOpus?.invoke()
     }
 
     fun detachSystemAudioHaptics(): Boolean = when (val current = delegate) {

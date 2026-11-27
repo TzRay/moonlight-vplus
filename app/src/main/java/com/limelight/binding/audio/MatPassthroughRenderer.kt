@@ -5,6 +5,23 @@ import android.os.Build
 import com.limelight.LimeLog
 import com.limelight.nvstream.av.audio.AudioRenderer
 import com.limelight.nvstream.jni.MoonBridge
+import java.util.function.BooleanSupplier
+
+/** Connection stop remains effective after handoff. The native revision is only for preparation. */
+internal class MatPreparationCancellation(
+    private val connectionStopped: BooleanSupplier,
+    private val superseded: BooleanSupplier
+) : BooleanSupplier {
+    @Volatile private var preparing = true
+
+    override fun getAsBoolean() = connectionStopped.asBoolean ||
+        (preparing && synchronized(this) { preparing && superseded.asBoolean })
+
+    @Synchronized fun finish(): Boolean {
+        preparing = false
+        return !connectionStopped.asBoolean && !superseded.asBoolean
+    }
+}
 
 /** Only authenticated mat-live-v1 carrier cycles enter this sink. */
 class MatPassthroughRenderer(private val context: Context) : AudioRenderer, MatCarrierConsumer {
@@ -18,16 +35,17 @@ class MatPassthroughRenderer(private val context: Context) : AudioRenderer, MatC
         }
         val connectionCancelled = MoonBridge.matPreparationCancellation()
         val preparation = MoonBridge.getMatAudioPreparationToken()
-        val preparing = java.util.concurrent.atomic.AtomicBoolean(true)
-        val cancelled = java.util.function.BooleanSupplier {
-            connectionCancelled.asBoolean || (preparing.get() && preparation != 0L &&
-                    MoonBridge.isMatAudioPreparationCancelled(preparation))
+        val cancelled = MatPreparationCancellation(connectionCancelled) {
+            preparation != 0L && MoonBridge.isMatAudioPreparationCancelled(preparation)
         }
         return try {
-            session = MatPlaybackSession(MatAudioTrackSink(context), false, cancelled).also {
-                preparing.set(false)
-                it.player().setFailureListener(MoonBridge::notifyMatPlaybackFailure)
+            val prepared = MatPlaybackSession(MatAudioTrackSink(context), false, cancelled)
+            if (!cancelled.finish() || prepared.player().state() != MatCarrierPlayer.State.RUNNING) {
+                prepared.close()
+                return -1
             }
+            prepared.player().setFailureListener(MoonBridge::notifyMatPlaybackFailure)
+            session = prepared
             LimeLog.info("MAT live output prepared: logical 48k/960, IEC61937 192k/8ch; awaiting authenticated payload")
             0
         } catch (e: MatCarrierPlayer.CleanupPending) {

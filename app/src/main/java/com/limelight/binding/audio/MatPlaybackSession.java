@@ -2,6 +2,7 @@ package com.limelight.binding.audio;
 
 import java.util.concurrent.TimeUnit;
 import java.util.function.BooleanSupplier;
+import java.util.function.LongSupplier;
 
 /** Shared live-session lifecycle, independently testable without Android hardware. */
 public final class MatPlaybackSession implements MatCarrierConsumer, AutoCloseable {
@@ -18,18 +19,22 @@ public final class MatPlaybackSession implements MatCarrierConsumer, AutoCloseab
         this(sink, verifyWrites, () -> false);
     }
     MatPlaybackSession(MatCarrierPlayer.Sink sink, boolean verifyWrites, BooleanSupplier cancelled) throws InterruptedException {
+        this(sink, verifyWrites, cancelled, System::nanoTime);
+    }
+    MatPlaybackSession(MatCarrierPlayer.Sink sink, boolean verifyWrites, BooleanSupplier cancelled,
+                       LongSupplier clock) throws InterruptedException {
+        long deadline = clock.getAsLong() + TimeUnit.MILLISECONDS.toNanos(HDMI_READY_TIMEOUT_MS);
         synchronized (MatPlaybackSession.class) {
             if (owner != null && owner.writerAlive()) throw new MatCarrierPlayer.CleanupPending();
             owner = player = new MatCarrierPlayer(sink, verifyWrites, cancelled);
             player.start();
         }
         try {
-            long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(HDMI_READY_TIMEOUT_MS);
             while (!cancelled.getAsBoolean()) {
-                long remaining = deadline - System.nanoTime();
+                long remaining = deadline - clock.getAsLong();
                 if (remaining <= 0) break;
                 if (player.awaitReady(Math.min(50, Math.max(1, TimeUnit.NANOSECONDS.toMillis(remaining))))) {
-                    if (!cancelled.getAsBoolean()) return;
+                    if (!cancelled.getAsBoolean() && deadline - clock.getAsLong() > 0) return;
                     break;
                 }
                 if (player.state() != MatCarrierPlayer.State.RUNNING) break;

@@ -7,13 +7,13 @@ import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioTimestamp
 import android.media.AudioTrack
-import android.media.Spatializer
 import android.media.audiofx.AudioEffect
 import android.os.Build
 
 import com.limelight.LimeLog
 import com.limelight.nvstream.av.audio.AudioRenderer
 import com.limelight.nvstream.jni.MoonBridge
+import java.util.concurrent.TimeUnit
 
 class AndroidAudioRenderer(
     private val context: Context,
@@ -24,9 +24,25 @@ class AndroidAudioRenderer(
     onAudioPresentationClock: (framePosition: Long, systemNanoTime: Long, sampleRate: Int) -> Unit = { _, _, _ -> }
 ) : AudioRenderer {
 
+    private sealed interface Phase {
+        object Paused : Phase
+        object Playing : Phase
+        object Stopped : Phase
+        class Opening(val automatic: Boolean = false, val retryDelayMs: Long = 250) : Phase
+        class Retry(val deadline: Long, val delayMs: Long) : Phase
+        class Pausing : Phase
+        class Failed(val retry: Boolean) : Phase
+    }
+
+    // Platform calls may block. Intent can be cancelled and decoded frames can
+    // advance independently until a fully started track is published.
+    private val intent = Any()
+    private val lifecycle = Any()
     private val decodedWriter = Any()
+    @Volatile private var phase: Phase = Phase.Paused
+    private var allowRouteRetry = true
+    internal var monotonicNanos: () -> Long = System::nanoTime
     @Volatile private var track: AudioTrack? = null
-    private var spatializer: Spatializer? = null
     private val audioTimestamp = AudioTimestamp()
     private val systemAudioHaptics = SystemAudioHapticsSession(
         enableSystemAudioHaptics,
@@ -37,17 +53,47 @@ class AndroidAudioRenderer(
     private var isMuted = false
     // 保存目标音量增益。默认 1.0f (100%)
     private var mTargetVolume = 1.0f
-    // 标记是否处于暂停丢包状态
-    @Volatile
-    private var isProcessingPaused = false
 
     // 保存初始化的配置参数，用于重建
     private var savedAudioConfig: MoonBridge.AudioConfiguration? = null
     private var savedSampleRate = 0
     private var savedSamplesPerFrame = 0
     private var savedChannelCount = 0
-    private val decodedStreamFramePosition = java.util.concurrent.atomic.AtomicLong()
+    private var decodedStreamFramePosition = 0L
     private val presentationClock = AudioPresentationClock(onAudioPresentationClock)
+
+    internal var openTrack: (Int, Int, Int, Int) -> AudioTrack? = ::openConfiguredTrack
+
+    private fun openConfiguredTrack(channelConfig: Int, sampleRate: Int, bytesPerFrame: Int, attempt: Int): AudioTrack? {
+        val lowLatency = attempt < 2
+        val bufferSize = when (attempt) {
+            0, 2 -> bytesPerFrame * 2
+            else -> {
+                val minBuf = AudioTrack.getMinBufferSize(
+                    sampleRate,
+                    channelConfig,
+                    AudioFormat.ENCODING_PCM_16BIT
+                )
+                val rawSize = maxOf(minBuf, bytesPerFrame * 2)
+                // Round to next frame
+                ((rawSize + (bytesPerFrame - 1)) / bytesPerFrame) * bytesPerFrame
+            }
+        }
+
+        // Skip low latency options if hardware sample rate doesn't match the content
+        if (lowLatency && AudioTrack.getNativeOutputSampleRate(AudioManager.STREAM_MUSIC) != sampleRate) {
+            return null
+        }
+
+        // Skip low latency options when using audio effects or spatializer
+        if ((enableAudioFx || enableSpatializer) && lowLatency) {
+            return null
+        }
+
+        return createAudioTrack(channelConfig, sampleRate, bufferSize, lowLatency).also {
+            LimeLog.info("Audio track configuration: ${bufferSize} lowLatency=${lowLatency} spatializer=${enableSpatializer}")
+        }
+    }
 
     private fun createAudioTrack(channelConfig: Int, sampleRate: Int, bufferSize: Int, lowLatency: Boolean): AudioTrack {
         val attributesBuilder = AudioAttributes.Builder()
@@ -97,14 +143,29 @@ class AndroidAudioRenderer(
         }
     }
 
-    private fun initializeAudioTrackInternal(
+    private fun openOutput(opening: Phase.Opening, resume: Boolean): Int = synchronized(lifecycle) {
+        try {
+            if (phase !== opening) return -2
+            releaseCurrentOutput()
+            val config = savedAudioConfig ?: return -1
+            return prepareOutput(config, savedSampleRate, savedSamplesPerFrame, opening, resume)
+        } finally {
+            synchronized(intent) {
+                if (phase === opening) phase = if (resume) waitForRoute(opening.retryDelayMs) else Phase.Paused
+            }
+        }
+    }
+
+    private fun waitForRoute(delayMs: Long) =
+        Phase.Retry(monotonicNanos() + TimeUnit.MILLISECONDS.toNanos(delayMs), delayMs)
+
+    private fun prepareOutput(
         audioConfiguration: MoonBridge.AudioConfiguration,
         sampleRate: Int,
-        samplesPerFrame: Int
+        samplesPerFrame: Int,
+        opening: Phase.Opening,
+        resume: Boolean
     ): Int {
-        // AudioTrack frame positions restart from zero whenever the track is
-        // rebuilt. Keep them in the native IR stream's cumulative time origin.
-        val trackStreamFrameOffset = decodedStreamFramePosition.get()
         val channelConfig: Int
         val bytesPerFrame: Int
 
@@ -125,94 +186,60 @@ class AndroidAudioRenderer(
         bytesPerFrame = audioConfiguration.channelCount * samplesPerFrame * 2
 
         for (i in 0 until 4) {
-            val lowLatency: Boolean
-            val bufferSize: Int
-
-            when (i) {
-                0, 1 -> lowLatency = true
-                else -> lowLatency = false
-            }
-
-            when (i) {
-                0, 2 -> bufferSize = bytesPerFrame * 2
-                else -> {
-                    val minBuf = AudioTrack.getMinBufferSize(
-                        sampleRate,
-                        channelConfig,
-                        AudioFormat.ENCODING_PCM_16BIT
-                    )
-                    val rawSize = maxOf(minBuf, bytesPerFrame * 2)
-                    // Round to next frame
-                    bufferSize = ((rawSize + (bytesPerFrame - 1)) / bytesPerFrame) * bytesPerFrame
-                }
-            }
-
-            // Skip low latency options if hardware sample rate doesn't match the content
-            if (AudioTrack.getNativeOutputSampleRate(AudioManager.STREAM_MUSIC) != sampleRate && lowLatency) {
-                continue
-            }
-
-            // Skip low latency options when using audio effects or spatializer
-            if ((enableAudioFx || enableSpatializer) && lowLatency) {
-                continue
-            }
-
+            if (phase !== opening) return -2
+            var candidate: AudioTrack? = null
             try {
-                track = createAudioTrack(channelConfig, sampleRate, bufferSize, lowLatency)
-                systemAudioHaptics.attach(track!!)
-                track!!.play()
-                presentationClock.reset(track!!, trackStreamFrameOffset)
+                val output = openTrack(channelConfig, sampleRate, bytesPerFrame, i) ?: continue
+                candidate = output
+                if (phase !== opening) return -2
+                systemAudioHaptics.attach(output)
+                if (resume) check(applyVolume(output) == AudioTrack.SUCCESS) { "AudioTrack volume restore failed" }
+                if (phase !== opening) return -2
+                output.play()
+                if (phase !== opening) return -2
+                logSpatializer(output)
 
-                // Successfully created working AudioTrack. We're done here.
-                LimeLog.info("Audio track configuration: ${bufferSize} lowLatency=${lowLatency} spatializer=${enableSpatializer}")
-                break
-            } catch (e: Exception) {
-                e.printStackTrace()
-                val failedTrack = track
-                track = null
-                audioCleanup("detach haptics") { systemAudioHaptics.detach() }
-                audioCleanup("release") { failedTrack?.release() }
-            }
-        }
-
-        if (track == null) {
-            return -2
-        }
-
-        // Initialize Spatializer if supported and enabled
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && enableSpatializer) {
-            try {
-                val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
-                spatializer = audioManager.spatializer
-
-                if (spatializer != null && spatializer!!.isAvailable) {
-                    val attributes = track!!.audioAttributes
-                    val trackFormat = track!!.format
-
-                    if (spatializer!!.canBeSpatialized(attributes, trackFormat)) {
-                        LimeLog.info("Spatializer is available and track can be spatialized")
-                        LimeLog.info("Spatializer enabled: " + spatializer!!.isEnabled)
-                        LimeLog.info("Spatializer level: " + spatializer!!.immersiveAudioLevel)
-                    } else {
-                        LimeLog.warning("Spatializer is available but track cannot be spatialized")
-                        spatializer = null
+                synchronized(decodedWriter) {
+                    synchronized(intent) {
+                        if (phase !== opening) return -2
+                        // Dropped callbacks during open/play belong to the stream offset
+                        // of this track. No writer can enter between reset and publication.
+                        presentationClock.reset(output, decodedStreamFramePosition)
+                        allowRouteRetry = !opening.automatic
+                        track = output
+                        phase = Phase.Playing
+                        candidate = null
                     }
-                } else {
-                    LimeLog.info("Spatializer is not available on this device")
-                    spatializer = null
                 }
+                if (resume && enableAudioFx) audioEffect(output, true)
+                return 0
             } catch (e: Exception) {
-                LimeLog.warning("Failed to initialize Spatializer: " + e.message)
-                e.printStackTrace()
-                spatializer = null
+                LimeLog.warning("AudioTrack prepare failed: ${e.message}")
+            } finally {
+                candidate?.let { rejected ->
+                    audioCleanup("detach haptics") { systemAudioHaptics.detach() }
+                    audioCleanup("release") { rejected.release() }
+                }
             }
         }
+        return -2
+    }
 
-        return 0
+    private fun logSpatializer(output: AudioTrack) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && enableSpatializer) {
+            audioCleanup("query spatializer") {
+                val manager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+                val spatializer = manager.spatializer
+                if (spatializer.isAvailable && spatializer.canBeSpatialized(output.audioAttributes, output.format)) {
+                    LimeLog.info("Spatializer enabled: ${spatializer.isEnabled}, level: ${spatializer.immersiveAudioLevel}")
+                } else {
+                    LimeLog.info("Spatializer unavailable for this track")
+                }
+            }
+        }
     }
 
     override fun setup(audioConfiguration: MoonBridge.AudioConfiguration, sampleRate: Int, samplesPerFrame: Int, codec: Int, bitrate: Int): Int {
-        clearAudioPresentationClock()
         // This renderer only handles Opus PCM output. Non-Opus codecs (AC3 / E-AC3)
         // are routed through a dedicated passthrough renderer; refuse setup so the
         // caller can fall back appropriately.
@@ -220,124 +247,108 @@ class AndroidAudioRenderer(
             LimeLog.warning("AndroidAudioRenderer: refusing non-Opus codec=$codec (use Ac3PassthroughRenderer)")
             return -1
         }
+        val opening = requestOpen() ?: return -1
+        presentationClock.clear()
         // 保存配置，供 resume 时使用
         this.savedAudioConfig = audioConfiguration
         this.savedSampleRate = sampleRate
         this.savedSamplesPerFrame = samplesPerFrame
         this.savedChannelCount = audioConfiguration.channelCount
-        decodedStreamFramePosition.set(0L)
-
-        val result = initializeAudioTrackInternal(audioConfiguration, sampleRate, samplesPerFrame)
-        if (result == 0) isProcessingPaused = false
-        return result
+        synchronized(decodedWriter) { decodedStreamFramePosition = 0L }
+        return openOutput(opening, false)
     }
 
-    // --- 暂停处理 ---
-    fun pauseProcessing() {
-        LimeLog.info("Audio: Pausing processing (releasing AudioTrack)")
-        isProcessingPaused = true
-        clearAudioPresentationClock()
-
-        // 释放 Spatializer
-        spatializer = null
-
-        val output = track ?: return
-        if (enableAudioFx) audioCleanup("close effects") {
-            val intent = Intent(AudioEffect.ACTION_CLOSE_AUDIO_EFFECT_CONTROL_SESSION)
-            intent.putExtra(AudioEffect.EXTRA_AUDIO_SESSION, output.audioSessionId)
-            intent.putExtra(AudioEffect.EXTRA_PACKAGE_NAME, context.packageName)
-            context.sendBroadcast(intent)
-        }
-        audioCleanup("detach haptics") { systemAudioHaptics.detach() }
-        interruptAudioWrite(output)
-        synchronized(decodedWriter) {
-            track = null
-            releaseAudioOutput(output::flush, output::release)
-        }
+    private fun requestOpen(): Phase.Opening? = synchronized(intent) {
+        if (phase !== Phase.Paused && phase !is Phase.Failed && phase !is Phase.Retry && phase !is Phase.Pausing) return null
+        Phase.Opening().also { phase = it }
     }
 
-    // --- 恢复处理 ---
-    fun resumeProcessing() {
-        val config = savedAudioConfig
-        if (config == null) {
-            LimeLog.warning("Cannot resume audio: no saved configuration")
-            return
+    // Reserve this foreground request before releasing the dispatcher's lock.
+    // A later background/stop request invalidates it even during a HAL call.
+    internal fun requestResume(): (() -> Unit)? {
+        val opening = requestOpen() ?: return null
+        return { openOutput(opening, true) }
+    }
+
+    fun pauseProcessing() { requestPause()?.invoke() }
+    internal fun requestPause(): (() -> Unit)? = requestSuspension(retire = false)
+    fun resumeProcessing() { requestResume()?.invoke() }
+
+    private fun requestSuspension(retire: Boolean): (() -> Unit)? {
+        val pausing = Phase.Pausing()
+        val output = synchronized(intent) {
+            if (!retire && phase === Phase.Stopped) return null
+            phase = if (retire) Phase.Stopped else pausing
+            presentationClock.clear()
+            track
         }
-
-        LimeLog.info("Audio: Resuming processing...")
-        clearAudioPresentationClock()
-
-        // 1. 重建 AudioTrack
-        val res = initializeAudioTrackInternal(config, savedSampleRate, savedSamplesPerFrame)
-        if (res != 0) {
-            LimeLog.severe("Failed to recreate AudioTrack: $res")
-            return
-        }
-
-        // 2. 恢复 AudioFx (如果开启)
-        val currentTrack = track
-        if (currentTrack != null && enableAudioFx) {
-            try {
-                val i = Intent(AudioEffect.ACTION_OPEN_AUDIO_EFFECT_CONTROL_SESSION)
-                i.putExtra(AudioEffect.EXTRA_AUDIO_SESSION, currentTrack.audioSessionId)
-                i.putExtra(AudioEffect.EXTRA_PACKAGE_NAME, context.packageName)
-                i.putExtra(AudioEffect.EXTRA_CONTENT_TYPE, AudioEffect.CONTENT_TYPE_GAME)
-                context.sendBroadcast(i)
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
-        }
-
-        // 3. 恢复音量
-        if (currentTrack != null) {
-            try {
-                currentTrack.play()
-
-                val vol = if (isMuted) 0.0f else mTargetVolume
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                    currentTrack.setVolume(vol)
-                } else {
-                    @Suppress("DEPRECATION")
-                    currentTrack.setStereoVolume(vol, vol)
+        return {
+            interruptAudioWrite(output)
+            synchronized(lifecycle) {
+                if (retire || phase === pausing) {
+                    releaseCurrentOutput()
+                    synchronized(intent) { if (phase === pausing) phase = Phase.Paused }
                 }
-            } catch (e: Exception) {
-                LimeLog.warning("Error restoring audio state: " + e.message)
             }
         }
-
-        // 4. 最后一步：解除暂停标志，允许数据写入
-        isProcessingPaused = false
     }
 
-    override fun playDecodedAudio(audioData: ShortArray) = synchronized(decodedWriter) {
-        writeDecodedAudio(audioData)
+    // The lifecycle owner releases the published track only after its writer exits.
+    private fun releaseCurrentOutput() {
+        val output = synchronized(decodedWriter) { track.also { track = null } } ?: return
+        if (enableAudioFx) audioEffect(output, false)
+        audioCleanup("detach haptics") { systemAudioHaptics.detach() }
+        releaseAudioOutput(output::flush, output::release)
     }
 
-    private fun writeDecodedAudio(audioData: ShortArray) {
+    override fun playDecodedAudio(audioData: ShortArray) {
+        val failed = synchronized(decodedWriter) { writeDecodedAudio(audioData) }
+        if (failed == null) {
+            // A resumed route may wake after the last Surface callback. Retained audio
+            // drives sparse retries only while foreground, without a timer or polling a healthy track.
+            val pending = phase as? Phase.Retry ?: return
+            if (monotonicNanos() - pending.deadline < 0) return
+            val next = synchronized(intent) {
+                if (phase !== pending) return
+                Phase.Opening(automatic = true, retryDelayMs = minOf(4000L, pending.delayMs * 2)).also { phase = it }
+            }
+            openOutput(next, true)
+            return
+        }
+        synchronized(lifecycle) {
+            if (phase !== failed) return
+            releaseCurrentOutput()
+            val next = synchronized(intent) {
+                if (phase !== failed) return
+                if (!failed.retry) { phase = waitForRoute(250); return }
+                Phase.Opening(automatic = true).also { phase = it }
+            }
+            openOutput(next, true)
+        }
+    }
+
+    private fun writeDecodedAudio(audioData: ShortArray): Phase.Failed? {
         val frameCount = if (savedChannelCount > 0) {
             audioData.size.toLong() / savedChannelCount
         } else {
             0L
         }
-        if (isProcessingPaused) {
-            decodedStreamFramePosition.addAndGet(frameCount)
-            return // 丢弃数据
-        }
-
         val currentTrack = track
-        if (currentTrack == null) {
-            decodedStreamFramePosition.addAndGet(frameCount)
-            return
+        if (phase !== Phase.Playing || currentTrack == null) {
+            decodedStreamFramePosition += frameCount
+            return null
         }
 
-        // Backlog shedding happens in the native decode callback before bass/haptic
-        // analysis, so every PCM frame reaching this method must also reach AudioTrack.
+        var lostTrack = false
         val writtenSamples = try {
-            writeAudioFully(audioData.size, { !isProcessingPaused && track === currentTrack }) { offset, remaining ->
-                currentTrack.write(audioData, offset, remaining)
+            writeAudioFully(audioData.size, { phase === Phase.Playing && track === currentTrack }) { offset, remaining ->
+                currentTrack.write(audioData, offset, remaining).also {
+                    if (it == AudioTrack.ERROR_DEAD_OBJECT || it == AudioTrack.ERROR_INVALID_OPERATION) lostTrack = true
+                }
             }
         } catch (e: IllegalStateException) {
             LimeLog.warning("AudioTrack write interrupted: ${e.message}")
+            lostTrack = true
             0
         }
         if (writtenSamples != audioData.size) {
@@ -345,8 +356,9 @@ class AndroidAudioRenderer(
             // longer describes the queued audio. Resume the clock on rebuild.
             presentationClock.invalidate(currentTrack)
         }
-        if (!isProcessingPaused && track === currentTrack &&
-            writtenSamples > 0 && savedSampleRate > 0 && currentTrack.getTimestamp(audioTimestamp)) {
+        if (writtenSamples == audioData.size && writtenSamples > 0 &&
+            phase === Phase.Playing && track === currentTrack &&
+            savedSampleRate > 0 && currentTrack.getTimestamp(audioTimestamp)) {
             presentationClock.publish(
                 currentTrack,
                 audioTimestamp.framePosition,
@@ -354,62 +366,64 @@ class AndroidAudioRenderer(
                 savedSampleRate
             )
         }
-        decodedStreamFramePosition.addAndGet(frameCount)
-    }
-
-    override fun start() {
-        val currentTrack = track
-        if (currentTrack != null && enableAudioFx) {
-            val i = Intent(AudioEffect.ACTION_OPEN_AUDIO_EFFECT_CONTROL_SESSION)
-            i.putExtra(AudioEffect.EXTRA_AUDIO_SESSION, currentTrack.audioSessionId)
-            i.putExtra(AudioEffect.EXTRA_PACKAGE_NAME, context.packageName)
-            i.putExtra(AudioEffect.EXTRA_CONTENT_TYPE, AudioEffect.CONTENT_TYPE_GAME)
-            context.sendBroadcast(i)
+        decodedStreamFramePosition += frameCount
+        if (writtenSamples == audioData.size && writtenSamples > 0) allowRouteRetry = true
+        if (!lostTrack) return null
+        return synchronized(intent) {
+            if (phase !== Phase.Playing || track !== currentTrack) return null
+            Phase.Failed(allowRouteRetry).also { phase = it }
         }
     }
 
-    override fun stop() = pauseProcessing()
-
-    fun detachSystemAudioHaptics(): Boolean {
-        systemAudioHaptics.detach()
-        return true
+    private fun audioEffect(output: AudioTrack, open: Boolean) {
+        audioCleanup(if (open) "open effects" else "close effects") {
+            val intent = Intent(if (open) AudioEffect.ACTION_OPEN_AUDIO_EFFECT_CONTROL_SESSION
+                                else AudioEffect.ACTION_CLOSE_AUDIO_EFFECT_CONTROL_SESSION)
+            intent.putExtra(AudioEffect.EXTRA_AUDIO_SESSION, output.audioSessionId)
+            intent.putExtra(AudioEffect.EXTRA_PACKAGE_NAME, context.packageName)
+            if (open) intent.putExtra(AudioEffect.EXTRA_CONTENT_TYPE, AudioEffect.CONTENT_TYPE_GAME)
+            context.sendBroadcast(intent)
+        }
     }
 
-    fun attachSystemAudioHaptics(): Boolean {
-        val currentTrack = track ?: return false
-        return systemAudioHaptics.attach(currentTrack)
+    override fun start() {
+        synchronized(lifecycle) {
+            if (enableAudioFx && phase === Phase.Playing) track?.let { audioEffect(it, true) }
+        }
+    }
+
+    override fun stop() { requestSuspension(retire = true)?.invoke() }
+
+    fun detachSystemAudioHaptics(): Boolean = synchronized(lifecycle) {
+        systemAudioHaptics.detach()
+        true
+    }
+
+    fun attachSystemAudioHaptics(): Boolean = synchronized(lifecycle) {
+        val output = track ?: return false
+        phase === Phase.Playing && systemAudioHaptics.attach(output)
     }
 
     override fun cleanup() {
-        pauseProcessing()
-        audioCleanup("close haptics") { systemAudioHaptics.close() }
+        stop()
+        synchronized(lifecycle) { audioCleanup("close haptics") { systemAudioHaptics.close() } }
     }
 
-    private fun clearAudioPresentationClock() {
-        presentationClock.clear()
+    private fun applyVolume(output: AudioTrack): Int {
+        val volume = if (isMuted) 0f else mTargetVolume
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            output.setVolume(volume)
+        } else {
+            @Suppress("DEPRECATION")
+            output.setStereoVolume(volume, volume)
+        }
     }
 
-    /**
-     * 设置是否静音
-     * @param muted true=静音 (增益设为0), false=恢复 (恢复到 mTargetVolume)
-     */
     fun setMuted(muted: Boolean) {
-        if (this.isMuted == muted) return
-        this.isMuted = muted
-
-        if (isProcessingPaused) return
-        val currentTrack = track ?: return
-
-        try {
-            val vol = if (muted) 0.0f else mTargetVolume
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                currentTrack.setVolume(vol)
-            } else {
-                @Suppress("DEPRECATION")
-                currentTrack.setStereoVolume(vol, vol)
-            }
-        } catch (e: Exception) {
-            LimeLog.warning("Failed to set volume: " + e.message)
+        synchronized(lifecycle) {
+            if (isMuted == muted) return
+            isMuted = muted
+            track?.let { output -> audioCleanup("set volume") { applyVolume(output) } }
         }
     }
 }
