@@ -68,6 +68,7 @@ internal class AudioWriteGate {
 
     private val writer = Any()
     private val intent = Any()
+    private var needsPostStartInterrupt = false
     @Volatile private var state: State = State.Playing
     private class Output(val open: () -> Unit, val release: () -> Unit)
     private var output: Output? = null
@@ -83,10 +84,9 @@ internal class AudioWriteGate {
 
     fun pause(interrupt: () -> Unit, afterWriter: () -> Unit, retire: Boolean = false) {
         val pausing = State.Pausing()
-        val interruptedStart = synchronized(intent) {
-            val starting = state is State.Starting
+        synchronized(intent) {
+            if (state is State.Starting) needsPostStartInterrupt = true
             if (state !== State.Retired) state = if (retire) State.Retired else pausing
-            starting
         }
         try {
             interrupt()
@@ -94,9 +94,12 @@ internal class AudioWriteGate {
             synchronized(writer) {
                 if (retire) output = null
                 try {
-                    // A HAL open/play already in flight may have published a different
-                    // playing track since the lock-free interrupt. Interrupt that one too.
-                    if (interruptedStart) audioCleanup("interrupt resumed track", interrupt)
+                    // The first pause or stop to acquire the writer must interrupt any
+                    // track published during open/play, even when another pause saw the start.
+                    val interruptCurrent = synchronized(intent) {
+                        needsPostStartInterrupt.also { needsPostStartInterrupt = false }
+                    }
+                    if (interruptCurrent) audioCleanup("interrupt resumed track", interrupt)
                     afterWriter()
                 } finally {
                     change(pausing, State.Paused)

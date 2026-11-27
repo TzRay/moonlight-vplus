@@ -52,20 +52,24 @@ class Ac3Iec61937Renderer(private val encodedBufferBytes: Int) : AudioRenderer {
                 .setTransferMode(AudioTrack.MODE_STREAM).setBufferSizeInBytes(buffer.toInt())
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
                 builder.setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
-            writes.startPlayback(::releaseTrack) {
-                track = builder.build()
-                val output = checkNotNull(track)
-                check(output.state == AudioTrack.STATE_INITIALIZED)
-                output.pause()
-                output.flush()
-                output.play()
-            }
+            startOutput(builder::build)
             LimeLog.info("Ac3Iec61937Renderer: 48 kHz AC3 ${audioConfiguration.channelCount}ch; IEC61937 stereo carrier, buffer=$buffer bytes (${buffer / 192} ms)")
             0
         } catch (e: Exception) {
             LimeLog.severe("IEC61937 setup failed: ${e.message}; select raw AC3 to revert")
             cleanup()
             -2
+        }
+    }
+
+    internal fun startOutput(create: () -> AudioTrack) {
+        writes.startPlayback(::releaseTrack) {
+            val output = create()
+            track = output
+            check(output.state == AudioTrack.STATE_INITIALIZED)
+            output.pause()
+            output.flush()
+            output.play()
         }
     }
 
@@ -114,6 +118,7 @@ class Ac3Iec61937Renderer(private val encodedBufferBytes: Int) : AudioRenderer {
     override fun cleanup() {
         writes.pause({ interruptAudioWrite(track) }, {
             val output = track
+            track = null
             packetizer.reset()
             releaseAudioOutput(flush = { output?.flush() }, release = { output?.release() })
         }, retire = true)
